@@ -1,4 +1,4 @@
-//! Repeatable two-AI moving-start workload. Timing and screenshot readback are
+//! Repeatable full-field moving-start workload. Timing and screenshot readback are
 //! separate: the latter must not contaminate a renderer performance comparison.
 use crate::{camera, options::Options, pose, Session};
 use bevy::{
@@ -58,6 +58,7 @@ pub struct Run {
     output: PathBuf,
     asset_fingerprints: BTreeMap<String, String>,
     proof_started: Option<Instant>,
+    render_resolution: [u32; 2],
 }
 
 impl Run {
@@ -74,7 +75,11 @@ impl Run {
             b"{\"status\":\"planning\"}\n",
         )
         .map_err(|e| format!("benchmark output: {e}"))?;
-        let initial = rolling_race(options, source)?;
+        let initial = if options.benchmark_grid {
+            source.clone()
+        } else {
+            rolling_race(options, source)?
+        };
         let sample_ticks = sample_ticks(options.benchmark_seed);
         let mut planned = initial.clone();
         let mut samples = Vec::with_capacity(SAMPLES);
@@ -82,8 +87,10 @@ impl Run {
         for tick in 1..=TICKS {
             let previous: Vec<_> = planned.entrants.iter().map(|e| e.car.position).collect();
             planned.events.clear();
-            planned.step(&[]);
-            minimum_clearance = minimum_clearance.min(check_clean(&planned, &previous)?);
+            if !options.benchmark_grid {
+                planned.step(&[]);
+                minimum_clearance = minimum_clearance.min(check_clean(&planned, &previous)?);
+            }
             if sample_ticks.contains(&tick) {
                 samples.push(Sample {
                     tick,
@@ -112,6 +119,7 @@ impl Run {
             output: output.clone(),
             asset_fingerprints: asset_fingerprints(options)?,
             proof_started: None,
+            render_resolution: [0; 2],
         };
         Ok((initial, run))
     }
@@ -124,9 +132,9 @@ fn rolling_race(options: &Options, source: &Race) -> Result<Race, String> {
         aggression: 0.,
         consistency: 1.,
     };
-    let configs = (0..2)
+    let configs = (0..source.entrants.len())
         .map(|i| EntrantConfig {
-            name: if i == 0 { "Benchmark" } else { "Reference" }.into(),
+            name: format!("Benchmark {i}"),
             spec: template.spec.clone(),
             setup: template.setup,
             assists: Assists::default(),
@@ -139,7 +147,8 @@ fn rolling_race(options: &Options, source: &Race) -> Result<Race, String> {
     race.phase = Phase::Racing;
     race.time = 0.;
     for (i, entrant) in race.entrants.iter_mut().enumerate() {
-        let s = (options.benchmark_start + i as f64 * 80.).rem_euclid(race.track.length);
+        let s = (options.benchmark_start + (source.entrants.len() - 1 - i) as f64 * 80.)
+            .rem_euclid(race.track.length);
         let frame = race.track.frame_at(s);
         let station = race.track.station_at(s);
         let offset = race.track.racing_line.offsets[station];
@@ -185,10 +194,16 @@ fn rolling_race(options: &Options, source: &Race) -> Result<Race, String> {
 }
 
 fn check_clean(race: &Race, previous: &[glam::DVec3]) -> Result<f64, String> {
-    let clearance = race.entrants[0]
-        .car
-        .position
-        .distance(race.entrants[1].car.position);
+    let clearance = race
+        .entrants
+        .iter()
+        .enumerate()
+        .flat_map(|(i, a)| {
+            race.entrants[i + 1..]
+                .iter()
+                .map(move |b| a.car.position.distance(b.car.position))
+        })
+        .fold(f64::INFINITY, f64::min);
     let invalid = clearance < 12.
         || race
             .events
@@ -226,18 +241,41 @@ fn asset_fingerprints(options: &Options) -> Result<BTreeMap<String, String>, Str
         format!("cars/{}/car.json", options.car),
     ];
     if options.car == "gen22" {
+        if options.assets.join("cars/gen22/car_lod2.glb").is_file() {
+            names.push("cars/gen22/car_lod2.glb".into());
+        }
         names.extend([
             "cars/gen22/car_lod1.glb".into(),
             "cars/gen22/teams.json".into(),
         ]);
-        let field = crate::teams::Teams::load(&options.assets)?.field(options)?;
-        for identity in field.iter().flatten() {
+        for lod in ["", "/lod1", "/lod2"] {
+            let compound = options.setup.compound.label().to_ascii_lowercase();
+            names.push(format!("cars/gen22/tyres{lod}/{compound}.png"));
+        }
+        for identity in crate::teams::Teams::load(&options.assets)?
+            .field(options)?
+            .iter()
+            .flatten()
+        {
             let base = format!("cars/gen22/liveries/{}", identity.team);
-            names.extend([
-                format!("{base}/paint.png"),
-                format!("{base}/suit.png"),
-                format!("{base}/{}/helmet.png", identity.driver),
-            ]);
+            for lod in ["", "/lod1", "/lod2"] {
+                for part in [
+                    "main_body",
+                    "front_wing",
+                    "rear_wing",
+                    "mirrors",
+                    "floor",
+                    "cockpit_foam",
+                    "winglets",
+                    "front_covers",
+                    "rear_covers",
+                ] {
+                    let path = format!("{base}{lod}/{part}.png");
+                    if options.assets.join(&path).is_file() {
+                        names.push(path);
+                    }
+                }
+            }
         }
     }
     names.sort();
@@ -285,7 +323,7 @@ fn state_hash(race: &Race) -> u64 {
 
 fn reset_view(session: &mut Session, options: &Options) {
     session.poses = pose::Poses::new(&session.race);
-    session.camera = camera::ChaseCamera::new(&session.race, 0);
+    session.camera = camera::ChaseCamera::new(&session.race, session.player);
     session.camera.set_cockpit_eye(session.rig.cockpit_eye);
     session.camera.select(options.camera);
     session.show_racing_line = false;
@@ -301,6 +339,7 @@ pub fn advance(
     mut session: ResMut<Session>,
     options: Res<Options>,
     mut frame: ResMut<FrameCount>,
+    windows: Query<&Window>,
     mut exit: MessageWriter<AppExit>,
 ) {
     let Some(mut run) = run else {
@@ -320,6 +359,9 @@ pub fn advance(
         Stage::Warmup => {
             session.paused = true;
             let began = *run.began.get_or_insert(now);
+            if let Some(window) = windows.iter().next() {
+                run.render_resolution = [window.physical_width(), window.physical_height()];
+            }
             run.warmup_frames += 1;
             if now.duration_since(began) < WARMUP || run.warmup_frames < 64 {
                 return;
@@ -331,7 +373,17 @@ pub fn advance(
             run.stage = Stage::Measure;
             run.began = Some(now);
             run.previous = Some(now);
-            info!("Benchmark: starting 20-second two-AI moving run; seed={}, minimum planned clearance {:.1}m", options.benchmark_seed, run.minimum_clearance);
+            info!(
+                "Benchmark: starting 20-second {}-car {} run; render={:?}, seed={}",
+                session.race.entrants.len(),
+                if options.benchmark_grid {
+                    "standing-grid"
+                } else {
+                    "moving"
+                },
+                run.render_resolution,
+                options.benchmark_seed
+            );
         }
         Stage::Measure => {
             let elapsed = now.duration_since(run.began.unwrap()).as_secs_f64();
@@ -342,7 +394,9 @@ pub fn advance(
                 let Session { poses, race, .. } = &mut *session;
                 poses.record(race);
                 race.events.clear();
-                race.step(&[]);
+                if !options.benchmark_grid {
+                    race.step(&[]);
+                }
                 run.ticks += 1;
             }
             if elapsed >= SECONDS {
@@ -461,7 +515,7 @@ fn metrics(frames: &[f64], seconds: f64) -> Metrics {
 fn write_results(run: &Run, options: &Options) -> Result<(), String> {
     let initial: Vec<_> = run.initial.entrants.iter().map(|e| serde_json::json!({"position": e.car.position.to_array(), "speed_kmh": e.car.speed() * 3.6, "gear": e.car.powertrain.gear})).collect();
     let samples: Vec<_> = run.samples.iter().enumerate().map(|(i, s)| serde_json::json!({"tick": s.tick, "seconds": s.tick as f64 / PHYSICS_RATE, "state_fnv64": format!("{:016x}", state_hash(&s.race)), "file": format!("sample-{i}-tick-{}.png", s.tick)})).collect();
-    let report = serde_json::json!({"schema": 1, "workload": "two-ai-moving-start-v1", "duration_seconds": SECONDS, "physics_hz": PHYSICS_RATE, "physics_ticks": TICKS, "seed": options.benchmark_seed, "start_metres": options.benchmark_start, "track": options.track, "car": options.car, "camera": options.camera, "graphics": options.graphics, "resolution": [options.width, options.height], "vsync": false, "audio_muted": options.mute, "ai_cars": 2, "human_cars": 0, "contacts": 0, "minimum_clearance_metres": run.minimum_clearance, "preflight_matches_measured": true, "final_state_fnv64": format!("{:016x}", run.expected_hash), "moving_start": initial, "asset_fnv64": run.asset_fingerprints, "metrics": metrics(&run.frames, run.measured_seconds), "samples": samples, "capture_policy": "Seeded stratified random ticks; exact preflight states rendered after timing, with 24 settling frames per sample. Loading, warmup and PNG readback/write are excluded from timing."});
+    let report = serde_json::json!({"schema": 2, "workload": if options.benchmark_grid { "standing-grid-v1" } else { "selected-field-moving-start-v2" }, "duration_seconds": SECONDS, "physics_hz": PHYSICS_RATE, "physics_ticks": TICKS, "seed": options.benchmark_seed, "start_metres": options.benchmark_start, "track": options.track, "car": options.car, "camera": options.camera, "graphics": options.graphics, "logical_resolution": [options.width, options.height], "resolution": run.render_resolution, "vsync": false, "audio_muted": options.mute, "ai_cars": run.initial.entrants.iter().filter(|e| matches!(e.driver, Driver::Ai(_))).count(), "human_cars": run.initial.entrants.iter().filter(|e| matches!(e.driver, Driver::Human { .. })).count(), "player_slot": options.grid_slot, "contacts": 0, "minimum_clearance_metres": run.minimum_clearance.is_finite().then_some(run.minimum_clearance), "preflight_matches_measured": true, "final_state_fnv64": format!("{:016x}", run.expected_hash), "moving_start": initial, "asset_fnv64": run.asset_fingerprints, "metrics": metrics(&run.frames, run.measured_seconds), "samples": samples, "capture_policy": "Seeded stratified random ticks; exact preflight states rendered after timing, with 24 settling frames per sample. Loading, warmup and PNG readback/write are excluded from timing."});
     let json = serde_json::to_vec_pretty(&report).map_err(|e| e.to_string())?;
     std::fs::write(run.output.join("benchmark.json"), json).map_err(|e| e.to_string())?;
     let mut csv = String::from("frame,seconds,milliseconds\n");
@@ -483,7 +537,7 @@ fn write_results(run: &Run, options: &Options) -> Result<(), String> {
 mod tests {
     use super::*;
     #[test]
-    #[ignore = "requires all converted F1_TEST_ASSETS; validates the full 20-second two-AI workload on every track/car"]
+    #[ignore = "requires all converted F1_TEST_ASSETS; validates the full 20-second selected-field workload on every track/car"]
     fn all_converted_tracks_have_clean_repeatable_moving_workloads() {
         let root = std::env::var("F1_TEST_ASSETS").expect("F1_TEST_ASSETS");
         let evidence = std::env::var("F1_BENCHMARK_PLAN_OUTPUT")
@@ -512,7 +566,7 @@ mod tests {
                 let source = crate::assets::load_race(&options).unwrap();
                 let (initial, run) =
                     Run::plan(&options, &source).unwrap_or_else(|e| panic!("{track} {car}: {e}"));
-                assert_eq!(initial.entrants.len(), 2);
+                assert_eq!(initial.entrants.len(), options.opponents + 1);
                 assert!(initial
                     .entrants
                     .iter()

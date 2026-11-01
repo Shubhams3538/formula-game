@@ -166,6 +166,7 @@ pub struct Frontend {
     pub corner_braking: f64,
     pub show_racing_line: bool,
     pub graphics: crate::graphics::Quality,
+    pub video: crate::graphics::Video,
     pub vsync: bool,
     pub display: hud::Settings,
     pub audio: crate::audio::Settings,
@@ -213,6 +214,7 @@ impl Frontend {
             corner_braking: prefs.corner_braking,
             show_racing_line: prefs.racing_line,
             graphics: prefs.graphics,
+            video: video_override().unwrap_or_else(|| prefs.video()),
             vsync: prefs.vsync,
             display: prefs.display,
             audio: prefs.audio,
@@ -226,6 +228,22 @@ impl Frontend {
             tab: Tab::Race,
             #[cfg(test)]
             widgets: default(),
+        }
+    }
+}
+
+/// `F1_VIDEO` (a JSON `graphics::Video`) overrides the video settings,
+/// including for capture and benchmark runs.
+fn video_override() -> Option<crate::graphics::Video> {
+    let json = std::env::var("F1_VIDEO").ok()?;
+    match serde_json::from_str::<crate::graphics::Video>(&json) {
+        Ok(mut video) => {
+            video.sanitize();
+            Some(video)
+        }
+        Err(error) => {
+            warn!("ignoring F1_VIDEO: {error}");
+            None
         }
     }
 }
@@ -279,6 +297,7 @@ pub fn apply(
         camera: frontend.draft.camera,
         views: frontend.views.clone(),
         graphics: frontend.graphics,
+        video: (frontend.video != frontend.graphics.video()).then_some(frontend.video),
         vsync: frontend.vsync,
         display: frontend.display,
         audio: frontend.audio,
@@ -723,7 +742,7 @@ fn selection(
                         }
                     });
             }
-            ui.add_enabled(false, egui::Label::new("Helmet: Team default"));
+            ui.add_enabled(false, egui::Label::new("Livery: Source model"));
         });
     }
     egui::CollapsingHeader::new("Legacy cars")
@@ -1045,18 +1064,179 @@ fn warm_fonts(context: &egui::Context) {
 }
 
 fn graphics_panel(ui: &mut egui::Ui, frontend: &mut Frontend, session: &mut Session) {
-    let selected = &mut frontend.graphics;
+    use crate::graphics::{AntiAlias, Level, ShadowFilter, TextureDetail, ToneMap};
     section(ui, "Graphics preset");
-    ui.label("Changes apply immediately.");
+    ui.label("Changes apply immediately. Texture detail applies from the next race.");
     ui.add_space(6.);
-    for quality in crate::graphics::Quality::ALL {
-        ui.radio_value(selected, quality, quality.label());
-        ui.label(RichText::new(quality.description()).size(15.).color(DIM));
-    }
+    ui.horizontal(|ui| {
+        for quality in crate::graphics::Quality::ALL {
+            let active = frontend.video.preset() == Some(quality);
+            if ui
+                .selectable_label(active, quality.label())
+                .on_hover_text(quality.description())
+                .clicked()
+            {
+                frontend.graphics = quality;
+                frontend.video = quality.video();
+            }
+        }
+        let custom = frontend.video.preset().is_none();
+        ui.add_enabled(false, egui::Button::new("Custom").selected(custom));
+    });
     ui.add_space(8.);
     ui.checkbox(&mut frontend.vsync, "Vertical sync")
         .on_hover_text("Off renders as fast as the GPU allows, with possible tearing.");
     ui.checkbox(&mut session.show_performance, "Show frame rate  F3");
+    ui.add_space(12.);
+
+    let video = &mut frontend.video;
+    fn choice<T: Copy + PartialEq>(
+        ui: &mut egui::Ui,
+        id: &str,
+        label: &str,
+        value: &mut T,
+        all: &[T],
+        name: fn(T) -> &'static str,
+    ) {
+        ui.horizontal(|ui| {
+            ui.label(label);
+            egui::ComboBox::from_id_salt(id)
+                .selected_text(name(*value))
+                .show_ui(ui, |ui| {
+                    for &option in all {
+                        ui.selectable_value(value, option, name(option));
+                    }
+                });
+        });
+    }
+    let column_count = if ui.available_width() >= 720. { 2 } else { 1 };
+    ui.columns(column_count, |columns| {
+        let ui = &mut columns[0];
+        section(ui, "Anti-aliasing and sharpness");
+        choice(
+            ui,
+            "aa",
+            "Anti-aliasing",
+            &mut video.anti_alias,
+            &AntiAlias::ALL,
+            AntiAlias::label,
+        );
+        if video.anti_alias == AntiAlias::Msaa4 {
+            ui.label(
+                RichText::new("MSAA disables ambient occlusion.")
+                    .size(15.)
+                    .color(DIM),
+            );
+        }
+        ui.add(egui::Slider::new(&mut video.sharpening, 0.0..=1.0).text("Sharpening"));
+        ui.add_space(10.);
+        section(ui, "Shadows and lighting");
+        ui.horizontal(|ui| {
+            ui.label("Shadow resolution");
+            egui::ComboBox::from_id_salt("shadow_res")
+                .selected_text(video.shadow_resolution.to_string())
+                .show_ui(ui, |ui| {
+                    for size in [1024, 2048, 4096, 8192] {
+                        ui.selectable_value(&mut video.shadow_resolution, size, size.to_string());
+                    }
+                });
+        });
+        ui.add(egui::Slider::new(&mut video.shadow_cascades, 1..=4).text("Shadow cascades"));
+        ui.add(
+            egui::Slider::new(&mut video.shadow_distance, 30.0..=300.0)
+                .text("Shadow distance")
+                .suffix(" m"),
+        );
+        choice(
+            ui,
+            "shadow_filter",
+            "Shadow filtering",
+            &mut video.shadow_filter,
+            &ShadowFilter::ALL,
+            ShadowFilter::label,
+        );
+        choice(
+            ui,
+            "ao",
+            "Ambient occlusion",
+            &mut video.ambient_occlusion,
+            &Level::ALL,
+            Level::label,
+        );
+        ui.add_enabled(
+            video.ambient_occlusion != Level::Off,
+            egui::Checkbox::new(&mut video.contact_shadows, "Contact shadows"),
+        );
+        choice(
+            ui,
+            "sky",
+            "Sky lighting",
+            &mut video.sky,
+            &Level::ALL[1..],
+            Level::label,
+        );
+        ui.add(egui::Slider::new(&mut video.haze, 0.0..=1.0).text("Haze"));
+        ui.add_space(10.);
+        section(ui, "Textures");
+        choice(
+            ui,
+            "textures",
+            "Texture detail",
+            &mut video.texture,
+            &TextureDetail::ALL,
+            TextureDetail::label,
+        );
+
+        let ui = &mut columns[column_count - 1];
+        section(ui, "Post-processing");
+        choice(
+            ui,
+            "tonemap",
+            "Tonemapping",
+            &mut video.tonemapping,
+            &ToneMap::ALL,
+            ToneMap::label,
+        );
+        ui.add(
+            egui::Slider::new(&mut video.exposure, -3.0..=3.0)
+                .text("Exposure")
+                .suffix(" EV"),
+        );
+        ui.add(egui::Slider::new(&mut video.saturation, 0.0..=2.0).text("Saturation"));
+        ui.add(egui::Slider::new(&mut video.contrast, 0.5..=1.5).text("Contrast"));
+        ui.add(egui::Slider::new(&mut video.temperature, -1.0..=1.0).text("Temperature"));
+        ui.add(egui::Slider::new(&mut video.bloom, 0.0..=1.0).text("Bloom"));
+        ui.add(egui::Slider::new(&mut video.vignette, 0.0..=1.0).text("Vignette"));
+        ui.add(
+            egui::Slider::new(&mut video.chromatic_aberration, 0.0..=1.0)
+                .text("Chromatic aberration"),
+        );
+        ui.add(egui::Slider::new(&mut video.motion_blur, 0.0..=1.0).text("Motion blur"));
+        ui.checkbox(&mut video.depth_of_field, "Depth of field");
+        ui.add_enabled_ui(video.depth_of_field, |ui| {
+            ui.checkbox(&mut video.bokeh, "Bokeh (slower)");
+            ui.add(
+                egui::Slider::new(&mut video.focus_distance, 1.0..=200.0)
+                    .logarithmic(true)
+                    .text("Focus distance")
+                    .suffix(" m"),
+            );
+        });
+        if ui.button("Reset post-processing").clicked() {
+            let base = crate::graphics::Video::default();
+            video.tonemapping = base.tonemapping;
+            video.exposure = base.exposure;
+            video.saturation = base.saturation;
+            video.contrast = base.contrast;
+            video.temperature = base.temperature;
+            video.bloom = base.bloom;
+            video.vignette = base.vignette;
+            video.chromatic_aberration = base.chromatic_aberration;
+            video.motion_blur = base.motion_blur;
+            video.depth_of_field = base.depth_of_field;
+            video.haze = base.haze;
+        }
+    });
 }
 
 fn audio_panel(ui: &mut egui::Ui, frontend: &mut Frontend) {

@@ -1,6 +1,8 @@
 //! Bevy glTF scenes and simulation-to-render transforms.
 
-use crate::{materials::CarSurface, options::Options, pose::Pose, sky, Session};
+use crate::{
+    controls::press_amount, materials::CarSurface, options::Options, pose::Pose, sky, Session,
+};
 use bevy::{
     asset::LoadState, light::atmosphere::ScatteringMedium, mesh::VertexAttributeValues, prelude::*,
     world_serialization::WorldInstanceReady,
@@ -10,6 +12,59 @@ use std::sync::Arc;
 
 #[derive(Component)]
 pub struct CarVisual(pub usize);
+
+/// Excluded from the main camera; the sun also renders this shadow proxy layer.
+pub const PLAYER_SHADOW_LAYER: usize = 1;
+
+#[derive(Component)]
+pub struct PlayerShadowProxy;
+
+/// Default distance at which opponent meshes crossfade (over ten metres).
+pub const OPPONENT_LOD_DISTANCE: f32 = 40.;
+const OPPONENT_LOD_MARGIN: f32 = 5.;
+
+/// Current opponent near/far swap distance, from the video settings.
+#[derive(Resource, PartialEq)]
+pub struct OpponentLodDistance(pub f32);
+
+impl Default for OpponentLodDistance {
+    fn default() -> Self {
+        Self(OPPONENT_LOD_DISTANCE)
+    }
+}
+
+/// Marks a mesh that belongs to an opponent's near (false) or far (true) model.
+#[derive(Component)]
+pub struct OpponentLod(bool);
+
+/// Re-applies the swap distance to every opponent mesh when the setting changes.
+pub fn update_opponent_lods(
+    distance: Res<OpponentLodDistance>,
+    mut meshes: Query<(&OpponentLod, &mut bevy::camera::visibility::VisibilityRange)>,
+) {
+    if !distance.is_changed() {
+        return;
+    }
+    for (lod, mut range) in &mut meshes {
+        *range = opponent_range(lod.0, distance.0);
+    }
+}
+
+#[derive(Component)]
+struct CarScene {
+    entrant: usize,
+    lod: Option<bool>, // false = near, true = far; None = no distance limit.
+    shadow_only: bool,
+}
+
+fn opponent_range(far: bool, distance: f32) -> bevy::camera::visibility::VisibilityRange {
+    let transition = (distance - OPPONENT_LOD_MARGIN)..(distance + OPPONENT_LOD_MARGIN);
+    bevy::camera::visibility::VisibilityRange {
+        start_margin: if far { transition.clone() } else { 0.0..0.0 },
+        end_margin: if far { f32::MAX..f32::MAX } else { transition },
+        use_aabb: false,
+    }
+}
 
 #[derive(Component)]
 pub struct WheelVisual {
@@ -45,21 +100,11 @@ pub struct Paddle {
     up: bool,
 }
 
-/// How far a shift paddle and the finger on it are pulled, 0..1, `age`
-/// seconds after the shift: a quick flick, a short hold and a release.
-pub fn shift_pull(age: f32) -> f32 {
-    const PRESS: f32 = 0.04;
-    const HOLD: f32 = 0.1;
-    const RELEASE: f32 = 0.22;
-    if !(0. ..RELEASE).contains(&age) {
-        0.
-    } else if age < PRESS {
-        age / PRESS
-    } else if age < HOLD {
-        1.
-    } else {
-        1. - (age - HOLD) / (RELEASE - HOLD)
-    }
+/// Separate cap, parented to the steering wheel so travel follows its rotation.
+#[derive(Component)]
+pub struct DrsButton {
+    pub entrant: usize,
+    pub rest: Transform,
 }
 
 /// Last seen gear and seconds since the last upshift/downshift, per entrant.
@@ -83,7 +128,7 @@ impl ShiftTracker {
                 ages[1] = 0.;
             }
             *last = gear;
-            pulls.push(ages.map(shift_pull));
+            pulls.push(ages.map(press_amount));
         }
         pulls
     }
@@ -94,68 +139,7 @@ impl ShiftTracker {
 pub struct DriverMorph(usize);
 
 #[derive(Component)]
-pub struct LiverySurface {
-    entrant: usize,
-}
-
-type LiveryCache =
-    std::collections::HashMap<(AssetId<StandardMaterial>, String), Handle<StandardMaterial>>;
-
-/// Texture paths double as cache keys: paint/suit share per team, helmets per driver.
-fn livery_path(name: &str, identity: &crate::teams::Identity) -> Option<String> {
-    let base = format!("cars/gen22/liveries/{}", identity.team);
-    match name {
-        "paint" => Some(format!("{base}/paint.png")),
-        "suit" => Some(format!("{base}/suit.png")),
-        "helmet_paint" => Some(format!("{base}/{}/helmet.png", identity.driver)),
-        _ => None,
-    }
-}
-
-type PendingLiveries<'w, 's> = Query<
-    'w,
-    's,
-    (
-        Entity,
-        &'static LiverySurface,
-        &'static bevy::gltf::GltfMaterialName,
-        &'static MeshMaterial3d<StandardMaterial>,
-    ),
->;
-
-pub fn apply_liveries(
-    mut commands: Commands,
-    pending: PendingLiveries,
-    session: Res<Session>,
-    server: Res<AssetServer>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
-    mut cache: Local<LiveryCache>,
-) {
-    for (entity, surface, name, handle) in &pending {
-        let path = session
-            .identities
-            .get(surface.entrant)
-            .and_then(Option::as_ref)
-            .and_then(|identity| livery_path(&name.0, identity));
-        if let Some(path) = path {
-            let key = (handle.0.id(), path.clone());
-            let replacement = if let Some(cached) = cache.get(&key) {
-                cached.clone()
-            } else {
-                let Some(mut material) = materials.get(&handle.0).cloned() else {
-                    continue;
-                };
-                material.base_color = Color::WHITE;
-                material.base_color_texture = Some(server.load(path));
-                let replacement = materials.add(material);
-                cache.insert(key, replacement.clone());
-                replacement
-            };
-            commands.entity(entity).insert(MeshMaterial3d(replacement));
-        }
-        commands.entity(entity).remove::<LiverySurface>();
-    }
-}
+pub struct DriverHelmet(pub(crate) usize);
 
 #[derive(Component)]
 pub struct VisualReady;
@@ -166,8 +150,8 @@ pub struct RaceVisualRoot;
 #[derive(Resource)]
 pub struct VisualAssets {
     handles: Vec<Handle<bevy::world_serialization::WorldAsset>>,
-    liveries: Vec<Handle<Image>>,
     started: Option<f64>,
+    scene_count: usize,
 }
 
 pub fn setup(
@@ -196,11 +180,15 @@ pub fn spawn_visuals(
         .load(GltfAssetLabel::Scene(0).from_asset(format!("tracks/{}/visual.glb", options.track)));
     let car =
         server.load(GltfAssetLabel::Scene(0).from_asset(format!("cars/{}/car.glb", options.car)));
-    let opponent = if options.car == "gen22" && options.opponents > 0 {
+    let opponent = if options.car == "gen22" {
         server.load(GltfAssetLabel::Scene(0).from_asset("cars/gen22/car_lod1.glb"))
     } else {
         car.clone()
     };
+    let distant = (options.car == "gen22"
+        && session.race.entrants.len() > 1
+        && options.assets.join("cars/gen22/car_lod2.glb").is_file())
+    .then(|| server.load(GltfAssetLabel::Scene(0).from_asset("cars/gen22/car_lod2.glb")));
     commands
         .spawn((
             RaceVisualRoot,
@@ -219,11 +207,50 @@ pub fn spawn_visuals(
                 Name::new(format!("car-{index}")),
                 CarVisual(index),
                 RaceVisualRoot,
-                WorldAssetRoot(scene),
+                Visibility::default(),
                 body_transform(&entrant.car),
             ))
-            .observe(visual_ready)
             .with_children(|car| {
+                let has_lod = index != session.player && distant.is_some();
+                car.spawn((
+                    CarScene {
+                        entrant: index,
+                        lod: has_lod.then_some(false),
+                        shadow_only: false,
+                    },
+                    WorldAssetRoot(scene),
+                    Transform::default(),
+                ))
+                .observe(visual_ready);
+                if let Some(far) = distant.as_ref().filter(|_| has_lod) {
+                    car.spawn((
+                        CarScene {
+                            entrant: index,
+                            lod: Some(true),
+                            shadow_only: false,
+                        },
+                        WorldAssetRoot(far.clone()),
+                        Transform::default(),
+                    ))
+                    .observe(visual_ready);
+                }
+                let shadow = if index == session.player && options.car == "gen22" {
+                    Some(opponent.clone())
+                } else {
+                    distant.clone()
+                };
+                if let Some(shadow) = shadow {
+                    car.spawn((
+                        CarScene {
+                            entrant: index,
+                            lod: None,
+                            shadow_only: true,
+                        },
+                        WorldAssetRoot(shadow),
+                        Transform::default(),
+                    ))
+                    .observe(visual_ready);
+                }
                 if index == session.player && options.car == "gen22" {
                     // Approximate daylight bouncing into the shaded cockpit. Short range
                     // keeps the fill on the controls and hands rather than the bodywork.
@@ -242,22 +269,20 @@ pub fn spawn_visuals(
                 }
             });
     }
-    // Request every field texture before scene instantiation so readiness and
-    // failure reporting include external PNGs, even before apply_liveries runs.
-    let mut paths: Vec<_> = session
-        .identities
-        .iter()
-        .flatten()
-        .flat_map(|identity| {
-            ["paint", "suit", "helmet_paint"].map(|name| livery_path(name, identity).unwrap())
-        })
-        .collect();
-    paths.sort();
-    paths.dedup();
+    let scene_count = session.race.entrants.len()
+        + 1
+        + usize::from(options.car == "gen22")
+        + if distant.is_some() {
+            2 * (session.race.entrants.len() - 1)
+        } else {
+            0
+        };
+    let mut handles = vec![track, car, opponent];
+    handles.extend(distant);
     commands.insert_resource(VisualAssets {
-        handles: vec![track, car, opponent],
-        liveries: paths.into_iter().map(|path| server.load(path)).collect(),
+        handles,
         started: None,
+        scene_count,
     });
 }
 
@@ -265,13 +290,14 @@ pub fn spawn_visuals(
 fn visual_ready(
     event: On<WorldInstanceReady>,
     mut commands: Commands,
-    cars: Query<&CarVisual>,
+    cars: Query<&CarScene>,
     children: Query<&Children>,
     nodes: Query<(&Name, &Transform)>,
     material_names: Query<&bevy::gltf::GltfMaterialName>,
     mesh_handles: Query<&Mesh3d>,
     meshes: Res<Assets<Mesh>>,
     session: Res<Session>,
+    lod_distance: Res<OpponentLodDistance>,
     mut exit: MessageWriter<AppExit>,
 ) {
     if let Ok(car) = cars.get(event.entity) {
@@ -299,77 +325,116 @@ fn visual_ready(
         let mut found = [false; 4];
         let mut body_found = false;
         for entity in children.iter_descendants(event.entity) {
-            if material_names.contains(entity) {
-                commands.entity(entity).insert(CarSurface);
+            if let Some(far) = car.lod.filter(|_| mesh_handles.contains(entity)) {
+                commands
+                    .entity(entity)
+                    .insert((opponent_range(far, lod_distance.0), OpponentLod(far)));
+            }
+            if mesh_handles.contains(entity) {
+                if car.shadow_only {
+                    commands
+                        .entity(entity)
+                        .insert(bevy::camera::visibility::RenderLayers::layer(
+                            PLAYER_SHADOW_LAYER,
+                        ));
+                    if car.entrant == session.player {
+                        commands.entity(entity).insert(PlayerShadowProxy);
+                    }
+                } else if (car.entrant == session.player
+                    && session.identities[car.entrant].is_some())
+                    || car.lod.is_some()
+                {
+                    // Dedicated LOD silhouettes cast the sun; visible geometry receives it.
+                    commands.entity(entity).insert(bevy::light::NotShadowCaster);
+                }
+            }
+            if !car.shadow_only && material_names.contains(entity) {
+                commands.entity(entity).insert(CarSurface(
+                    session
+                        .identities
+                        .get(car.entrant)
+                        .and_then(|identity| identity.as_ref())
+                        .map(|identity| identity.team.clone()),
+                    (car.entrant != session.player).then_some(if car.lod == Some(true) {
+                        "lod2"
+                    } else {
+                        "lod1"
+                    }),
+                    session.race.entrants[car.entrant].car.setup.compound,
+                ));
             }
             let Ok((name, rest)) = nodes.get(entity) else {
                 continue;
             };
-            if name.as_str() == "steering_wheel" {
-                for surface in children.iter_descendants(entity) {
-                    if material_names.contains(surface) {
-                        commands
-                            .entity(surface)
-                            .insert(crate::materials::WheelSurface);
-                    }
-                }
-            }
-            if let Some((pivot, _, _)) = pivot {
+            if let Some((pivot, _, _)) = pivot.filter(|_| car.entrant == session.player) {
                 if material_names.get(entity).is_ok_and(|name| {
                     matches!(name.0.as_str(), "RBRWHEEL10" | "redbull_steeringwheel.004")
                 }) {
                     commands.entity(entity).insert((
                         SteeringWheelVisual {
-                            entrant: car.0,
+                            entrant: car.entrant,
                             rest: *rest,
                             pivot,
                         },
-                        crate::wheel_dash::WheelPart::Mount(car.0),
+                        crate::wheel_dash::WheelPart::Mount(car.entrant),
                     ));
                 }
             }
-            if session.identities.get(car.0).is_some_and(Option::is_some) {
-                if material_names.contains(entity) {
-                    commands
-                        .entity(entity)
-                        .insert(LiverySurface { entrant: car.0 });
+            if session
+                .identities
+                .get(car.entrant)
+                .is_some_and(Option::is_some)
+            {
+                if car.entrant == session.player && material_names.contains(entity) {
                     match material_names.get(entity).map(|name| name.0.as_str()) {
                         Ok("wheel_screen") => {
                             commands
                                 .entity(entity)
-                                .insert(crate::wheel_dash::WheelPart::Screen(car.0));
+                                .insert(crate::wheel_dash::WheelPart::Screen(car.entrant));
                         }
                         Ok("wheel_leds") => {
                             commands
                                 .entity(entity)
-                                .insert(crate::wheel_dash::WheelPart::Leds(car.0));
+                                .insert(crate::wheel_dash::WheelPart::Leds(car.entrant));
                         }
                         _ => {}
                     }
                 }
                 let kind = match name.as_str() {
-                    "steering_wheel" => Some(RigKind::Steering),
+                    "steering_wheel" if car.entrant == session.player => Some(RigKind::Steering),
                     "upright_fl" | "upright_fr" => Some(RigKind::Upright),
                     "drs_flap" => Some(RigKind::Drs),
                     _ => None,
                 };
                 if let Some(up) = match name.as_str() {
-                    "paddle_up" => Some(true),
-                    "paddle_down" => Some(false),
+                    "paddle_up" if car.entrant == session.player => Some(true),
+                    "paddle_down" if car.entrant == session.player => Some(false),
                     _ => None,
                 } {
                     commands.entity(entity).insert(Paddle {
-                        entrant: car.0,
+                        entrant: car.entrant,
                         rest: *rest,
                         up,
                     });
                 }
-                if matches!(name.as_str(), "driver" | "helmet") {
-                    commands.entity(entity).insert(DriverMorph(car.0));
+                if name.as_str() == "drs_button" && car.entrant == session.player {
+                    commands.entity(entity).insert(DrsButton {
+                        entrant: car.entrant,
+                        rest: *rest,
+                    });
+                }
+                if name.as_str() == "helmet" && !car.shadow_only {
+                    commands.entity(entity).insert(DriverHelmet(car.entrant));
+                }
+                if !car.shadow_only
+                    && car.entrant == session.player
+                    && matches!(name.as_str(), "driver" | "helmet")
+                {
+                    commands.entity(entity).insert(DriverMorph(car.entrant));
                 }
                 if let Some(kind) = kind {
                     commands.entity(entity).insert(RigPart {
-                        entrant: car.0,
+                        entrant: car.entrant,
                         rest: *rest,
                         kind,
                     });
@@ -382,14 +447,14 @@ fn visual_ready(
             {
                 found[wheel] = true;
                 commands.entity(entity).insert(WheelVisual {
-                    entrant: car.0,
+                    entrant: car.entrant,
                     wheel,
                     rest: *rest,
                 });
             }
         }
         if !body_found || !found.into_iter().all(|found| found) {
-            error!("car {} is missing body or wheel nodes", car.0);
+            error!("car {} is missing body or wheel nodes", car.entrant);
             exit.write(AppExit::error());
             return;
         }
@@ -423,12 +488,7 @@ pub fn check_loading(
         return;
     }
     let started = *visuals.started.get_or_insert(time.elapsed_secs_f64());
-    for id in visuals
-        .handles
-        .iter()
-        .map(|handle| handle.id().untyped())
-        .chain(visuals.liveries.iter().map(|handle| handle.id().untyped()))
-    {
+    for id in visuals.handles.iter().map(|handle| handle.id().untyped()) {
         if let Some(LoadState::Failed(error)) = server.get_load_state(id) {
             error!("visual asset failed: {error}");
             menu.error = Some(format!("Could not load a visual asset: {error}"));
@@ -440,12 +500,7 @@ pub fn check_loading(
             return;
         }
     }
-    if ready.iter().count() == session.race.entrants.len() + 1
-        && visuals
-            .liveries
-            .iter()
-            .all(|handle| server.is_loaded(handle.id()))
-    {
+    if ready.iter().count() == visuals.scene_count {
         session.ready = true;
         if session.screen == crate::menu::Screen::Loading {
             menu.race_started = true;
@@ -603,13 +658,14 @@ pub fn sync_cars(
     }
 }
 
-/// Flicks the shift paddle and the finger on it whenever a car changes gear.
+/// Animates shift paddles/fingers and the player's DRS cap/thumb press.
 /// Runs after [`sync_cars`], which sets the steering part of the driver pose.
-pub fn animate_shifts(
+pub fn animate_controls(
     session: Res<Session>,
     time: Res<Time>,
     mut shifts: Local<ShiftTracker>,
-    mut paddles: Query<(&Paddle, &mut Transform)>,
+    mut paddles: Query<(&Paddle, &mut Transform), Without<DrsButton>>,
+    mut buttons: Query<(&DrsButton, &mut Transform), Without<Paddle>>,
     mut drivers: Query<(&DriverMorph, &mut bevy::mesh::morph::MorphWeights)>,
 ) {
     // Every replacement session loads its visuals before it can race. Local
@@ -618,26 +674,42 @@ pub fn animate_shifts(
         shifts.0.clear();
     }
     let pulls = shifts.update(
-        session
-            .race
-            .entrants
-            .iter()
-            .map(|entrant| entrant.car.powertrain.gear),
+        std::iter::once(session.race.entrants[session.player].car.powertrain.gear),
         time.delta_secs(),
     );
     for (paddle, mut transform) in &mut paddles {
+        if paddle.entrant != session.player {
+            continue;
+        }
         let (angle, pull) = if paddle.up {
-            (session.rig.paddles.up_angle, pulls[paddle.entrant][0])
+            (session.rig.paddles.up_angle, pulls[0][0])
         } else {
-            (session.rig.paddles.down_angle, pulls[paddle.entrant][1])
+            (session.rig.paddles.down_angle, pulls[0][1])
         };
         *transform = paddle.rest;
         transform.rotation = paddle.rest.rotation * Quat::from_rotation_y(angle * pull);
     }
+    let press = if session.ready && !session.paused {
+        session.controls.drs_press()
+    } else {
+        0.
+    };
+    for (button, mut transform) in &mut buttons {
+        *transform = button.rest;
+        if button.entrant == session.player {
+            transform.translation += Vec3::from_array(session.rig.drs_button_travel) * press;
+        }
+    }
     for (driver, mut weights) in &mut drivers {
-        session
-            .rig
-            .shift_weights(pulls[driver.0], weights.weights_mut());
+        session.rig.shift_weights(pulls[0], weights.weights_mut());
+        session.rig.drs_weight(
+            if driver.0 == session.player {
+                press
+            } else {
+                0.
+            },
+            weights.weights_mut(),
+        );
     }
 }
 
@@ -735,72 +807,107 @@ pub fn load_race(options: &Options) -> Result<Race, String> {
     Ok(race)
 }
 
+/// Keep the local helmet out of the eye camera; restore it in external views.
+pub fn helmet_visibility(
+    session: Res<Session>,
+    mut helmets: Query<(&DriverHelmet, &mut Visibility)>,
+) {
+    for (helmet, mut visibility) in &mut helmets {
+        *visibility =
+            if helmet.0 == session.player && session.camera.mode == crate::camera::Mode::Cockpit {
+                Visibility::Hidden
+            } else {
+                Visibility::Inherited
+            };
+    }
+}
+
 #[cfg(test)]
-mod livery_tests {
+mod rig_tests {
     use super::*;
     #[test]
-    fn missing_or_corrupt_livery_prevents_readiness_and_reports_failure() {
-        use bevy::asset::AssetPlugin;
-        use bevy::image::{CompressedImageFormats, ImageLoader, ImagePlugin};
-        let root = std::env::temp_dir().join(format!("f1-livery-load-{}", std::process::id()));
-        std::fs::create_dir_all(&root).unwrap();
-        std::fs::write(root.join("corrupt.png"), b"not a PNG").unwrap();
-        for path in ["missing.png", "corrupt.png"] {
-            let mut options = Options::parse(std::iter::empty()).unwrap();
-            options.assets = root.clone();
-            let mut app = App::new();
-            app.add_plugins((
-                MinimalPlugins,
-                AssetPlugin {
-                    file_path: root.to_string_lossy().into_owned(),
-                    ..default()
-                },
-                ImagePlugin::default(),
-            ))
-            .register_asset_loader(ImageLoader::new(CompressedImageFormats::NONE))
-            .insert_resource(crate::tests::session())
-            .insert_resource(crate::menu::Frontend::new(&options))
-            .add_message::<AppExit>()
-            .add_systems(Update, check_loading);
-            let texture = app.world().resource::<AssetServer>().load(path);
-            app.insert_resource(VisualAssets {
-                handles: vec![],
-                liveries: vec![texture],
-                started: None,
-            });
-            app.world_mut().spawn(VisualReady);
-            app.world_mut().spawn(VisualReady);
-            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
-            while app
-                .world()
-                .resource::<crate::menu::Frontend>()
-                .error
-                .is_none()
-            {
-                app.update();
-                assert!(!app.world().resource::<Session>().ready);
-                assert!(
-                    std::time::Instant::now() < deadline,
-                    "image failure was not reported: {path}"
-                );
-                std::thread::yield_now();
-            }
-            let session = app.world().resource::<Session>();
-            assert!(session.paused);
-            assert_eq!(session.screen, crate::menu::Screen::Main);
-            assert!(app
-                .world()
-                .resource::<crate::menu::Frontend>()
-                .error
-                .as_ref()
-                .unwrap()
-                .contains(path));
+    fn opponent_lods_share_a_crossfade_without_a_visibility_gap() {
+        let near = opponent_range(false, OPPONENT_LOD_DISTANCE);
+        let far = opponent_range(true, OPPONENT_LOD_DISTANCE);
+        assert_eq!(near.end_margin, far.start_margin);
+        assert_eq!(near.end_margin, 35.0..45.0);
+        for distance in [0., 34.9, 35., 40., 44.9, 45., 1000.] {
+            assert!(near.is_visible_at_all(distance) || far.is_visible_at_all(distance));
         }
-        std::fs::remove_dir_all(root).unwrap();
+        assert!(near.is_visible_at_all(40.) && far.is_visible_at_all(40.));
+        assert!(!near.is_visible_at_all(45.));
+        assert!(!far.is_visible_at_all(34.9));
     }
 
     #[test]
-    fn new_session_does_not_inherit_shift_pulls() {
+    fn drs_press_survives_physics_consumption_and_releases_cap_and_thumb() {
+        let mut state = crate::tests::session();
+        state.ready = true;
+        state.rig.driver_drs_pose = Some(0);
+        state.rig.drs_button_travel = [0., 0., 0.003];
+        let mut app = App::new();
+        app.insert_resource(state)
+            .init_resource::<Time>()
+            .add_systems(Update, animate_controls);
+        let rest = Transform::from_xyz(0.1, 0.2, 0.3);
+        let button = app
+            .world_mut()
+            .spawn((DrsButton { entrant: 0, rest }, rest))
+            .id();
+        let driver = app
+            .world_mut()
+            .spawn((
+                DriverMorph(0),
+                bevy::mesh::morph::MorphWeights::new(vec![0.], None).unwrap(),
+            ))
+            .id();
+        let mut keys = ButtonInput::default();
+        keys.press(KeyCode::KeyF);
+        {
+            let mut session = app.world_mut().resource_mut::<Session>();
+            session.controls.update(&keys, None, 0.);
+            assert!(session.controls.car_input().drs);
+            assert!(!session.controls.car_input().drs);
+            keys.clear();
+            session.controls.update(&keys, None, 0.06);
+        }
+        app.update();
+        assert!(
+            !app.world().resource::<Session>().race.entrants[0]
+                .car
+                .drs
+                .available
+        );
+        assert!(app
+            .world()
+            .get::<Transform>(button)
+            .unwrap()
+            .translation
+            .abs_diff_eq(rest.translation + Vec3::Z * 0.003, 1e-6));
+        assert_eq!(
+            app.world()
+                .get::<bevy::mesh::morph::MorphWeights>(driver)
+                .unwrap()
+                .weights(),
+            &[1.]
+        );
+        app.world_mut()
+            .resource_mut::<Session>()
+            .controls
+            .update(&keys, None, 0.3);
+        app.update();
+        assert_eq!(*app.world().get::<Transform>(button).unwrap(), rest);
+        assert_eq!(
+            app.world()
+                .get::<bevy::mesh::morph::MorphWeights>(driver)
+                .unwrap()
+                .weights(),
+            &[0.]
+        );
+    }
+
+    #[test]
+    fn new_session_does_not_inherit_press_amounts() {
         let mut state = crate::tests::session();
         state.ready = true;
         state.rig.paddles.up_angle = -0.1;
@@ -808,7 +915,7 @@ mod livery_tests {
         let mut app = App::new();
         app.insert_resource(state)
             .init_resource::<Time>()
-            .add_systems(Update, animate_shifts);
+            .add_systems(Update, animate_controls);
         let paddle = app
             .world_mut()
             .spawn((
@@ -877,43 +984,15 @@ mod livery_tests {
 
     #[test]
     fn shifts_flick_the_matching_paddle_and_release_it() {
-        assert_eq!(shift_pull(f32::INFINITY), 0.);
-        assert_eq!(shift_pull(0.02), 0.5);
-        assert_eq!(shift_pull(0.07), 1.);
-        assert_eq!(shift_pull(0.3), 0.);
+        assert_eq!(press_amount(f32::INFINITY), 0.);
+        assert_eq!(press_amount(0.02), 0.5);
+        assert_eq!(press_amount(0.07), 1.);
+        assert_eq!(press_amount(0.3), 0.);
         let mut tracker = ShiftTracker::default();
         assert_eq!(tracker.update([3, 3].into_iter(), 0.), vec![[0.; 2]; 2]);
         let pulls = tracker.update([4, 2].into_iter(), 0.016);
         assert_eq!(pulls, vec![[0., 0.], [0., 0.]]);
         let pulls = tracker.update([4, 2].into_iter(), 0.05);
         assert_eq!(pulls, vec![[1., 0.], [0., 1.]]);
-    }
-    #[test]
-    fn team_textures_share_paths_but_driver_helmets_are_distinct() {
-        let first = crate::teams::Identity {
-            team: "ferrari".into(),
-            driver: "leclerc".into(),
-            name: "Charles Leclerc".into(),
-            abbr: "LEC".into(),
-            team_short: "Ferrari".into(),
-            primary: [255, 0, 0],
-        };
-        let mut second = first.clone();
-        second.driver = "sainz".into();
-        for material in ["paint", "suit"] {
-            assert_eq!(
-                livery_path(material, &first),
-                livery_path(material, &second)
-            );
-        }
-        assert_ne!(
-            livery_path("helmet_paint", &first),
-            livery_path("helmet_paint", &second)
-        );
-        assert_eq!(
-            livery_path("paint", &first).unwrap(),
-            "cars/gen22/liveries/ferrari/paint.png"
-        );
-        assert_eq!(livery_path("carbon", &first), None);
     }
 }

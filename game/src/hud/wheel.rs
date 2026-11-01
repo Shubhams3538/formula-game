@@ -182,6 +182,26 @@ pub fn draw(hud: &Hud, style: &HudStyle, session: &Session) {
         colors.ink,
         &format!("{:.0}", car.powertrain.rpm),
     );
+    if let Some(lamp) = instruments::DrsLamp::of(session) {
+        let (fill, ink) = match lamp {
+            instruments::DrsLamp::Off => (Color::from_rgb(20, 22, 23), colors.muted),
+            instruments::DrsLamp::Ready => (Color::from_rgb(20, 22, 23), GREEN),
+            instruments::DrsLamp::Open => (GREEN, Color::from_rgb(8, 9, 10)),
+        };
+        let (x, y, w, h) = (gear_x + 10., PAD + 304., gear_w - 20., 40.);
+        hud.fill_round(x, y, w, h, 4., fill);
+        if lamp == instruments::DrsLamp::Ready {
+            hud.stroke_round(x, y, w, h, 4., 2.5, GREEN);
+        }
+        hud.text_mid(
+            &style.bold,
+            28.,
+            (x + w * 0.5, y + h * 0.5),
+            Align::Center,
+            ink,
+            "DRS",
+        );
+    }
     if let Some(refusal) = car.powertrain.last_refusal {
         let text = match refusal {
             ShiftRefusal::OverRev => "OVER-REV",

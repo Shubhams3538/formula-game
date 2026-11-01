@@ -258,7 +258,12 @@ impl ChaseCamera {
             .looking_at(to_vec3(self.target), Vec3::Y);
         if let Projection::Perspective(lens) = projection {
             lens.near = if self.mode == Mode::Cockpit {
-                0.17
+                // GEN22 needs close forearms; RB6 relies on clipping its double-sided tub.
+                if self.cockpit_eye.is_some() {
+                    0.04
+                } else {
+                    0.17
+                }
             } else {
                 0.1
             };

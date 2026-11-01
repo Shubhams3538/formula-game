@@ -73,13 +73,13 @@ The generated assets are separate from this repository. [Download the complete a
 ```text
 assets/
   tracks/spa/{track.json,collision.bin,visual.glb}
-  cars/gen22/{car.json,car.glb,car_lod1.glb,teams.json,liveries/}
+  cars/gen22/{car.json,car.glb,car_lod1.glb,car_lod2.glb,teams.json}
   cars/rb6/{car.json,car.glb}
 ```
 
 `tools/track/convert_spa.py` converts the upstream Spa track; `tools/car/prepare_car.py` prepares car models through Blender. Their module docstrings describe the source formats and arguments. The game uses the glTF files directly through Bevy. Car scenes must contain `body`, `wheel_fl`, `wheel_fr`, `wheel_rl` and `wheel_rr` nodes, with wheel pivots at their centres. The simulation and assets use +Z forward, +Y up, +X left, in metres.
 
-Normal launches open Race setup. Choose the circuit, car, laps, AI field, grid slot, tyres and wings, then select Start race. The race waits for its scenes to load before starting the countdown. `--quick-race` skips the menu using the CLI configuration; `--frames` also skips it for capture/testing. Use `--car gen22 --team ferrari --driver leclerc` to choose a 2022 entry, or `--car rb6` for a legacy race. Team and driver default to the first team and its first driver in `teams.json`; `--car rb22` remains a deprecated alias for `gen22`. Run `cargo run -p f1-the-game -- --help` for the full CLI.
+Normal launches open Race setup. Choose the circuit, car, laps, AI field, grid slot, tyres and wings, then select Start race. The race waits for its scenes to load before starting the countdown. `--quick-race` skips the menu using the CLI configuration; `--frames` also skips it for capture/testing. GEN22 uses installed Monoposto 2025 team sheets on its authored livery UV channel, with original-UV per-part artwork and the supplied source livery as fallbacks. Team and driver selections control race identities and HUD colours. Use `--car gen22 --team ferrari --driver leclerc` to choose a 2022 entry, or `--car rb6` for a legacy race. Team and driver default to the first team and its first driver in `teams.json`; `--car rb22` remains a deprecated alias for `gen22`. Run `cargo run -p f1-the-game -- --help` for the full CLI.
 
 **Spa is the only supported circuit in normal builds.** Other track assets are hidden from the menu and rejected by `--track`. To enable unfinished circuits for development, build or run with the opt-in Cargo feature: `cargo run --release -p f1-the-game --features exp -- --assets ./assets`. Experimental builds discover converted circuits such as Silverstone, Bahrain and COTA; deferred Nürburgring assets remain unavailable until their conversion is repaired. The ignored `assets` symlink points at the original asset tree for convenient local launching.
 
@@ -93,8 +93,8 @@ Aids and per-car camera positions persist in `$XDG_CONFIG_HOME/f1-racecraft/pref
 
 On Linux with the NVIDIA driver under Wayland, the game presents through XWayland: NVIDIA's native Wayland presentation waits for each frame to finish before returning, which serialized CPU and GPU work (set `F1_WAYLAND=1` to keep native Wayland). Sky lighting is generated once per circuit rather than every frame. Together these took the High preset from 115 to 236 fps uncapped on an RTX 3050 laptop with unchanged output. Vertical sync is on by default; turn it off in Graphics or with `--no-vsync`.
 
-- `--benchmark DIR` runs the comparison workload: two computer-controlled cars
-  already moving, separated on the racing line, for 20 seconds. It checks the
+- `--benchmark DIR` runs the comparison workload: the selected field, including an automated player,
+  already moving and separated on the racing line, for 20 seconds. It checks the
   complete drive before opening the window and rejects contact or recovery.
   The measured drive must match that preflight exactly. Loading and warm-up
   are excluded, and VSync is disabled.
@@ -106,9 +106,14 @@ On Linux with the NVIDIA driver under Wayland, the game presents through XWaylan
   PNGs. The report includes frame-time percentiles, 1% low FPS, workload state
   hashes and asset fingerprints. Changed asset fingerprints are expected when
   comparing visual changes; keep them equal when measuring code alone.
+- `--benchmark-grid --benchmark DIR` measures the stationary default grid for
+  20 seconds, retaining all cars and the player camera. Use it separately from
+  the moving workload to check the packed field. Reports record physical render
+  resolution, window size, field size and the selected asset fingerprints.
 - `--frames N --capture FILE` remains a capture utility. Its old FPS log is
   diagnostic, not the repeatable moving benchmark.
 - `F1_DETERMINISTIC=1` with a capture run advances exactly 1/60 s per frame and restarts temporal jitter with the race, so captures from different builds can be compared pixel by pixel.
+- Settings → Graphics has presets plus detailed video settings (anti-aliasing, sharpening, shadows, ambient occlusion, sky, haze, texture detail, AI car detail and Bevy post-processing). Texture detail applies from the next race. Imported textures use BC7 on supported GPUs, keeping Ultra maps at full resolution. The first load encodes and caches blocks in `$XDG_CACHE_HOME/f1-racecraft/bc7-v1`, or `~/.cache/f1-racecraft/bc7-v1`; later loads reuse them. `F1_VIDEO` takes a JSON `graphics::Video` and overrides the settings, including for `--frames` captures and benchmarks.
 - `F1_PROFILE=1` logs per-pass CPU and GPU timings; `--features profile` writes a Chrome trace for ui.perfetto.dev.
 - F3 shows frame rate and frame times in game.
 
@@ -171,6 +176,17 @@ There are exactly three camera modes: seated cockpit, TV pod above the driver's 
 
 The RB6 and GEN22 cockpit steering wheels turn with the interpolated front-wheel steering angle, including steering assistance, at a 6:1 ratio. GEN22 uses the named `steering_wheel` node, including its live LCD and LEDs; RB6 keeps its legacy wheel and screen pod.
 
+GEN22 opponents use exterior-only near and distant models. The player alone carries
+the full source steering wheel and cockpit controls. The full player geometry
+remains visible; a sun-only LOD1 proxy casts its shadow,
+and opponents use LOD2 shadow proxies when available. Triangle indices are
+reordered once on load to reuse GPU vertex work without reducing geometry.
+Opponent meshes crossfade around 40 m; older asset packages without `car_lod2.glb` use LOD1 throughout.
+Install optional per-team Monoposto 2025 sheets on the authored livery UV channel with
+[`tools/livery/install_liveries.py`](docs/livery-mapping.md#build-and-install).
+
+On GEN22, press F or gamepad East to press the DRS cap with the driver's left thumb, even when DRS is unavailable. The wheel LCD uses the HUD's DRS states: dim when unavailable, outlined green when ready, solid green while open. Braking closes the flap. Button and dial legends retain their source UVs independently of the live LCD.
+
 DRS follows the modern rules. Each circuit gets up to two zones, found from its
 longest straights that end in a braking corner (at Spa: Kemmel into Les Combes,
 and the pit straight into La Source). From lap 2, a car within one second of the
@@ -184,7 +200,7 @@ one-second rules for your car: F opens the flap anywhere on track from the
 start, and braking still closes it. AI cars keep to the race rules. The
 setting is saved with your other aids.
 
-Import custom car, suit and helmet PNGs with `tools/car/import_livery.py`; it exports matching UV guides and preserves imported artwork through asset rebuilds. See [the PNG workflow](docs/gen22-car.md#importing-your-png-artwork). `tools/car/convert_livery.py` batch-converts the square Monoposto layout used by the Porsche example through authored mesh UV correspondence; see the workflow for layout limits.
+GEN22 retains original per-part UVs, source colour textures and baked ambient occlusion. The player model retains a detailed cockpit with distinct carbon, brass, anodized metal, coloured controls and stickers. Opponents use a lighter mesh with projected normal maps. See [the asset contract](docs/gen22-car.md) for source preparation, rebuilds and comparison renders. Install Monoposto 2026 sheets with the [livery installer](docs/livery-mapping.md#installation).
 
 
 The HUD includes the timing tower, lap times, countdown lights, race messages, shift lights, speed, pedals, tyre temperatures/wear, lock-up/sliding indicators, aero effects, minimap and results.
@@ -224,6 +240,10 @@ F1_TEST_ASSETS=/path/to/assets cargo test -p racecraft-sim --test spa -- --nocap
 cargo run -p f1-the-game -- --assets /path/to/assets --frames 180 --capture /tmp/f1-bevy.png
 # Full renderer check with injected controls, camera editor and twelve screenshots:
 F1_TEST_ASSETS=/path/to/assets cargo test -p f1-the-game rendered_game_flows -- --ignored --nocapture
+# GEN22 direct-template player and opponent LOD1/LOD2 review, thirteen captures:
+F1_TEST_ASSETS=/path/to/assets cargo test -p f1-the-game rendered_car_review -- --ignored --nocapture
+# GEN22 DRS key presses, thumb/cap release, both LODs and eight cockpit captures:
+F1_TEST_ASSETS=/path/to/assets cargo test -p f1-the-game rendered_wheel_drs_controls -- --ignored --nocapture
 # Real menu pointer input, live aids, Spa race launches and both car models:
 F1_TEST_ASSETS=/path/to/full/original/assets cargo test -p f1-the-game rendered_menu_and_track_selection -- --ignored --nocapture
 F1_TEST_ASSETS=/path/to/assets cargo test -p f1-the-game --test cli_exit -- --ignored --nocapture
@@ -234,7 +254,7 @@ cargo test -p f1-the-game live_engine_playback -- --ignored --nocapture
 
 Capture counts frames after scene loading and exits after writing the image. Missing assets and screenshot-write errors return a failing exit code. Spa integration tests print a skip notice when no generated assets are available; use `F1_TEST_ASSETS` to run them against an external tree.
 
-The ignored renderer tests need a Vulkan-capable display. The gameplay check verifies scene hierarchy, car materials, driving, all three cameras, pause/resume and recovery, and writes grid/cockpit/onboard/paused/racing/results screenshots plus both instrument layouts and both map modes under `/tmp/f1-bevy-proof`. Its results screenshot uses a forced finish state; race completion is covered by the simulation tests. The menu check clicks actual egui tabs, aid presets, both HUD/map selectors and Start, switches through Spa and both cars (all four circuits with `--features exp`), checks that old scene roots are removed, and confirms live aid changes while paused. Set `F1_TEST_OUTPUT` to choose a capture directory. `tools/verify_hud.sh` runs these checks on an isolated Weston/XWayland display and captures landscape and tall-window layouts; it requires Weston and a Vulkan-capable GPU. The existing Spa AI lap-time benchmark still fails its unchanged target; see MIGRATION.md for the baseline comparison.
+The ignored renderer tests need a Vulkan-capable display. The gameplay check verifies scene hierarchy, car materials, driving, all three cameras, pause/resume and recovery, and writes grid/cockpit/onboard/paused/racing/results screenshots plus both instrument layouts and both map modes under `/tmp/f1-bevy-proof`. Its results screenshot uses a forced finish state; race completion is covered by the simulation tests. The menu check clicks actual egui tabs, aid presets, both HUD/map selectors and Start, switches through Spa and both cars (all four circuits with `--features exp`), checks that old scene roots are removed, and confirms live aid changes while paused. Set `F1_TEST_OUTPUT` to choose a capture directory. `tools/verify_hud.sh` runs these checks on an isolated Weston/XWayland display and captures landscape and tall-window layouts; it requires Weston and a Vulkan-capable GPU. The Spa AI integration race passes its lap-time ceiling (best ~125 s from a standing start; ~116 s flying laps).
 
 The CLI exit test launches separate game processes, quits after 1 and 12 frames, captures the first frame, and checks a failed screenshot write. Pipeline compilation runs on Bevy's render thread to prevent early shutdown racing a background GPU compiler worker. First-use pipeline compilation can block a frame; this avoids the reproduced NVIDIA teardown crash.
 

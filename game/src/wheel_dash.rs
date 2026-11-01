@@ -59,6 +59,7 @@ impl Plugin for WheelDashPlugin {
         render_app
             .add_systems(ExtractSchedule, extract_screen)
             .add_systems(Core2d, build_screen_mips.after(upscaling));
+        app.add_systems(Update, update_view.after(crate::camera::update));
     }
 }
 
@@ -77,6 +78,9 @@ fn extract_screen(
     let Some(dash) = dash.as_ref() else {
         return;
     };
+    if !dash.active {
+        return;
+    }
     jobs.add(MIP_PHASE, dash.screen.id());
     commands.insert_resource(ScreenImages {
         target: dash.target.id(),
@@ -127,6 +131,26 @@ pub struct WheelDash {
     screen: Handle<Image>,
     /// The player's wheel uses the pod's strip layout instead of the full LCD.
     compact: bool,
+    active: bool,
+}
+
+#[derive(Component)]
+struct WheelDashCamera;
+
+/// The driver hides the LCD in chase view. Resume its offscreen render and
+/// mip generation before an onboard view samples it that frame.
+fn update_view(
+    session: Res<Session>,
+    mut dash: ResMut<WheelDash>,
+    mut cameras: Query<&mut Camera, With<WheelDashCamera>>,
+) {
+    let active = session.camera.mode != crate::camera::Mode::Chase;
+    dash.active = active;
+    for mut camera in &mut cameras {
+        if camera.is_active != active {
+            camera.is_active = active;
+        }
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -175,6 +199,7 @@ pub fn setup(mut commands: Commands, mut images: ResMut<Assets<Image>>) {
     // Draws nothing of the world; it only hosts the wheel's egui context.
     commands.spawn((
         Camera2d,
+        WheelDashCamera,
         Camera {
             order: -1,
             clear_color: ClearColorConfig::Custom(Color::BLACK),
@@ -192,6 +217,7 @@ pub fn setup(mut commands: Commands, mut images: ResMut<Assets<Image>>) {
         target,
         screen,
         compact: false,
+        active: true,
     });
 }
 
@@ -208,7 +234,7 @@ pub fn draw(
         *initialized = true;
         return;
     }
-    if !session.ready {
+    if !session.ready || !dash.active {
         return;
     }
     let canvas = crate::canvas::Hud {
@@ -321,6 +347,9 @@ pub fn attach(
                 };
                 base.base_color = Color::srgb(0.015, 0.018, 0.02);
                 base.emissive = LinearRgba::BLACK;
+                // Static export groups are replaced by the live per-lamp RPM colours.
+                base.base_color_texture = None;
+                base.emissive_texture = None;
                 let (lamps, rest) = split_uv_lamps(&source);
                 for (lamp, indices) in lamps {
                     let mut lamp_mesh = source.clone();
@@ -483,6 +512,40 @@ pub fn lights(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn lcd_rendering_resumes_when_leaving_chase_view() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .insert_resource(crate::tests::session())
+            .insert_resource(WheelDash {
+                target: default(),
+                screen: default(),
+                compact: false,
+                active: true,
+            })
+            .add_systems(Update, update_view);
+        let camera = app
+            .world_mut()
+            .spawn((Camera::default(), WheelDashCamera))
+            .id();
+        let scene = app.world_mut().spawn(Camera::default()).id();
+        for (view, active) in [
+            (crate::camera::Mode::Chase, false),
+            (crate::camera::Mode::Cockpit, true),
+            (crate::camera::Mode::Tv, true),
+            (crate::camera::Mode::Chase, false),
+        ] {
+            app.world_mut()
+                .resource_mut::<Session>()
+                .camera
+                .select(view);
+            app.update();
+            assert_eq!(app.world().resource::<WheelDash>().active, active);
+            assert_eq!(app.world().get::<Camera>(camera).unwrap().is_active, active);
+            assert!(app.world().get::<Camera>(scene).unwrap().is_active);
+        }
+    }
 
     #[test]
     fn rev_strip_excludes_side_warning_lamps_and_preserves_their_geometry() {

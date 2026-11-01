@@ -935,18 +935,32 @@ fn probe_assertions(
                         .iter()
                         .filter(|(part, _)| matches!(part.kind, assets::RigKind::Steering))
                         .count()
-                    >= session.race.entrants.len()
+                    >= 1
             );
-            assert_eq!(wheels.iter().count(), session.race.entrants.len() * 4);
+            let has_distant_lod = session.identities.iter().any(Option::is_some)
+                && std::path::Path::new(&std::env::var("F1_TEST_ASSETS").unwrap())
+                    .join("cars/gen22/car_lod2.glb")
+                    .is_file();
+            let has_shadow_proxy = session.identities.iter().any(Option::is_some);
+            let visual_count = session.race.entrants.len()
+                + usize::from(has_shadow_proxy)
+                + if has_distant_lod {
+                    2 * (session.race.entrants.len() - 1)
+                } else {
+                    0
+                };
+            assert_eq!(wheels.iter().count(), visual_count * 4);
             assert_eq!(bodies.iter().count(), session.race.entrants.len());
             if !session.rig.driver_poses.is_empty() {
                 // Exercise the real GLB loader and scene tagging for both LODs.
-                assert_eq!(drivers.iter().count(), session.race.entrants.len() * 2);
-                assert_eq!(paddles.iter().count(), session.race.entrants.len() * 2);
+                assert_eq!(drivers.iter().count(), 2);
+                assert_eq!(paddles.iter().count(), 2);
                 for weights in &drivers {
                     assert_eq!(
                         weights.weights().len(),
-                        session.rig.driver_poses.len() + session.rig.driver_shift_poses.len()
+                        session.rig.driver_poses.len()
+                            + session.rig.driver_shift_poses.len()
+                            + usize::from(session.rig.driver_drs_pose.is_some())
                     );
                 }
             }
@@ -1009,7 +1023,9 @@ fn probe_assertions(
             probe
                 .completed
                 .store(true, std::sync::atomic::Ordering::SeqCst);
-            info!("Render probe: recovery, camera editor, both HUDs, both maps and all twelve screenshots passed");
+            info!(
+                "Render probe: recovery, camera editor, both HUDs, both maps and all twelve screenshots passed"
+            );
         }
         900 => panic!("screenshots did not complete"),
         _ => {}
@@ -1053,7 +1069,7 @@ fn probe_assertions(
 /// Fixed grid views of the shipped player/opponent assets for texture review.
 #[test]
 #[ignore = "requires a Vulkan display and F1_TEST_ASSETS"]
-fn rendered_livery_review() {
+fn rendered_car_review() {
     let root = std::env::var("F1_TEST_ASSETS").expect("set F1_TEST_ASSETS");
     let team = std::env::var("F1_TEST_TEAM").unwrap_or_else(|_| "mclaren".into());
     let options = Options::parse(
@@ -1066,21 +1082,166 @@ fn rendered_livery_review() {
     )
     .unwrap();
     let mut app = build_app(options).unwrap();
-    {
-        let mut session = app.world_mut().resource_mut::<Session>();
-        let identity = session.identities[session.player].clone();
-        for entry in &mut session.identities {
-            *entry = identity.clone();
-        }
+    if std::env::var_os("F1_TEST_HALF_TEXTURES").is_some() {
+        app.world_mut()
+            .resource_mut::<menu::Frontend>()
+            .video
+            .texture = graphics::TextureDetail::Half;
     }
-    app.add_systems(Update, livery_review.after(camera::update));
+
+    app.add_systems(
+        Update,
+        (
+            car_review.after(camera::update),
+            car_review_contract.after(assets::check_loading),
+        ),
+    );
     assert!(app.run().is_success());
 }
 
-fn livery_review(
+#[allow(clippy::too_many_arguments)]
+fn car_review_contract(
+    session: Res<Session>,
+    options: Res<Options>,
+    server: Res<AssetServer>,
+    materials: Res<Assets<StandardMaterial>>,
+    surfaces: Query<(
+        &materials::CarSurface,
+        &bevy::gltf::GltfMaterialName,
+        &MeshMaterial3d<StandardMaterial>,
+        &Mesh3d,
+    )>,
+    rig_parts: Query<&assets::RigPart>,
+    drivers: Query<(), With<assets::DriverMorph>>,
+    paddles: Query<(), With<assets::Paddle>>,
+    buttons: Query<&assets::DrsButton>,
+    shadow_meshes: Query<(
+        &Mesh3d,
+        &bevy::camera::visibility::RenderLayers,
+        Has<bevy::light::NotShadowCaster>,
+        Has<assets::PlayerShadowProxy>,
+    )>,
+    meshes: Res<Assets<Mesh>>,
+    mut checked: Local<bool>,
+) {
+    if !session.ready || *checked {
+        return;
+    }
+    // Check installed artwork at the actual GLB/material boundary, in both LODs.
+    let team = &session.identities[session.player].as_ref().unwrap().team;
+    let direct = options
+        .assets
+        .join(format!("cars/gen22/liveries/{team}/template.png"))
+        .is_file()
+        && session.rig.livery_template == Some(2025);
+    let installed = direct
+        || options
+            .assets
+            .join(format!("cars/gen22/liveries/{team}/main_body.png"))
+            .is_file();
+    let mut paint = std::collections::HashSet::new();
+    let mut levels = std::collections::HashSet::new();
+    for (surface, name, handle, mesh) in &surfaces {
+        if surface.0.as_ref() != Some(team) || !installed {
+            continue;
+        }
+        let Some(part) = materials::paint_part(&name.0) else {
+            continue;
+        };
+        let material = materials.get(&handle.0).unwrap();
+        let texture = material.base_color_texture.as_ref().unwrap();
+        let path = server.get_path(texture.id()).unwrap();
+        if direct {
+            assert_eq!(material.base_color_channel, bevy::mesh::UvChannel::Uv1);
+            assert_eq!(material.occlusion_channel, bevy::mesh::UvChannel::Uv0);
+            assert_eq!(material.normal_map_channel, bevy::mesh::UvChannel::Uv0);
+            assert_eq!(path.path().file_name().unwrap(), "template.png");
+            let mesh = meshes.get(&mesh.0).unwrap();
+            assert!(mesh.attribute(Mesh::ATTRIBUTE_UV_0).is_some());
+            assert!(mesh.attribute(Mesh::ATTRIBUTE_UV_1).is_some());
+        } else {
+            assert_eq!(material.base_color_channel, bevy::mesh::UvChannel::Uv0);
+            assert_eq!(material.occlusion_channel, bevy::mesh::UvChannel::Uv0);
+            assert_eq!(material.normal_map_channel, bevy::mesh::UvChannel::Uv0);
+            assert_eq!(
+                path.path().file_name().unwrap().to_str().unwrap(),
+                format!("{part}.png")
+            );
+        }
+        levels.insert(surface.1);
+        assert!(
+            path.path()
+                .starts_with(format!("cars/gen22/liveries/{team}")),
+            "{path:?}"
+        );
+        paint.insert(handle.0.id());
+    }
+    assert!(
+        !installed || paint.len() >= 2,
+        "player/opponent team materials must retain distinct LOD maps"
+    );
+    if installed {
+        let mut expected = [None, Some("lod1")]
+            .into_iter()
+            .collect::<std::collections::HashSet<_>>();
+        if options.assets.join("cars/gen22/car_lod2.glb").is_file() {
+            expected.insert(Some("lod2"));
+        }
+        assert_eq!(levels, expected);
+    }
+    for part in &rig_parts {
+        if matches!(part.kind, assets::RigKind::Steering) {
+            assert_eq!(part.entrant, session.player);
+        }
+    }
+    let mut shadow_triangles = 0;
+    let mut opponent_shadow_triangles = 0;
+    for (mesh, layers, disabled, player) in &shadow_meshes {
+        if *layers != bevy::camera::visibility::RenderLayers::layer(assets::PLAYER_SHADOW_LAYER) {
+            continue;
+        }
+        assert!(!disabled, "the sun-only proxy must cast shadows");
+        let mesh = meshes.get(&mesh.0).unwrap();
+        let triangles = mesh
+            .indices()
+            .map_or(mesh.count_vertices(), |indices| indices.len())
+            / 3;
+        if player {
+            shadow_triangles += triangles;
+        } else {
+            opponent_shadow_triangles += triangles;
+        }
+    }
+    if options.assets.join("cars/gen22/car_lod2.glb").is_file() {
+        let opponents = session.race.entrants.len() - 1;
+        assert!((35_000 * opponents..60_000 * opponents).contains(&opponent_shadow_triangles));
+    }
+    assert!(
+        (100_000..160_000).contains(&shadow_triangles),
+        "expected the complete LOD1 silhouette, got {shadow_triangles} triangles"
+    );
+    assert_eq!(drivers.iter().count(), 2);
+    assert_eq!(paddles.iter().count(), 2);
+    assert_eq!(buttons.iter().count(), 1);
+    assert!(buttons
+        .iter()
+        .all(|button| button.entrant == session.player));
+    *checked = true;
+}
+
+#[allow(clippy::too_many_arguments)]
+fn car_review(
     mut commands: Commands,
     mut session: ResMut<Session>,
-    mut cameras: Query<(&mut Transform, &mut Projection), With<Camera3d>>,
+    mut cameras: Query<(Entity, &mut Transform, &mut Projection), With<Camera3d>>,
+    options: Res<Options>,
+    ranges: Res<bevy::camera::visibility::VisibleEntityRanges>,
+    ranged: Query<(
+        Entity,
+        &bevy::camera::visibility::VisibilityRange,
+        &materials::CarSurface,
+        &bevy::gltf::GltfMaterialName,
+    )>,
     mut frame: Local<u32>,
     mut captured: Local<usize>,
     mut exit: MessageWriter<AppExit>,
@@ -1090,40 +1251,105 @@ fn livery_review(
     }
     session.paused = true;
     *frame += 1;
-    let stage = (*frame / 60).min(7);
+    let stage = (*frame / 60).min(12);
     if stage > 0 {
         session.camera.mode = camera::Mode::Chase;
-        let entrant = if stage < 5 { session.player } else { 0 };
+        let entrant = if !(5..=7).contains(&stage) {
+            session.player
+        } else {
+            session
+                .identities
+                .iter()
+                .enumerate()
+                .find(|(index, identity)| {
+                    *index != session.player
+                        && identity
+                            .as_ref()
+                            .zip(session.identities[session.player].as_ref())
+                            .is_some_and(|(other, player)| other.team == player.team)
+                })
+                .map_or(0, |(index, _)| index)
+        };
         let pose = pose::Pose::of(&session.race.entrants[entrant].car);
         let offset = match stage {
             1 | 5 => Vec3::new(4., 2.4, 5.),
             2 | 6 => Vec3::new(5.5, 2.4, 0.),
             3 => Vec3::new(-5.5, 2.4, 0.),
+            7 => Vec3::new(-15., 40., 28.),
+            8 => Vec3::new(0., 1.4, 7.),
+            9 => Vec3::new(-4., 1.4, 5.),
+            10 => Vec3::new(0.01, 9., 0.),
+            11 => Vec3::new(0., 1.5, 4.),
+            12 => Vec3::new(-2.5, 1.8, -5.),
             _ => Vec3::new(4., 2.4, -5.),
         };
         let rotation = Quat::from_rotation_y(pose.yaw as f32);
         let origin = pose.origin.as_vec3();
-        for (mut camera, mut projection) in &mut cameras {
+        let target = origin
+            + rotation
+                * match stage {
+                    11 => Vec3::new(0., 0.2, 2.),
+                    12 => Vec3::new(0., 0.8, -2.),
+                    _ => Vec3::Y * 0.5,
+                };
+        for (_, mut camera, mut projection) in &mut cameras {
             if let Projection::Perspective(lens) = &mut *projection {
-                lens.fov = 45_f32.to_radians();
+                lens.fov = if stage == 7 { 7_f32 } else { 45_f32 }.to_radians();
             }
-            *camera = Transform::from_translation(origin + rotation * offset)
-                .looking_at(origin + Vec3::Y * 0.5, Vec3::Y);
+            let up = if stage == 10 {
+                rotation * Vec3::X
+            } else {
+                Vec3::Y
+            };
+            *camera =
+                Transform::from_translation(origin + rotation * offset).looking_at(target, up);
         }
     }
-    if *frame % 60 == 50 && stage < 8 {
+    if *frame % 60 == 50 && stage < 13 {
+        if stage == 5 || stage == 7 {
+            let view = cameras.iter().next().unwrap().0;
+            let team = &session.identities[session.player].as_ref().unwrap().team;
+            let mut checked = 0;
+            for (entity, range, surface, name) in &ranged {
+                if surface.0.as_ref() != Some(team)
+                    || !name.0.starts_with("source_paint_main_body_stickers")
+                {
+                    continue;
+                }
+                let far = range.start_margin.start > 0.;
+                assert_eq!(
+                    ranges.entity_is_in_range_of_view(entity, view),
+                    if stage == 7 { far } else { !far }
+                );
+                checked += 1;
+            }
+            if options.assets.join("cars/gen22/car_lod2.glb").is_file() {
+                assert!(
+                    checked >= 2,
+                    "near and far opponent meshes need visibility ranges"
+                );
+            } else {
+                assert_eq!(checked, 0);
+            }
+            info!("Opponent LOD visibility passed at review stage {stage}, {checked} ranged body meshes");
+        }
         let output =
             std::path::PathBuf::from(std::env::var("F1_TEST_OUTPUT").expect("set F1_TEST_OUTPUT"));
         std::fs::create_dir_all(&output).unwrap();
         let names = [
-            "cockpit",
-            "front",
-            "left",
-            "right",
-            "rear",
-            "opponent-front",
-            "opponent-side",
-            "opponent-rear",
+            "cockpit-fixed",
+            "livery-player-front",
+            "livery-player-left",
+            "livery-player-right",
+            "livery-player-rear",
+            "livery-opponent-front",
+            "livery-opponent-side",
+            "livery-opponent-distant",
+            "livery-player-front-direct",
+            "livery-player-front-right",
+            "livery-player-top",
+            "livery-player-front-wing",
+            "livery-player-rear-wing",
         ];
         let path = output.join(format!("{}.png", names[stage as usize]));
         commands.spawn(Screenshot::primary_window()).observe(
@@ -1139,8 +1365,365 @@ fn livery_review(
         );
         *captured += 1;
     }
-    if *frame == 490 {
-        assert_eq!(*captured, 8);
+    if *frame == 790 {
+        assert_eq!(*captured, 13);
+        exit.write(AppExit::Success);
+    }
+}
+
+/// Real key input, physics, GLB hierarchy/morph loading and LCD presentation.
+#[test]
+#[ignore = "requires a Vulkan display and F1_TEST_ASSETS"]
+fn rendered_wheel_drs_controls() {
+    let root = std::env::var("F1_TEST_ASSETS").expect("set F1_TEST_ASSETS");
+    let options = Options::parse(
+        [
+            "--assets",
+            &root,
+            "--car",
+            "gen22",
+            "--team",
+            "mclaren",
+            "--opponents",
+            "1",
+            "--grid",
+            "1",
+            "--camera",
+            "cockpit",
+            "--assists",
+            "0",
+            "--mute",
+            "--size",
+            "1600x900",
+            "--frames",
+            "10000",
+        ]
+        .into_iter()
+        .map(str::to_owned),
+    )
+    .unwrap();
+    let mut app = build_app(options).unwrap();
+    let probe = WheelDrsProbe::default();
+    if std::env::var_os("F1_TEST_HALF_TEXTURES").is_some() {
+        app.world_mut()
+            .resource_mut::<menu::Frontend>()
+            .video
+            .texture = graphics::TextureDetail::Half;
+    }
+    let completed = probe.completed.clone();
+    app.insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_secs_f64(
+        1. / 60.,
+    )))
+    .insert_resource(probe)
+    .add_systems(
+        PreUpdate,
+        wheel_drs_input
+            .after(bevy::input::InputSystems)
+            .before(controls::update),
+    )
+    .add_systems(
+        Update,
+        (wheel_drs_assertions, wheel_drs_camera)
+            .chain()
+            .after(camera::update),
+    );
+    assert!(app.run().is_success());
+    assert!(
+        completed.load(std::sync::atomic::Ordering::SeqCst),
+        "DRS probe exited early"
+    );
+}
+
+#[derive(Resource, Default)]
+struct WheelDrsProbe {
+    frame: u32,
+    captures: usize,
+    completed: Arc<std::sync::atomic::AtomicBool>,
+}
+
+fn wheel_drs_camera(
+    session: Res<Session>,
+    mut cameras: Query<(&mut Transform, &mut Projection), With<Camera3d>>,
+) {
+    // A closer cockpit inspection makes cap travel and thumb contact visible.
+    let pose = pose::Pose::of(&session.race.entrants[session.player].car);
+    let rotation = Quat::from_rotation_y(pose.yaw as f32);
+    let origin = pose.origin.as_vec3();
+    for (mut camera, mut projection) in &mut cameras {
+        if let Projection::Perspective(lens) = &mut *projection {
+            lens.fov = 40_f32.to_radians();
+        }
+        *camera = Transform::from_translation(origin + rotation * Vec3::new(0., 0.675, 0.40))
+            .looking_at(origin + rotation * Vec3::new(0., 0.61, 0.795), Vec3::Y);
+    }
+}
+
+fn wheel_drs_input(
+    mut session: ResMut<Session>,
+    mut probe: ResMut<WheelDrsProbe>,
+    mut keys: ResMut<ButtonInput<KeyCode>>,
+) {
+    if !session.ready {
+        return;
+    }
+    probe.frame += 1;
+    keys.reset_all();
+    session.race.phase = racecraft_sim::Phase::Racing;
+    let player = session.player;
+    session.race.entrants[player].car.assists.drs_anywhere = probe.frame >= 70;
+    if matches!(probe.frame, 40 | 90) {
+        keys.press(KeyCode::KeyF);
+    }
+    if (130..160).contains(&probe.frame) {
+        keys.press(KeyCode::KeyS);
+    }
+}
+
+fn wheel_drs_assertions(
+    mut commands: Commands,
+    session: Res<Session>,
+    probe: Res<WheelDrsProbe>,
+    buttons: Query<(&assets::DrsButton, &Transform, &ChildOf)>,
+    parents: Query<&Name>,
+    drivers: Query<&bevy::mesh::morph::MorphWeights, With<assets::DriverMorph>>,
+    mut exit: MessageWriter<AppExit>,
+) {
+    if !session.ready {
+        return;
+    }
+    let frame = probe.frame;
+    let press = session.controls.drs_press();
+    if frame >= 30 {
+        assert_eq!(buttons.iter().count(), 1);
+        for (button, transform, parent) in &buttons {
+            assert_eq!(button.entrant, session.player);
+            assert_eq!(
+                parents.get(parent.parent()).unwrap().as_str(),
+                "steering_wheel"
+            );
+            let expected = button.rest.translation
+                + Vec3::from_array(session.rig.drs_button_travel)
+                    * if button.entrant == session.player {
+                        press
+                    } else {
+                        0.
+                    };
+            assert!(transform.translation.abs_diff_eq(expected, 1e-6));
+        }
+        let index = session.rig.driver_drs_pose.expect("missing thumb pose");
+        assert_eq!(drivers.iter().count(), 2);
+        let pressed = drivers
+            .iter()
+            .filter(|weights| weights.weights()[index] > 0.99)
+            .count();
+        if matches!(frame, 44 | 94) {
+            assert_eq!(pressed, 2);
+        }
+        if matches!(frame, 60 | 115 | 150) {
+            assert_eq!(pressed, 0);
+        }
+    }
+    let drs = session.race.entrants[session.player].car.drs;
+    match frame {
+        44 => {
+            assert!(!drs.available);
+            assert_eq!(drs.flap, 0.);
+            assert_eq!(press, 1.);
+        }
+        80 => {
+            assert!(drs.available);
+            assert_eq!(drs.flap, 0.);
+        }
+        94 => {
+            assert!(drs.available && drs.flap > 0.);
+            assert_eq!(press, 1.);
+        }
+        115 => {
+            assert_eq!(drs.flap, 1.);
+            assert_eq!(press, 0.);
+        }
+        150 => {
+            assert!(drs.available);
+            assert_eq!(drs.flap, 0.);
+        }
+        220 => {
+            assert_eq!(probe.captures, 8);
+            probe
+                .completed
+                .store(true, std::sync::atomic::Ordering::SeqCst);
+            exit.write(AppExit::Success);
+        }
+        _ => {}
+    }
+    let name = match frame {
+        30 => "wheel-drs-off",
+        41 => "wheel-drs-press-start",
+        44 => "wheel-drs-unavailable-press",
+        80 => "wheel-drs-ready",
+        94 => "wheel-drs-open-press",
+        100 => "wheel-drs-half-released",
+        115 => "wheel-drs-open-released",
+        150 => "wheel-drs-brake-closed",
+        _ => return,
+    };
+    let directory = std::env::var_os("F1_TEST_OUTPUT")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| std::env::temp_dir().join("f1-wheel-drs-proof"));
+    std::fs::create_dir_all(&directory).unwrap();
+    let path = directory.join(format!("{name}.png"));
+    commands.spawn(Screenshot::primary_window()).observe(
+        move |event: On<ScreenshotCaptured>, mut probe: ResMut<WheelDrsProbe>| {
+            event
+                .image
+                .clone()
+                .try_into_dynamic()
+                .unwrap()
+                .to_rgb8()
+                .save(&path)
+                .unwrap();
+            probe.captures += 1;
+        },
+    );
+}
+
+/// Inspect steering extremes through the production camera and both shipped LODs.
+#[test]
+#[ignore = "requires a Vulkan display and F1_TEST_ASSETS"]
+fn rendered_cockpit_lock_review() {
+    let root = std::env::var("F1_TEST_ASSETS").expect("set F1_TEST_ASSETS");
+    let options = Options::parse(
+        [
+            "--assets",
+            &root,
+            "--car",
+            "gen22",
+            "--opponents",
+            "1",
+            "--grid",
+            "1",
+            "--camera",
+            "cockpit",
+            "--mute",
+            "--frames",
+            "10000",
+        ]
+        .into_iter()
+        .map(str::to_owned),
+    )
+    .unwrap();
+    let mut app = build_app(options).unwrap();
+    let probe = LockProbe::default();
+    let completed = probe.completed.clone();
+    app.insert_resource(probe).add_systems(
+        Update,
+        (
+            cockpit_lock_review.before(assets::sync_cars),
+            lock_view_assertions.after(assets::helmet_visibility),
+        ),
+    );
+    assert!(app.run().is_success());
+    assert!(
+        completed.load(std::sync::atomic::Ordering::SeqCst),
+        "lock review exited early"
+    );
+}
+
+#[derive(Resource, Default)]
+struct LockProbe {
+    captures: usize,
+    completed: Arc<std::sync::atomic::AtomicBool>,
+}
+
+fn lock_view_assertions(
+    session: Res<Session>,
+    helmets: Query<(&assets::DriverHelmet, &Visibility)>,
+    surfaces: Query<
+        (
+            &bevy::gltf::GltfMaterialName,
+            &MeshMaterial3d<StandardMaterial>,
+        ),
+        With<materials::CarSurface>,
+    >,
+    materials: Res<Assets<StandardMaterial>>,
+    cameras: Query<&Projection, With<Camera3d>>,
+) {
+    if !session.ready {
+        return;
+    }
+    let entrants: std::collections::HashSet<_> =
+        helmets.iter().map(|(helmet, _)| helmet.0).collect();
+    assert_eq!(entrants.len(), session.race.entrants.len());
+    for (helmet, visibility) in &helmets {
+        assert_eq!(
+            *visibility == Visibility::Hidden,
+            helmet.0 == session.player && session.camera.mode == camera::Mode::Cockpit
+        );
+    }
+    for (name, handle) in &surfaces {
+        if name.0.starts_with("source_paint_") {
+            assert!(materials
+                .get(&handle.0)
+                .unwrap()
+                .base_color_texture
+                .is_some());
+        }
+    }
+    for projection in &cameras {
+        if let Projection::Perspective(lens) = projection {
+            let expected = if session.camera.mode == camera::Mode::Cockpit {
+                0.04
+            } else {
+                0.1
+            };
+            assert!((lens.near - expected).abs() < 1e-5);
+        }
+    }
+}
+
+fn cockpit_lock_review(
+    mut commands: Commands,
+    mut session: ResMut<Session>,
+    mut frame: Local<u32>,
+    probe: Res<LockProbe>,
+    mut exit: MessageWriter<AppExit>,
+) {
+    if !session.ready {
+        return;
+    }
+    session.paused = true;
+    *frame += 1;
+    let stage = (*frame / 60).min(5) as usize;
+    let angle = [0., -0.18, -0.36, 0.36, 0., 0.][stage];
+    session.camera.select(if stage == 5 {
+        camera::Mode::Chase
+    } else {
+        camera::Mode::Cockpit
+    });
+    let player = session.player;
+    session.race.entrants[player].car.steer_angle = angle;
+    session.poses = pose::Poses::new(&session.race);
+    if *frame % 60 == 45 {
+        let output = std::path::PathBuf::from(std::env::var("F1_TEST_OUTPUT").unwrap());
+        std::fs::create_dir_all(&output).unwrap();
+        let path = output.join(format!("lock-{stage}.png"));
+        commands.spawn(Screenshot::primary_window()).observe(
+            move |event: On<ScreenshotCaptured>, mut probe: ResMut<LockProbe>| {
+                event
+                    .image
+                    .clone()
+                    .try_into_dynamic()
+                    .unwrap()
+                    .save(&path)
+                    .unwrap();
+                probe.captures += 1;
+            },
+        );
+    }
+    if *frame == 355 {
+        assert_eq!(probe.captures, 6);
+        probe
+            .completed
+            .store(true, std::sync::atomic::Ordering::SeqCst);
         exit.write(AppExit::Success);
     }
 }

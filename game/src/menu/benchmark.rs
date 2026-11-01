@@ -92,6 +92,10 @@ fn arguments(
         draft.car.clone().into(),
         "--camera".into(),
         camera.into(),
+        "--opponents".into(),
+        draft.opponents.to_string().into(),
+        "--grid".into(),
+        draft.grid_slot.to_string().into(),
         "--graphics".into(),
         graphics.label().to_ascii_lowercase().into(),
         "--size".into(),
@@ -115,9 +119,10 @@ fn arguments(
 
 pub(super) fn panel(ui: &mut egui::Ui, frontend: &mut Frontend, size: egui::Vec2) {
     section(ui, "Repeatable performance test");
-    ui.label(
-        "Two computer-controlled cars, already moving. A fixed 20-second drive with no contact.",
-    );
+    ui.label(format!(
+        "{} computer-controlled cars, already moving. A fixed 20-second drive with no contact.",
+        frontend.draft.opponents + 1
+    ));
     ui.add_space(12.);
     let available = frontend
         .catalog
@@ -226,7 +231,7 @@ mod tests {
         assert_eq!(parsed.camera, Mode::Cockpit);
         assert_eq!((parsed.width, parsed.height), (958, 1078));
         assert_eq!(parsed.graphics, crate::graphics::Quality::Ultra);
-        assert_eq!(parsed.opponents, 1);
+        assert_eq!(parsed.opponents, draft.opponents);
         assert_eq!(
             parsed.benchmark.unwrap(),
             Path::new("/tmp/benchmark output")

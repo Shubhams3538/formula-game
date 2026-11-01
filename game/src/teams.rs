@@ -28,8 +28,6 @@ pub struct Driver {
     pub name: String,
     pub abbr: String,
     pub number: u32,
-    #[serde(default)]
-    pub helmets: Vec<serde_json::Value>,
 }
 #[derive(Clone, Debug, PartialEq)]
 pub struct Identity {
@@ -102,8 +100,6 @@ impl Teams {
                 if !safe(&driver.id) || !drivers.insert(&driver.id) || driver.abbr.len() != 3 {
                     return Err(format!("invalid/duplicate driver: {}", driver.id));
                 }
-                // Retained for future helmet selection. Extra schema keys are ignored.
-                let _ = &driver.helmets;
             }
         }
         Ok(data)
@@ -187,6 +183,8 @@ impl Teams {
 /// Rig metadata is deliberately game-side; CarGeometry ignores these extra JSON keys.
 #[derive(Clone, Default, Deserialize)]
 pub struct Rig {
+    /// Template layout authored in TEXCOORD_1; absent on older asset packages.
+    pub livery_template: Option<u16>,
     pub cockpit_eye: Option<[f64; 3]>,
     #[serde(default)]
     pub drs: Drs,
@@ -199,6 +197,12 @@ pub struct Rig {
     pub driver_shift_poses: Vec<String>,
     #[serde(default)]
     pub paddles: Paddles,
+    /// Thumb press target follows the steering and shift targets.
+    #[serde(default)]
+    pub driver_drs_pose: Option<usize>,
+    /// DRS cap travel in the steering wheel's local coordinates, metres.
+    #[serde(default)]
+    pub drs_button_travel: [f32; 3],
 }
 /// Paddle travel about each paddle node's local +Y, in radians.
 #[derive(Clone, Default, Deserialize)]
@@ -249,6 +253,15 @@ impl Rig {
             }
         }
     }
+    pub fn drs_weight(&self, press: f32, weights: &mut [f32]) {
+        if let Some(weight) = self
+            .driver_drs_pose
+            .and_then(|index| weights.get_mut(index))
+        {
+            *weight = press;
+        }
+    }
+
     pub fn load(options: &crate::options::Options) -> Result<Self, String> {
         let path = options
             .assets

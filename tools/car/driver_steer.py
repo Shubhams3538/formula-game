@@ -1,12 +1,13 @@
-"""Bake the driver's steering and shift poses as morph targets (imported by prepare_gen22.py).
+"""Bake the driver's steering, shift and DRS poses as morph targets (imported by prepare_gen22.py).
 
 The source rig pins both IK hands to the `steering_wheel` bone, so turning that
 bone moves the arms with the rim. Each pose is stored as per-vertex offsets in
 point attributes, which survive decimation, joins and bmesh clean-up, and is
 turned into shape keys only around each glTF export.
 
-Two more targets curl the index and middle fingers that pull the right
-(upshift) and left (downshift) paddles, baked with the wheel straight.
+Two targets curl the index and middle fingers that pull the right
+(upshift) and left (downshift) paddles. A final target presses the left thumb
+onto the DRS cap. These additive poses are baked with the wheel straight.
 
 Angles are steering-wheel rotations about the exported `steering_wheel` node's
 +Z axis (glTF space), the same quantity the game computes as -6 * steer.
@@ -21,6 +22,12 @@ HEAD_YAW = 0.26
 SHIFTS = ('up', 'down')
 # Negative X on a rigify finger master curls the finger towards the palm.
 FINGER_PULL = -0.45
+# Joint rotations only: the Rigify fingertip target stretches the distal bone.
+DRS_THUMB_ROTATION = (-0.87184765, 0.09871463, -0.24887680)
+DRS_THUMB_CURL = (0.49131109, 0.15180187)
+THUMB_BONES = ('DEF-thumb.01.L', 'DEF-thumb.02.L', 'DEF-thumb.03.L')
+DRS_BUTTON_SOURCE = 'steering_wheel_top_buttons.002'
+DRS_BUTTON_CENTRE = (.16416, 1.62552, .64884)
 
 
 def _attribute(index):
@@ -38,8 +45,33 @@ def _world_positions(source, depsgraph):
     return co @ matrix[:3, :3].T + matrix[:3, 3]
 
 
+def press_thumb(rig):
+    """Rotate the evaluated thumb joints while preserving every bone's length."""
+    from mathutils import Matrix, Euler
+    bones = [rig.pose.bones[name] for name in THUMB_BONES]
+    rest = [bone.matrix.copy() for bone in bones]
+    lengths = [(rig.matrix_world @ bone.head - rig.matrix_world @ bone.tail).length for bone in bones]
+    for bone in bones:
+        for constraint in bone.constraints:
+            constraint.mute = True
+    pivot = rest[0].translation
+    delta = Matrix.Translation(pivot) @ Euler(DRS_THUMB_ROTATION, 'XYZ').to_matrix().to_4x4() @ Matrix.Translation(-pivot)
+    for index, bone in enumerate(bones):
+        if index:
+            pivot = delta @ rest[index].translation
+            axis = delta.to_3x3() @ rest[index].to_3x3().col[0]
+            axis.normalize()
+            delta = Matrix.Translation(pivot) @ Matrix.Rotation(DRS_THUMB_CURL[index-1], 4, axis) @ Matrix.Translation(-pivot) @ delta
+        bone.matrix = delta @ rest[index]
+        bpy.context.view_layer.update()
+    for bone, length in zip(bones, lengths):
+        posed = (rig.matrix_world @ bone.head - rig.matrix_world @ bone.tail).length
+        if abs(posed / length - 1) > .001:
+            raise RuntimeError(f'{bone.name}: DRS pose stretched the thumb')
+
+
 def capture(sources):
-    """Return {source name: [world-space vertex offsets per angle]}.
+    """Return {source name: [world-space vertex offsets per pose]}.
 
     Leaves the rig in its straight-ahead pose with the steering mapping muted,
     which is exactly the pose the converter evaluates afterwards.
@@ -47,6 +79,9 @@ def capture(sources):
     wheel = bpy.data.objects['steering_and_drs'].pose.bones['steering_wheel']
     rig = bpy.data.objects['rig']
     head = rig.pose.bones['head']
+    thumbs = [rig.pose.bones[name] for name in THUMB_BONES]
+    thumb_basis = [bone.matrix_basis.copy() for bone in thumbs]
+    thumb_constraints = [(constraint, constraint.mute) for bone in thumbs for constraint in bone.constraints]
     # The driver's right hand (.R) works the upshift paddle.
     fingers = {shift: [rig.pose.bones[f'{finger}.01_master.{side}'] for finger in ('f_index', 'f_middle')]
                for shift, side in zip(SHIFTS, 'RL')}
@@ -56,7 +91,11 @@ def capture(sources):
                 constraint.mute = True
         bone.rotation_mode = 'XYZ'
 
-    def pose(angle, shift=None):
+    def pose(angle, shift=None, drs=False):
+        for constraint, muted in thumb_constraints:
+            constraint.mute = muted
+        for bone, basis in zip(thumbs, thumb_basis):
+            bone.matrix_basis = basis
         # Bone +Y runs from the hub back towards the driver: glTF +Z reversed.
         wheel.rotation_euler = (0, -angle, 0)
         head.rotation_euler = (0, 0, -HEAD_YAW * max(-1., min(1., angle / ANGLES[2])))
@@ -64,13 +103,17 @@ def capture(sources):
             for bone in bones:
                 bone.rotation_euler = (FINGER_PULL if key == shift else 0., 0, 0)
         bpy.context.view_layer.update()
+        if drs:
+            press_thumb(rig)
         depsgraph = bpy.context.evaluated_depsgraph_get()
         return {source.name: _world_positions(source, depsgraph) for source in sources}
 
     rest = pose(0.)
     offsets = {name: [] for name in rest}
-    for angle, shift in [(angle, None) for angle in ANGLES] + [(0., shift) for shift in SHIFTS]:
-        posed = pose(angle, shift)
+    poses = [(angle, None, False) for angle in ANGLES]
+    poses += [(0., shift, False) for shift in SHIFTS] + [(0., None, True)]
+    for angle, shift, drs in poses:
+        posed = pose(angle, shift, drs)
         for name, positions in posed.items():
             if positions.shape != rest[name].shape:
                 raise RuntimeError(f'{name}: posing changed the vertex count')
@@ -90,13 +133,14 @@ def attach(obj, offsets, rotation):
 
 
 def metadata():
-    """car.json keys: targets are the steering poses, then the shift poses."""
-    return {'driver_poses': list(ANGLES), 'driver_shift_poses': list(SHIFTS)}
+    """car.json keys: steering targets, shift targets, then the thumb press."""
+    return {'driver_poses': list(ANGLES), 'driver_shift_poses': list(SHIFTS),
+            'driver_drs_pose': len(ANGLES) + len(SHIFTS), 'drs_button_travel': [0, 0, .003]}
 
 
 def to_shape_keys(obj):
     """Turn the stored offsets into shape keys for export. No-op without offsets."""
-    labels = [f'steer_{angle:+.2f}' for angle in ANGLES] + [f'shift_{shift}' for shift in SHIFTS]
+    labels = [f'steer_{angle:+.2f}' for angle in ANGLES] + [f'shift_{shift}' for shift in SHIFTS] + ['drs_press']
     names = [_attribute(i) for i in range(len(labels))]
     if not all(name in obj.data.attributes for name in names):
         return False
@@ -161,3 +205,44 @@ def split_paddles(obj, hub_x):
     # moves towards the driver (+Y in Blender) for a negative turn.
     keys = {'paddles': {'up_angle': -PADDLE_PULL, 'down_angle': PADDLE_PULL}}
     return halves, hinges, keys
+
+
+def split_drs_button(obj, centre):
+    """Separate the connected cap nearest the measured source DRS position."""
+    import bmesh
+    from mathutils import Vector
+    bm = bmesh.new()
+    bm.from_mesh(obj.data)
+    remaining = set(bm.verts)
+    components = []
+    while remaining:
+        seed = remaining.pop()
+        group, todo = {seed}, [seed]
+        while todo:
+            vertex = todo.pop()
+            for edge in vertex.link_edges:
+                other = edge.other_vert(vertex)
+                if other in remaining:
+                    remaining.remove(other)
+                    group.add(other)
+                    todo.append(other)
+        components.append(group)
+    chosen = min(components, key=lambda group: (sum((v.co for v in group), Vector()) / len(group) - centre).length)
+    # Source caps are separate connected islands; fail rather than cut the wheel body.
+    mean = sum((v.co for v in chosen), Vector()) / len(chosen)
+    if (mean - centre).length > .002:
+        raise RuntimeError('DRS cap no longer matches the source button layout')
+    mesh = obj.data.copy()
+    cap = bpy.data.objects.new('drs_button', mesh)
+    for collection in obj.users_collection:
+        collection.objects.link(cap)
+    indices = {v.index for v in chosen}
+    bmesh.ops.delete(bm, geom=list(chosen), context='VERTS')
+    bm.to_mesh(obj.data)
+    bm.free()
+    bm = bmesh.new()
+    bm.from_mesh(mesh)
+    bmesh.ops.delete(bm, geom=[v for v in bm.verts if v.index not in indices], context='VERTS')
+    bm.to_mesh(mesh)
+    bm.free()
+    return cap

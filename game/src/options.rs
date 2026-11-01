@@ -24,6 +24,7 @@ pub struct Options {
     pub benchmark: Option<PathBuf>,
     pub benchmark_seed: u64,
     pub benchmark_start: f64,
+    pub benchmark_grid: bool,
     pub mute: bool,
     pub quick_race: bool,
     pub camera: Mode,
@@ -61,7 +62,8 @@ impl Options {
   --no-vsync          render as fast as the GPU allows
   --size WxH          window size (default: 1600x900)
   --frames N --capture FILE   render N frames, save the last one, exit
-  --benchmark DIR     20-second moving-start, two-AI benchmark + sampled PNGs
+  --benchmark DIR     20-second moving-start, selected field + sampled PNGs
+  --benchmark-grid    hold the default grid for a worst-field GPU comparison
   --benchmark-seed N  deterministic drive and screenshot seed (default: 24301)
   --benchmark-start M start distance along circuit in metres (default: 0)";
 
@@ -85,6 +87,7 @@ impl Options {
             benchmark: None,
             benchmark_seed: 0x5EED,
             benchmark_start: 0.,
+            benchmark_grid: false,
             mute: false,
             quick_race: false,
             camera: Mode::Chase,
@@ -207,6 +210,7 @@ impl Options {
                     options.frames = Some(frames);
                 }
                 "--capture" => options.capture = Some(PathBuf::from(value()?)),
+                "--benchmark-grid" => options.benchmark_grid = true,
                 "--benchmark" => options.benchmark = Some(PathBuf::from(value()?)),
                 "--benchmark-seed" => {
                     options.benchmark_seed = value()?
@@ -223,12 +227,13 @@ impl Options {
                 other => return Err(format!("unknown option {other}")),
             }
         }
+        if options.benchmark_grid && options.benchmark.is_none() {
+            return Err("--benchmark-grid requires --benchmark".into());
+        }
         if options.benchmark.is_some() {
             if options.frames.is_some() || options.capture.is_some() {
                 return Err("--benchmark cannot be combined with --frames or --capture".into());
             }
-            options.opponents = 1;
-            options.grid_slot = 1;
             options.quick_race = true;
             options.vsync = false;
         }
@@ -279,14 +284,14 @@ mod tests {
     }
 
     #[test]
-    fn benchmark_has_two_computer_slots_and_rejects_conflicting_capture_modes() {
+    fn benchmark_preserves_the_field_and_rejects_conflicting_capture_modes() {
         for args in [
             vec!["--benchmark", "out", "--opponents", "12", "--grid", "8"],
             vec!["--opponents", "12", "--grid", "8", "--benchmark", "out"],
         ] {
             let options = parse(&args).unwrap();
-            assert_eq!(options.opponents, 1);
-            assert_eq!(options.grid_slot, 1);
+            assert_eq!(options.opponents, 12);
+            assert_eq!(options.grid_slot, 8);
             assert!(options.quick_race && !options.vsync);
         }
         for args in [

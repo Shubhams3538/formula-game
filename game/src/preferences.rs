@@ -20,6 +20,9 @@ pub struct Preferences {
     pub views: BTreeMap<String, Tuning>,
     #[serde(default)]
     pub graphics: crate::graphics::Quality,
+    /// Detailed video settings; absent in older files, then derived from `graphics`.
+    #[serde(default)]
+    pub video: Option<crate::graphics::Video>,
     #[serde(default = "vsync_default")]
     pub vsync: bool,
     #[serde(default)]
@@ -45,6 +48,7 @@ impl Preferences {
                 .map(|id| (id.into(), Tuning::for_car(id)))
                 .into(),
             graphics: options.graphics,
+            video: None,
             vsync: options.vsync,
             display: crate::hud::Settings::default(),
             audio: crate::audio::Settings::default(),
@@ -76,6 +80,13 @@ impl Preferences {
             tuning.sanitize();
         }
         self.audio.sanitize();
+        if let Some(video) = &mut self.video {
+            video.sanitize();
+        }
+    }
+
+    pub fn video(&self) -> crate::graphics::Video {
+        self.video.unwrap_or_else(|| self.graphics.video())
     }
 }
 
@@ -110,6 +121,7 @@ impl Store {
         }
         if options.graphics_explicit {
             prefs.graphics = options.graphics;
+            prefs.video = None;
         }
         if !options.vsync {
             prefs.vsync = false;

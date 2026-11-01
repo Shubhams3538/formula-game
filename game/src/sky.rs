@@ -39,6 +39,10 @@ pub fn setup(commands: &mut Commands, media: &mut Assets<ScatteringMedium>, sun:
         }
         .build(),
         SunDisk::EARTH,
+        bevy::camera::visibility::RenderLayers::from_layers(&[
+            0,
+            crate::assets::PLAYER_SHADOW_LAYER,
+        ]),
     ));
     // Antialiasing, ambient occlusion, contact shadows and environment lighting
     // come from the graphics preset (`graphics::apply`).

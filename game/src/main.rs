@@ -11,6 +11,7 @@ mod graphics;
 mod hud;
 mod materials;
 mod menu;
+mod meshes;
 mod options;
 mod pose;
 mod preferences;
@@ -186,7 +187,10 @@ fn build_app(mut options: Options) -> Result<App, String> {
             std::time::Duration::from_secs_f64(1.0 / 60.0),
         ));
     }
-    if !capture_run {
+    if capture_run {
+        // Benchmarks and captures must not inherit Bevy's unfocused 60 Hz cap.
+        app.insert_resource(bevy::winit::WinitSettings::continuous());
+    } else {
         // A paused race in the background only needs to redraw occasionally.
         app.insert_resource(bevy::winit::WinitSettings {
             focused_mode: bevy::winit::UpdateMode::Continuous,
@@ -221,6 +225,8 @@ fn build_app(mut options: Options) -> Result<App, String> {
         .insert_resource(options)
         .insert_resource(frontend)
         .init_resource::<Capture>()
+        .init_resource::<textures::TextureDetail>()
+        .init_resource::<assets::OpponentLodDistance>()
         .add_systems(
             Startup,
             (assets::setup, hud::setup, audio::setup, wheel_dash::setup),
@@ -233,16 +239,16 @@ fn build_app(mut options: Options) -> Result<App, String> {
             (
                 menu::apply,
                 graphics::apply,
-                textures::prepare,
-                assets::apply_liveries,
+                assets::update_opponent_lods.after(graphics::apply),
                 materials::prepare,
                 assets::check_loading,
                 benchmark::advance,
                 assets::sync_cars,
-                assets::animate_shifts,
+                assets::animate_controls,
                 wheel_dash::attach,
                 wheel_dash::lights,
                 camera::update,
+                assets::helmet_visibility,
                 audio::update,
                 driving::racing_line,
             )
@@ -250,7 +256,12 @@ fn build_app(mut options: Options) -> Result<App, String> {
         )
         .add_systems(EguiPrimaryContextPass, (hud::update, menu::ui).chain())
         .add_systems(wheel_dash::WheelDashPass, wheel_dash::draw)
+        .add_systems(
+            PostUpdate,
+            (textures::prepare, meshes::prepare).after(bevy::asset::AssetEventSystems),
+        )
         .add_systems(Last, capture);
+    textures::register_normal_scales(&mut app);
     if profile {
         // F1_PROFILE=1 logs per-pass CPU/GPU render timings every few seconds.
         app.add_plugins((
