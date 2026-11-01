@@ -291,8 +291,10 @@ impl Car {
         const FULL_LOCK: f64 = 0.36;
         let spec = &self.spec;
         let lift = self.setup.front_lift_area(&spec.aero) + self.setup.rear_lift_area(&spec.aero);
+        // Compressions such as Eau Rouge press the tyres down and allow more lock.
+        let gravity = (GRAVITY + self.vertical_acceleration).clamp(GRAVITY * 0.3, GRAVITY * 2.5);
         let lateral_grip =
-            spec.tyre_friction * (GRAVITY + 0.5 * AIR_DENSITY * lift * speed * speed / spec.mass);
+            spec.tyre_friction * (gravity + 0.5 * AIR_DENSITY * lift * speed * speed / spec.mass);
         let kinematic = (spec.wheelbase() * lateral_grip / speed.max(1.0).powi(2)).atan();
         // Lets the driver take the front tyres just past their peak: enough to
         // feel understeer when overdriving, not enough to make full lock correct.
@@ -322,8 +324,13 @@ impl Car {
             if self.powertrain.gear == powertrain::NEUTRAL && input.throttle > 0.1 {
                 self.powertrain.shift_up(&spec.engine, forward_speed);
             }
-            self.powertrain
-                .auto_shift(&spec.engine, forward_speed, rear_radius, input.throttle);
+            self.powertrain.auto_shift(
+                &spec.engine,
+                forward_speed,
+                rear_radius,
+                input.throttle,
+                input.brake,
+            );
         }
         let throttle = input.throttle.clamp(0.0, 1.0);
         let brake = input.brake.clamp(0.0, 1.0);
@@ -678,6 +685,88 @@ mod tests {
         let dt = 1.0 / 360.0;
         for _ in 0..(seconds / dt) as usize {
             car.step(&input, track, dt);
+        }
+    }
+
+    /// Times from rest to each speed (km/h) at full throttle with automatic
+    /// gears, plus the speed reached after `seconds`.
+    fn launch(car: &mut Car, marks: &[f64], seconds: f64) -> (Vec<f64>, f64) {
+        let track = oval_track();
+        let input = CarInput {
+            throttle: 1.0,
+            ..CarInput::default()
+        };
+        let dt = 1.0 / 360.0;
+        let mut times = vec![f64::NAN; marks.len()];
+        for tick in 0..(seconds / dt) as usize {
+            // Stay on the straight: put the car back on the grid every half
+            // second, keeping its speed and gear.
+            if tick % 180 == 0 {
+                let (position, yaw) = track.grid_slot(0);
+                let speed = car.speed();
+                car.position = position;
+                car.yaw = yaw;
+                car.yaw_rate = 0.0;
+                car.velocity = car.forward() * speed;
+                car.track_position = track.project(position, None);
+            }
+            car.step(&input, &track, dt);
+            for (mark, time) in marks.iter().zip(&mut times) {
+                if time.is_nan() && car.speed() * 3.6 >= *mark {
+                    *time = tick as f64 * dt;
+                }
+            }
+        }
+        (times, car.speed() * 3.6)
+    }
+
+    #[test]
+    fn launch_and_top_speed_match_a_race_trim_f1_car() {
+        let track = oval_track();
+        let mut car = car_on(&track);
+        let (times, top) = launch(&mut car, &[100.0, 200.0, 300.0], 30.0);
+        // Roughly 2.6 s to 100 km/h, 5 s to 200 and 10-11 s to 300, then
+        // ~320-330 km/h flat out without a tow or DRS.
+        assert!((2.4..3.0).contains(&times[0]), "{times:?}");
+        assert!((4.6..5.4).contains(&times[1]), "{times:?}");
+        assert!((10.0..11.5).contains(&times[2]), "{times:?}");
+        assert!((318.0..335.0).contains(&top), "{top} km/h");
+    }
+
+    #[test]
+    fn automatic_gears_blip_down_under_braking() {
+        let track = oval_track();
+        let mut car = car_on(&track);
+        launch(&mut car, &[], 9.0);
+        assert!(car.powertrain.gear >= 7, "gear {}", car.powertrain.gear);
+        let brake = CarInput {
+            brake: 1.0,
+            ..CarInput::default()
+        };
+        // Stay on the straight while braking from ~280 km/h.
+        for _ in 0..12 {
+            let (position, yaw) = track.grid_slot(0);
+            let speed = car.speed();
+            car.position = position;
+            car.yaw = yaw;
+            car.yaw_rate = 0.0;
+            car.velocity = car.forward() * speed;
+            run(&mut car, &track, brake, 0.25);
+            let wheel_rpm = powertrain::Powertrain::wheel_rpm(
+                &car.spec.engine,
+                car.powertrain.gear,
+                car.forward_speed(),
+                car.spec.wheels[2].radius,
+            );
+            if car.speed() > 25.0 {
+                // A gear low enough to keep the engine in its power band.
+                assert!(
+                    wheel_rpm > car.spec.engine.peak_power_rpm * 0.7,
+                    "{:.0} km/h in gear {} at {wheel_rpm:.0} rpm",
+                    car.speed() * 3.6,
+                    car.powertrain.gear
+                );
+            }
         }
     }
 

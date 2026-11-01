@@ -99,21 +99,38 @@ impl Powertrain {
         self.refusal_timer = 0.25;
     }
 
-    /// Picks the gear an automatic gearbox would use.
-    pub fn auto_shift(&mut self, spec: &EngineSpec, speed: f64, wheel_radius: f64, throttle: f64) {
+    /// Picks the gear an automatic gearbox would use, one shift at a time
+    /// like the sequential box. Under braking it blips down as soon as the
+    /// next gear is safe, the way a driver does, so the car arrives at the
+    /// apex in the right gear with engine braking and drive ready.
+    pub fn auto_shift(
+        &mut self,
+        spec: &EngineSpec,
+        speed: f64,
+        wheel_radius: f64,
+        throttle: f64,
+        brake: f64,
+    ) {
         if self.shift_timer > 0.0 || self.gear < 1 {
             return;
         }
-        let up_rpm = spec.rev_limit * 0.985;
-        // Kick down for acceleration on throttle; off throttle only when the
-        // engine is close to bogging, so engine braking stays gentle.
-        let down_rpm = spec.peak_power_rpm * if throttle > 0.6 { 0.68 } else { 0.5 };
-        if self.rpm > up_rpm && self.gear < spec.gear_ratios.len() as i32 {
+        let top = spec.gear_ratios.len() as i32;
+        let lower = |gear: i32| Self::wheel_rpm(spec, gear - 1, speed, wheel_radius);
+        if brake > 0.05 || throttle < 0.2 {
+            // Slowing: drop a gear whenever it lands below this rpm.
+            let safe = spec.rev_limit * if brake > 0.05 { 0.92 } else { 0.85 };
+            if self.gear > 1 && lower(self.gear) < safe {
+                self.shift_down(spec, speed, wheel_radius);
+            }
+            return;
+        }
+        if self.rpm > spec.rev_limit * 0.985 && self.gear < top {
             self.shift_up(spec, speed);
         } else if self.gear > 1
-            && self.rpm < down_rpm
-            && Self::wheel_rpm(spec, self.gear - 1, speed, wheel_radius) < spec.rev_limit * 0.95
+            && self.rpm < spec.peak_power_rpm * 0.78
+            && lower(self.gear) < spec.rev_limit * 0.95
         {
+            // Kick down when the engine is well off its power band.
             self.shift_down(spec, speed, wheel_radius);
         }
     }

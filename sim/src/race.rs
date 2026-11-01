@@ -837,6 +837,34 @@ mod tests {
     }
 
     #[test]
+    fn a_faster_ai_gets_past_a_slower_leader() {
+        let track = Arc::new(oval_track());
+        let spec = Arc::new(CarSpec::gen22(test_wheels(), 5.4, 1.9));
+        let driver = |name: &str, pace: f64| EntrantConfig {
+            name: name.into(),
+            spec: spec.clone(),
+            setup: Setup::default(),
+            assists: Assists::default(),
+            ai: Some(DriverProfile {
+                pace,
+                aggression: 0.6,
+                consistency: 1.0,
+            }),
+            human_slot: 0,
+            livery: [1.0; 3],
+        };
+        let entrants = vec![driver("Slow", 0.95), driver("Fast", 0.99)];
+        let mut race = Race::new(track, entrants, 6, 3);
+        let mut ticks = 0;
+        while race.phase != Phase::Finished && ticks < (300.0 * PHYSICS_RATE) as usize {
+            race.step(&[]);
+            ticks += 1;
+        }
+        assert_eq!(race.phase, Phase::Finished);
+        assert_eq!(race.order()[0], 1, "the faster car stayed stuck behind");
+    }
+
+    #[test]
     fn walls_stop_cars() {
         let wall = crate::track::Wall {
             a: DVec2::new(-50.0, 20.0),

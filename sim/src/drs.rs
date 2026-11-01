@@ -27,9 +27,10 @@ const EXIT: f64 = 100.0;
 /// Detection sits this far before activation, usually at the previous corner.
 const DETECTION: f64 = 150.0;
 const MAX_ZONES: usize = 2;
-/// A zone must end at a braking corner: a racing-line radius of 60 m or less
-/// within this distance. Flat-out bends (Eau Rouge, Blanchimont) do not count.
-const BRAKING_CURVATURE: f64 = 1.0 / 60.0;
+/// A zone must end at a braking corner: a racing-line radius of 80 m or less
+/// within this distance. Flat-out bends (Eau Rouge ~115 m, Blanchimont ~185 m
+/// on the minimum-curvature line) do not count.
+const BRAKING_CURVATURE: f64 = 1.0 / 80.0;
 const BRAKING_SEARCH: f64 = 180.0;
 
 /// Lap distances along the centerline.

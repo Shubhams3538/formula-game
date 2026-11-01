@@ -266,7 +266,8 @@ impl CarSpec {
     pub fn gen22(wheels: [WheelSpec; 4], length: f64, width: f64) -> Self {
         Self {
             name: "GEN22".to_string(),
-            mass: 798.0,
+            // Race trim: the 798 kg minimum with driver plus a race-average fuel load.
+            mass: 850.0,
             yaw_inertia: 1150.0,
             cg_height: 0.27,
             front_weight: 0.455,
@@ -274,18 +275,19 @@ impl CarSpec {
             length,
             width,
             engine: EngineSpec {
-                max_power: 690_000.0,
+                // Wheel power with a race-average ERS deployment, not a qualifying peak.
+                max_power: 640_000.0,
                 peak_power_rpm: 12_400.0,
                 rev_limit: 13_500.0,
                 idle_rpm: 4_500.0,
-                gear_ratios: gear_set(20.0, 5.2, 8),
+                gear_ratios: gear_set(18.0, 5.22, 8),
                 reverse_ratio: 24.0,
                 upshift_time: 0.035,
                 downshift_time: 0.06,
             },
             aero: AeroSpec {
-                front_lift_area: 1.2,
-                rear_lift_area: 1.55,
+                front_lift_area: 1.86,
+                rear_lift_area: 2.4,
                 front_wing_lift: 0.12,
                 rear_wing_lift: 0.16,
                 drag_area: 0.98,
@@ -346,12 +348,14 @@ impl CarSpec {
 }
 
 /// Overall ratios from `first` to `top`, slightly closer together at the top.
+/// Overall ratios from `first` to `top`, spaced so each gear adds a similar
+/// slice of road speed, the way race gearboxes are stacked: low gears are not
+/// bunched together and the top gears are not left with big rpm drops.
 fn gear_set(first: f64, top: f64, gears: usize) -> Vec<f64> {
     (0..gears)
         .map(|index| {
-            let t = index as f64 / (gears - 1) as f64;
-            let t = t.powf(0.88);
-            first * (top / first).powf(t)
+            let t = (index as f64 / (gears - 1) as f64).powf(0.9);
+            first / (1.0 + (first / top - 1.0) * t)
         })
         .collect()
 }
@@ -383,7 +387,7 @@ mod tests {
         let geometry = CarGeometry::from_json(&serde_json::to_vec(&json).unwrap()).unwrap();
         let spec = CarSpec::gen22_with(&geometry);
         assert_eq!(spec.name, "GEN22");
-        assert_eq!(spec.mass, 798.);
+        assert_eq!(spec.mass, 850.);
         assert!((spec.wheelbase() - 3.6).abs() < 1e-9);
     }
 
@@ -407,9 +411,17 @@ mod tests {
 
     #[test]
     fn gears_are_monotonic() {
-        let ratios = gear_set(20.0, 5.2, 8);
+        let ratios = gear_set(18.0, 5.22, 8);
         assert_eq!(ratios.len(), 8);
         assert!(ratios.windows(2).all(|pair| pair[0] > pair[1]));
-        assert!((ratios[7] - 5.2).abs() < 1e-9);
+        assert!((ratios[0] - 18.0).abs() < 1e-9);
+        assert!((ratios[7] - 5.22).abs() < 1e-9);
+        // Each gear adds a similar slice of road speed (speed ∝ 1/ratio), so
+        // the low gears are not bunched together.
+        let steps: Vec<f64> = ratios.windows(2).map(|p| 1.0 / p[1] - 1.0 / p[0]).collect();
+        let (min, max) = steps
+            .iter()
+            .fold((f64::MAX, 0.0_f64), |(a, b), &x| (a.min(x), b.max(x)));
+        assert!(max < min * 1.5, "{steps:?}");
     }
 }

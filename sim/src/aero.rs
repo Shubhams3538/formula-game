@@ -62,7 +62,9 @@ pub fn influence(follower: &Car, leader: &Car) -> AeroInfluence {
     // Dirty air matters for aerodynamic corners, not hairpins.
     let speed_factor = smoothstep(22.0, 55.0, follower.speed());
     let dirty = if behind < DIRTY_AIR_RANGE {
-        MAX_DIRTY_AIR * (1.0 - behind / DIRTY_AIR_RANGE).powf(1.4) * in_wake * speed_factor
+        // Ground-effect cars keep most of their downforce a few lengths back:
+        // ~13% front loss at 10 m, ~6% at 20 m.
+        MAX_DIRTY_AIR * (1.0 - behind / DIRTY_AIR_RANGE).powi(2) * in_wake * speed_factor
     } else {
         0.0
     };
