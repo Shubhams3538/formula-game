@@ -79,11 +79,6 @@ fn segments(hud: &Hud, style: &HudStyle, session: &Session, scale: f32) {
     let car = &player.car;
     let lap = (player.timing.laps_completed + 1).min(race.laps);
     let position = race.position_of(session.player);
-    let current = if matches!(race.phase, Phase::Countdown { .. }) {
-        0.0
-    } else {
-        race.time - player.timing.lap_start
-    };
     // ---- Dash (bottom right): RPM LEDs, lap / gear / speed, lap time and
     // position, then pedal traces.
     let pad = 14.0 * scale;
@@ -252,9 +247,12 @@ fn segments(hud: &Hud, style: &HudStyle, session: &Session, scale: f32) {
         (speed_x + side_w - 42. * scale, main_y + 6. * scale),
         Align::Right,
         DIM,
-        &format!("{:.0}", car.powertrain.rpm),
+        &format!(
+            "{:.0}",
+            (session.telemetry.rpm.value(car.powertrain.rpm) / 50.).round() * 50.
+        ),
     );
-    let kmh = (car.speed() * 3.6).round() as i32;
+    let kmh = (session.telemetry.speed.value(car.speed() * 3.6)).round() as i32;
     hud.segments(
         value_size,
         (speed_x + side_w - 12.0 * scale, value_y),
@@ -283,7 +281,7 @@ fn segments(hud: &Hud, style: &HudStyle, session: &Session, scale: f32) {
         (inner_x + time_w - 12.0 * scale, lower_value_y),
         Align::Right,
         ink,
-        &format_time(current.max(0.0)),
+        &lap_clock(race, session.player),
     );
     well(hud, speed_x, lower_y, side_w, lower_h, scale);
     caption(
@@ -591,7 +589,7 @@ fn gauges(hud: &Hud, style: &HudStyle, session: &Session, scale: f32) {
         at(0., -0.25),
         Align::Center,
         colors.ink,
-        &format!("{:.0}", car.speed() * 3.6),
+        &format!("{:.0}", session.telemetry.speed.value(car.speed() * 3.6)),
     );
     hud.text_mid(
         &style.bold,
@@ -689,7 +687,12 @@ fn gauges(hud: &Hud, style: &HudStyle, session: &Session, scale: f32) {
         colors.ink,
         &gear,
     );
-    tach.needle(hud, car.powertrain.rpm as f32 / 1000., ACCENT, scale);
+    tach.needle(
+        hud,
+        session.telemetry.rpm.value(car.powertrain.rpm) as f32 / 1000.,
+        ACCENT,
+        scale,
+    );
 
     if let Some(refusal) = car.powertrain.last_refusal {
         let text = match refusal {
@@ -791,7 +794,10 @@ fn tyre_display(hud: &Hud, style: &HudStyle, session: &Session, scale: f32) {
             (x + cell_w - 12. * scale, tyre_y + 28. * scale),
             Align::Right,
             color,
-            &format!("{:.0}°C", tyre.temperature),
+            &format!(
+                "{:.0}°C",
+                session.telemetry.temperatures[axle].value(tyre.temperature)
+            ),
         );
         hud.text(
             &style.bold,
@@ -806,13 +812,26 @@ fn tyre_display(hud: &Hud, style: &HudStyle, session: &Session, scale: f32) {
             (x + cell_w - 12. * scale, tyre_y + 71. * scale),
             Align::Right,
             hud.finish.colors().ink,
-            &format!("{:.0}%", tyre.wear * 100.),
+            &format!(
+                "{:.0}%",
+                session.telemetry.wear[axle].value(tyre.wear) * 100.
+            ),
         );
     }
     let aero_y = tyre_y + tyre_h + gap;
     for (slot, label, value, color) in [
-        (0, "TOW", car.aero.slipstream(), BLUE),
-        (1, "WAKE", car.aero.dirty_air(), AMBER),
+        (
+            0,
+            "TOW",
+            session.telemetry.tow.value(car.aero.slipstream()),
+            BLUE,
+        ),
+        (
+            1,
+            "WAKE",
+            session.telemetry.wake.value(car.aero.dirty_air()),
+            AMBER,
+        ),
     ] {
         let x = px + pad + slot as f32 * (cell_w + gap);
         well(hud, x, aero_y, cell_w, aero_h, scale);
@@ -886,8 +905,18 @@ fn tyre_dials(hud: &Hud, style: &HudStyle, session: &Session, scale: f32) {
 
     // Tell-tales glow with the effect's strength.
     for (x, label, value, color) in [
-        (-0.24, "TOW", car.aero.slipstream(), BLUE),
-        (0.24, "WAKE", car.aero.dirty_air(), AMBER),
+        (
+            -0.24,
+            "TOW",
+            session.telemetry.tow.value(car.aero.slipstream()),
+            BLUE,
+        ),
+        (
+            0.24,
+            "WAKE",
+            session.telemetry.wake.value(car.aero.dirty_air()),
+            AMBER,
+        ),
     ] {
         let value = value.clamp(0., 1.) as f32;
         let (w, h) = (0.36 * r, 0.15 * r);
@@ -934,7 +963,10 @@ fn tyre_dials(hud: &Hud, style: &HudStyle, session: &Session, scale: f32) {
             (cx - 0.15 * r, cy),
             Align::Right,
             needles[axle].0,
-            &format!("{:.0}°", tyre.temperature),
+            &format!(
+                "{:.0}°",
+                session.telemetry.temperatures[axle].value(tyre.temperature)
+            ),
         );
         for side in 0..2 {
             let wheel = &car.wheels[axle * 2 + side];
@@ -951,7 +983,10 @@ fn tyre_dials(hud: &Hud, style: &HudStyle, session: &Session, scale: f32) {
             (cx + 0.15 * r, cy),
             Align::Left,
             colors.muted,
-            &format!("{:.0}%", tyre.wear * 100.),
+            &format!(
+                "{:.0}%",
+                session.telemetry.wear[axle].value(tyre.wear) * 100.
+            ),
         );
     }
     // Chassis spine joining the axles.
@@ -961,7 +996,7 @@ fn tyre_dials(hud: &Hud, style: &HudStyle, session: &Session, scale: f32) {
         let (color, length) = needles[axle];
         dial.pointer(
             hud,
-            car.tyres[axle].temperature as f32,
+            session.telemetry.temperatures[axle].value(car.tyres[axle].temperature) as f32,
             length,
             color,
             scale,

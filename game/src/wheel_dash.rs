@@ -134,6 +134,13 @@ pub struct WheelDash {
     active: bool,
 }
 
+#[cfg(test)]
+impl WheelDash {
+    pub(crate) fn capture_target(&self) -> Handle<Image> {
+        self.target.clone()
+    }
+}
+
 #[derive(Component)]
 struct WheelDashCamera;
 

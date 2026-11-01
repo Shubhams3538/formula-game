@@ -1,0 +1,427 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-11-01T06:40:34.204017+00:00",
+  "title": "Design System: F1 Racecraft HUD",
+  "extensions": {
+    "colorMeta": {
+      "digital-top": {
+        "role": "neutral",
+        "displayName": "Digital top (ramp is a generated panel illustration, not a shipped scale)",
+        "tonalRamp": [
+          "oklch(15.00% 0.00474 174.05)",
+          "oklch(26.43% 0.00474 174.05)",
+          "oklch(37.86% 0.00474 174.05)",
+          "oklch(49.29% 0.00474 174.05)",
+          "oklch(60.71% 0.00474 174.05)",
+          "oklch(72.14% 0.00474 174.05)",
+          "oklch(83.57% 0.00474 174.05)",
+          "oklch(95.00% 0.00474 174.05)"
+        ]
+      },
+      "digital-bottom": {
+        "role": "neutral",
+        "displayName": "Digital bottom (ramp is a generated panel illustration, not a shipped scale)",
+        "tonalRamp": [
+          "oklch(15.00% 0.00491 196.66)",
+          "oklch(26.43% 0.00491 196.66)",
+          "oklch(37.86% 0.00491 196.66)",
+          "oklch(49.29% 0.00491 196.66)",
+          "oklch(60.71% 0.00491 196.66)",
+          "oklch(72.14% 0.00491 196.66)",
+          "oklch(83.57% 0.00491 196.66)",
+          "oklch(95.00% 0.00491 196.66)"
+        ]
+      },
+      "digital-edge": {
+        "role": "neutral",
+        "displayName": "Digital edge (ramp is a generated panel illustration, not a shipped scale)",
+        "tonalRamp": [
+          "oklch(15.00% 0.01330 123.73)",
+          "oklch(26.43% 0.01330 123.73)",
+          "oklch(37.86% 0.01330 123.73)",
+          "oklch(49.29% 0.01330 123.73)",
+          "oklch(60.71% 0.01330 123.73)",
+          "oklch(72.14% 0.01330 123.73)",
+          "oklch(83.57% 0.01330 123.73)",
+          "oklch(95.00% 0.01330 123.73)"
+        ]
+      },
+      "digital-ink": {
+        "role": "neutral",
+        "displayName": "Digital ink (ramp is a generated panel illustration, not a shipped scale)",
+        "tonalRamp": [
+          "oklch(15.00% 0.03617 117.28)",
+          "oklch(26.43% 0.03617 117.28)",
+          "oklch(37.86% 0.03617 117.28)",
+          "oklch(49.29% 0.03617 117.28)",
+          "oklch(60.71% 0.03617 117.28)",
+          "oklch(72.14% 0.03617 117.28)",
+          "oklch(83.57% 0.03617 117.28)",
+          "oklch(95.00% 0.03617 117.28)"
+        ]
+      },
+      "digital-muted": {
+        "role": "neutral",
+        "displayName": "Digital muted (ramp is a generated panel illustration, not a shipped scale)",
+        "tonalRamp": [
+          "oklch(15.00% 0.02864 127.88)",
+          "oklch(26.43% 0.02864 127.88)",
+          "oklch(37.86% 0.02864 127.88)",
+          "oklch(49.29% 0.02864 127.88)",
+          "oklch(60.71% 0.02864 127.88)",
+          "oklch(72.14% 0.02864 127.88)",
+          "oklch(83.57% 0.02864 127.88)",
+          "oklch(95.00% 0.02864 127.88)"
+        ]
+      },
+      "digital-accent": {
+        "role": "primary",
+        "displayName": "Digital accent (ramp is a generated panel illustration, not a shipped scale)",
+        "tonalRamp": [
+          "oklch(15.00% 0.22239 28.78)",
+          "oklch(26.43% 0.22239 28.78)",
+          "oklch(37.86% 0.22239 28.78)",
+          "oklch(49.29% 0.22239 28.78)",
+          "oklch(60.71% 0.22239 28.78)",
+          "oklch(72.14% 0.22239 28.78)",
+          "oklch(83.57% 0.22239 28.78)",
+          "oklch(95.00% 0.22239 28.78)"
+        ]
+      },
+      "analog-top": {
+        "role": "neutral",
+        "displayName": "Analog top (ramp is a generated panel illustration, not a shipped scale)",
+        "tonalRamp": [
+          "oklch(15.00% 0.00239 247.92)",
+          "oklch(26.43% 0.00239 247.92)",
+          "oklch(37.86% 0.00239 247.92)",
+          "oklch(49.29% 0.00239 247.92)",
+          "oklch(60.71% 0.00239 247.92)",
+          "oklch(72.14% 0.00239 247.92)",
+          "oklch(83.57% 0.00239 247.92)",
+          "oklch(95.00% 0.00239 247.92)"
+        ]
+      },
+      "analog-bottom": {
+        "role": "neutral",
+        "displayName": "Analog bottom (ramp is a generated panel illustration, not a shipped scale)",
+        "tonalRamp": [
+          "oklch(15.00% 0.00535 248.16)",
+          "oklch(26.43% 0.00535 248.16)",
+          "oklch(37.86% 0.00535 248.16)",
+          "oklch(49.29% 0.00535 248.16)",
+          "oklch(60.71% 0.00535 248.16)",
+          "oklch(72.14% 0.00535 248.16)",
+          "oklch(83.57% 0.00535 248.16)",
+          "oklch(95.00% 0.00535 248.16)"
+        ]
+      },
+      "analog-edge": {
+        "role": "neutral",
+        "displayName": "Analog edge (ramp is a generated panel illustration, not a shipped scale)",
+        "tonalRamp": [
+          "oklch(15.00% 0.00418 219.58)",
+          "oklch(26.43% 0.00418 219.58)",
+          "oklch(37.86% 0.00418 219.58)",
+          "oklch(49.29% 0.00418 219.58)",
+          "oklch(60.71% 0.00418 219.58)",
+          "oklch(72.14% 0.00418 219.58)",
+          "oklch(83.57% 0.00418 219.58)",
+          "oklch(95.00% 0.00418 219.58)"
+        ]
+      },
+      "analog-ink": {
+        "role": "neutral",
+        "displayName": "Analog ink (ramp is a generated panel illustration, not a shipped scale)",
+        "tonalRamp": [
+          "oklch(15.00% 0.01875 100.14)",
+          "oklch(26.43% 0.01875 100.14)",
+          "oklch(37.86% 0.01875 100.14)",
+          "oklch(49.29% 0.01875 100.14)",
+          "oklch(60.71% 0.01875 100.14)",
+          "oklch(72.14% 0.01875 100.14)",
+          "oklch(83.57% 0.01875 100.14)",
+          "oklch(95.00% 0.01875 100.14)"
+        ]
+      },
+      "analog-muted": {
+        "role": "neutral",
+        "displayName": "Analog muted (ramp is a generated panel illustration, not a shipped scale)",
+        "tonalRamp": [
+          "oklch(15.00% 0.00907 128.59)",
+          "oklch(26.43% 0.00907 128.59)",
+          "oklch(37.86% 0.00907 128.59)",
+          "oklch(49.29% 0.00907 128.59)",
+          "oklch(60.71% 0.00907 128.59)",
+          "oklch(72.14% 0.00907 128.59)",
+          "oklch(83.57% 0.00907 128.59)",
+          "oklch(95.00% 0.00907 128.59)"
+        ]
+      },
+      "well": {
+        "role": "neutral",
+        "displayName": "Well (ramp is a generated panel illustration, not a shipped scale)",
+        "tonalRamp": [
+          "oklch(15.00% 0.00467 263.79)",
+          "oklch(26.43% 0.00467 263.79)",
+          "oklch(37.86% 0.00467 263.79)",
+          "oklch(49.29% 0.00467 263.79)",
+          "oklch(60.71% 0.00467 263.79)",
+          "oklch(72.14% 0.00467 263.79)",
+          "oklch(83.57% 0.00467 263.79)",
+          "oklch(95.00% 0.00467 263.79)"
+        ]
+      },
+      "well-top": {
+        "role": "neutral",
+        "displayName": "Well top (ramp is a generated panel illustration, not a shipped scale)",
+        "tonalRamp": [
+          "oklch(15.00% 0.01033 210.91)",
+          "oklch(26.43% 0.01033 210.91)",
+          "oklch(37.86% 0.01033 210.91)",
+          "oklch(49.29% 0.01033 210.91)",
+          "oklch(60.71% 0.01033 210.91)",
+          "oklch(72.14% 0.01033 210.91)",
+          "oklch(83.57% 0.01033 210.91)",
+          "oklch(95.00% 0.01033 210.91)"
+        ]
+      },
+      "well-bottom": {
+        "role": "neutral",
+        "displayName": "Well bottom (ramp is a generated panel illustration, not a shipped scale)",
+        "tonalRamp": [
+          "oklch(15.00% 0.01153 217.24)",
+          "oklch(26.43% 0.01153 217.24)",
+          "oklch(37.86% 0.01153 217.24)",
+          "oklch(49.29% 0.01153 217.24)",
+          "oklch(60.71% 0.01153 217.24)",
+          "oklch(72.14% 0.01153 217.24)",
+          "oklch(83.57% 0.01153 217.24)",
+          "oklch(95.00% 0.01153 217.24)"
+        ]
+      },
+      "segment-off": {
+        "role": "neutral",
+        "displayName": "Segment off (ramp is a generated panel illustration, not a shipped scale)",
+        "tonalRamp": [
+          "oklch(15.00% 0.00242 145.50)",
+          "oklch(26.43% 0.00242 145.50)",
+          "oklch(37.86% 0.00242 145.50)",
+          "oklch(49.29% 0.00242 145.50)",
+          "oklch(60.71% 0.00242 145.50)",
+          "oklch(72.14% 0.00242 145.50)",
+          "oklch(83.57% 0.00242 145.50)",
+          "oklch(95.00% 0.00242 145.50)"
+        ]
+      },
+      "red": {
+        "role": "primary",
+        "displayName": "Red (ramp is a generated panel illustration, not a shipped scale)",
+        "tonalRamp": [
+          "oklch(15.00% 0.23195 26.15)",
+          "oklch(26.43% 0.23195 26.15)",
+          "oklch(37.86% 0.23195 26.15)",
+          "oklch(49.29% 0.23195 26.15)",
+          "oklch(60.71% 0.23195 26.15)",
+          "oklch(72.14% 0.23195 26.15)",
+          "oklch(83.57% 0.23195 26.15)",
+          "oklch(95.00% 0.23195 26.15)"
+        ]
+      },
+      "green": {
+        "role": "secondary",
+        "displayName": "Green (ramp is a generated panel illustration, not a shipped scale)",
+        "tonalRamp": [
+          "oklch(15.00% 0.20683 149.09)",
+          "oklch(26.43% 0.20683 149.09)",
+          "oklch(37.86% 0.20683 149.09)",
+          "oklch(49.29% 0.20683 149.09)",
+          "oklch(60.71% 0.20683 149.09)",
+          "oklch(72.14% 0.20683 149.09)",
+          "oklch(83.57% 0.20683 149.09)",
+          "oklch(95.00% 0.20683 149.09)"
+        ]
+      },
+      "amber": {
+        "role": "secondary",
+        "displayName": "Amber (ramp is a generated panel illustration, not a shipped scale)",
+        "tonalRamp": [
+          "oklch(15.00% 0.16381 78.96)",
+          "oklch(26.43% 0.16381 78.96)",
+          "oklch(37.86% 0.16381 78.96)",
+          "oklch(49.29% 0.16381 78.96)",
+          "oklch(60.71% 0.16381 78.96)",
+          "oklch(72.14% 0.16381 78.96)",
+          "oklch(83.57% 0.16381 78.96)",
+          "oklch(95.00% 0.16381 78.96)"
+        ]
+      },
+      "blue": {
+        "role": "secondary",
+        "displayName": "Blue (ramp is a generated panel illustration, not a shipped scale)",
+        "tonalRamp": [
+          "oklch(15.00% 0.16880 256.60)",
+          "oklch(26.43% 0.16880 256.60)",
+          "oklch(37.86% 0.16880 256.60)",
+          "oklch(49.29% 0.16880 256.60)",
+          "oklch(60.71% 0.16880 256.60)",
+          "oklch(72.14% 0.16880 256.60)",
+          "oklch(83.57% 0.16880 256.60)",
+          "oklch(95.00% 0.16880 256.60)"
+        ]
+      },
+      "purple": {
+        "role": "secondary",
+        "displayName": "Purple (ramp is a generated panel illustration, not a shipped scale)",
+        "tonalRamp": [
+          "oklch(15.00% 0.23566 307.00)",
+          "oklch(26.43% 0.23566 307.00)",
+          "oklch(37.86% 0.23566 307.00)",
+          "oklch(49.29% 0.23566 307.00)",
+          "oklch(60.71% 0.23566 307.00)",
+          "oklch(72.14% 0.23566 307.00)",
+          "oklch(83.57% 0.23566 307.00)",
+          "oklch(95.00% 0.23566 307.00)"
+        ]
+      },
+      "tyre-yellow": {
+        "role": "secondary",
+        "displayName": "Tyre yellow (ramp is a generated panel illustration, not a shipped scale)",
+        "tonalRamp": [
+          "oklch(15.00% 0.18506 97.44)",
+          "oklch(26.43% 0.18506 97.44)",
+          "oklch(37.86% 0.18506 97.44)",
+          "oklch(49.29% 0.18506 97.44)",
+          "oklch(60.71% 0.18506 97.44)",
+          "oklch(72.14% 0.18506 97.44)",
+          "oklch(83.57% 0.18506 97.44)",
+          "oklch(95.00% 0.18506 97.44)"
+        ]
+      }
+    },
+    "typographyMeta": {
+      "label": {
+        "displayName": "Instrument label",
+        "purpose": "Recurring native bold labels at scale 1; timing strip labels clamp to 11 egui logical units. Sector labels/status and pass headings also clamp to 11; sector readout heights clamp to 12. Rival names start at 12 minimum before column fitting."
+      },
+      "body": {
+        "displayName": "Tower identity",
+        "purpose": "Bundled SemiBold words, not a replacement for seven-segment digits."
+      },
+      "wheel-label": {
+        "displayName": "Wheel label",
+        "purpose": "Bold labels in the independent wheel render texture."
+      }
+    },
+    "shadows": [
+      {
+        "name": "analog-dial",
+        "value": "native disc shadow: offset (2, 5) \u00d7 scale; radius dial_radius + 2 \u00d7 scale; black alpha 90/255",
+        "purpose": "Instrument shading drawn by the egui painter; not a CSS card-shadow token."
+      }
+    ],
+    "motion": [
+      {
+        "name": "numeric-publication",
+        "value": "18 physics ticks / 50 ms",
+        "purpose": "Publish averaged readouts at 20 Hz. Windows: speed/RPM 100 ms; tyre/aero/gaps 250 ms; delta 200 ms."
+      },
+      {
+        "name": "pass-confirmation",
+        "value": "108 consecutive physics ticks / 300 ms, at least 1 metre clearance",
+        "purpose": "Confirm position notice, then keep it for 900 ticks / 2.5 seconds."
+      },
+      {
+        "name": "race-message-fade",
+        "value": "final 400 ms",
+        "purpose": "Native message plates and ink fade by gamma multiplication."
+      }
+    ],
+    "breakpoints": []
+  },
+  "components": [
+    {
+      "name": "Timing strip",
+      "kind": "custom",
+      "refersTo": "timing-strip",
+      "description": "Analog timing hierarchy shown at scale 1. Native labels and sector status clamp to 11 logical units; sector readout heights clamp to 12 while panel geometry keeps scaling. Static translation of native egui geometry for the documentation panel; the Rust painter and bundled font remain authoritative.",
+      "html": "<div class=\"ds-native ds-timing\"><div class=\"ds-label\">LAP TIME</div><div class=\"ds-clock\">1:13.4</div><div class=\"ds-row\"><span>LAST</span><span>1:48.432</span></div><div class=\"ds-row ds-best\"><span>BEST</span><span>1:48.432</span></div><div class=\"ds-row ds-delta\"><span>VS BEST</span><span>-0.17</span></div><div class=\"ds-row\"><span>S1</span><span>32.123</span><span class=\"ds-best\">-0.24</span></div><div class=\"ds-row\"><span>S2</span><span>32.977</span><span class=\"ds-slow\">+0.18</span></div><div class=\"ds-row ds-live\"><span>S3</span><span>8.3</span><span>LIVE</span></div></div>",
+      "css": ".ds-native { font-family: \"Titillium Web\", sans-serif; }.ds-timing { width:254px; height:224px; padding:12px; background:#090a0c; color:#ebe9db; }.ds-label { font-size:13px; font-weight:700; color:#aeb1ab; }.ds-clock { height:44px; text-align:right; font-size:36.4px; font-weight:600; }.ds-row { height:24px; display:flex; justify-content:space-between; align-items:center; font-size:14px; font-weight:600; }.ds-best { color:#b85cff; }.ds-delta { height:40px; border-top:1px solid #555859; color:#40e673; font-size:20px; }.ds-slow { color:#ffb826; }.ds-live { background:#101e2d; color:#4d99ff; }"
+    },
+    {
+      "name": "Position gained",
+      "kind": "custom",
+      "refersTo": "pass-gained",
+      "description": "Confirmed race-position change shown at scale 1. Native heading clamps to 11 logical units; rival text starts at 12 minimum before long-name column fitting. Panel position and width keep scaling. Static translation of native egui geometry for the documentation panel; the Rust painter and bundled font remain authoritative.",
+      "html": "<div class=\"ds-native ds-pass\"><div class=\"ds-heading\">POSITION GAINED</div><span class=\"ds-rival\">BOT</span><strong class=\"ds-position\">P5</strong><div class=\"ds-progress\"></div></div>",
+      "css": ".ds-native { font-family: \"Titillium Web\", sans-serif; }.ds-pass { position:relative; width:254px; height:42px; padding:12px; background:#090a0c; color:#40e673; }.ds-heading { font-size:14px; font-weight:700; }.ds-rival { color:#ebe9db; font-size:17px; font-weight:600; }.ds-position { position:absolute; right:12px; top:18px; font-size:30px; }.ds-progress { position:absolute; bottom:0; left:0; width:100%; height:2px; background:#40e673; }"
+    },
+    {
+      "name": "Position lost",
+      "kind": "custom",
+      "refersTo": "pass-lost",
+      "description": "Confirmed race-position change shown at scale 1. Native heading clamps to 11 logical units; rival text starts at 12 minimum before long-name column fitting. Panel position and width keep scaling. Static translation of native egui geometry for the documentation panel; the Rust painter and bundled font remain authoritative.",
+      "html": "<div class=\"ds-native ds-pass\"><div class=\"ds-heading\">POSITION LOST</div><span class=\"ds-rival\">BOT</span><strong class=\"ds-position\">P6</strong><div class=\"ds-progress\"></div></div>",
+      "css": ".ds-native { font-family: \"Titillium Web\", sans-serif; }.ds-pass { position:relative; width:254px; height:42px; padding:12px; background:#090a0c; color:#ffb826; }.ds-heading { font-size:14px; font-weight:700; }.ds-rival { color:#ebe9db; font-size:17px; font-weight:600; }.ds-position { position:absolute; right:12px; top:18px; font-size:30px; }.ds-progress { position:absolute; bottom:0; left:0; width:100%; height:2px; background:#ffb826; }"
+    },
+    {
+      "name": "Readout well",
+      "kind": "custom",
+      "refersTo": "readout-well",
+      "description": "Recessed glass treatment with analog text for this preview. Static translation of native egui geometry for the documentation panel; the Rust painter and bundled font remain authoritative.",
+      "html": "<div class=\"ds-native ds-well\">220</div>",
+      "css": ".ds-native { font-family: \"Titillium Web\", sans-serif; }.ds-well { width:130px; padding:12px; text-align:right; font-size:48px; font-weight:600; color:#eaf0d5; background:linear-gradient(#030708,#0a1113); border:1px solid #3b3d37; clip-path:polygon(3px 0,calc(100% - 3px) 0,100% 3px,100% calc(100% - 3px),calc(100% - 3px) 100%,3px 100%,0 calc(100% - 3px),0 3px); }"
+    },
+    {
+      "name": "Open DRS badge",
+      "kind": "custom",
+      "refersTo": "drs-open",
+      "description": "On-screen DRS state indicator. Static translation of native egui geometry for the documentation panel; the Rust painter and bundled font remain authoritative.",
+      "html": "<div class=\"ds-native ds-drs\">DRS</div>",
+      "css": ".ds-native { font-family: \"Titillium Web\", sans-serif; }.ds-drs { width:96px; height:34px; display:flex; align-items:center; justify-content:center; border-radius:6px; background:#40e673; color:#08090a; font-size:20px; font-weight:700; }"
+    }
+  ],
+  "narrative": {
+    "northStar": "Charcoal cockpit instruments",
+    "overview": "A shared instrument set for the screen HUD and the cockpit wheel LCD. Digital mode uses illuminated segments, olive-white ink and chamfered charcoal housings. Analog mode uses warm-white Titillium Web, metal-rimmed dials and a red needle. Both keep the road and physical wheel visible.\n\nThis record covers the racing HUD, timing and wheel displays in the current checkout. It does not define menus or a new product identity. PRODUCT.md records the confirmed readability problem, scope and constraints; README.md, the native painters and docs/verification/hud-stability.md supply the implementation evidence.",
+    "keyCharacteristics": [
+      "Two material finishes with shared semantic colors.",
+      "Fixed numeric columns and persistent sector rows.",
+      "Corner instruments around an open driving view."
+    ],
+    "rules": [
+      {
+        "name": "The Shared Meaning Rule",
+        "body": "Keep semantic colors consistent across both finishes and both egui contexts. Material accent colors do not replace telemetry state colors.",
+        "section": "colors"
+      },
+      {
+        "name": "The Fixed Column Rule",
+        "body": "Right-align values in reserved columns. Fit long identity text to its allotted width rather than letting it move the numeric columns.",
+        "section": "typography"
+      },
+      {
+        "name": "The Timing Legibility Rule",
+        "body": "Timing strip labels, sector labels/status and pass headings stop shrinking at 11 logical units. Sector readout heights stop at 12. Pass rival text starts at a minimum of 12 before long-name fitting, which may reduce it further. These exceptions preserve the panel position, width and fixed columns.",
+        "section": "typography"
+      },
+      {
+        "name": "The Instrument Depth Rule",
+        "body": "Use material gradients, rims and recessed wells for instrument depth. Keep timing and position notices flat so their rows remain easy to scan.",
+        "section": "elevation"
+      }
+    ],
+    "dos": [
+      "Do use the bundled Titillium Web faces for words and the native segment painter for digital numbers.",
+      "Do share averaged telemetry between the HUD and wheel LCD while keeping gears, inputs and warnings immediate.",
+      "Do retain all three sector rows and distinguish LIVE, LAST, FIRST and unavailable values with text.",
+      "Do reserve the center driving view and keep position notices beside the timing tower."
+    ],
+    "donts": [
+      "Don't substitute a system display font or a monospace font for the native digit geometry.",
+      "Don't smooth completed lap or sector times, or treat live gap estimates as official results.",
+      "Don't infer browser breakpoints, hover controls or CSS layout rules from these native instruments.",
+      "Don't treat the smallest incidental caption sizes or unlimited downscaling as a legibility target for new HUD work."
+    ]
+  }
+}

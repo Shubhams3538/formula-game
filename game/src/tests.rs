@@ -69,6 +69,7 @@ pub(super) fn session() -> Session {
         paused: false,
         messages: default(),
         delta: default(),
+        telemetry: default(),
         ready: false,
         screen: menu::Screen::Racing,
     }

@@ -47,6 +47,7 @@ pub struct Session {
     pub minimap: hud::Minimap,
     pub messages: hud::Messages,
     pub delta: hud::Delta,
+    pub telemetry: hud::Telemetry,
     pub ready: bool,
     pub screen: menu::Screen,
     pub guidance: driving::Guidance,
@@ -146,6 +147,7 @@ fn build_app(mut options: Options) -> Result<App, String> {
         paused: !quick_race,
         messages: default(),
         delta: default(),
+        telemetry: default(),
         ready: false,
         screen: if quick_race {
             menu::Screen::Racing
@@ -318,6 +320,7 @@ fn step_race(mut session: ResMut<Session>, benchmark: Option<Res<benchmark::Run>
         1. / PHYSICS_RATE,
     );
     race.step(&[input]);
+    session.sample_hud();
 }
 
 #[derive(Resource, Default)]

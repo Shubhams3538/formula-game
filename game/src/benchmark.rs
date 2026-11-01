@@ -330,6 +330,8 @@ fn reset_view(session: &mut Session, options: &Options) {
     session.show_performance = false;
     session.messages = Default::default();
     session.delta = Default::default();
+    session.telemetry = Default::default();
+    session.sample_hud();
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -396,6 +398,7 @@ pub fn advance(
                 race.events.clear();
                 if !options.benchmark_grid {
                     race.step(&[]);
+                    session.sample_hud();
                 }
                 run.ticks += 1;
             }

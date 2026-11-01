@@ -386,6 +386,7 @@ pub fn apply(
         paused: true,
         messages: default(),
         delta: default(),
+        telemetry: default(),
         ready: false,
         screen: Screen::Loading,
     };

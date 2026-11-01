@@ -104,6 +104,7 @@ pub fn update(
     if actions.reset {
         let player = session.player;
         session.race.recover(player);
+        session.recover_hud();
     }
 }
 
