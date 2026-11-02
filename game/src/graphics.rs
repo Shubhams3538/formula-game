@@ -407,6 +407,7 @@ impl Video {
 #[allow(clippy::too_many_arguments)]
 pub fn apply(
     mut commands: Commands,
+    server: Res<AssetServer>,
     frontend: Res<crate::menu::Frontend>,
     mut applied: Local<Option<(Video, bool)>>,
     mut windows: Query<&mut Window>,
@@ -434,8 +435,22 @@ pub fn apply(
         *applied = Some((video, frontend.vsync));
         return;
     }
+    let texture_changed = applied
+        .as_ref()
+        .is_some_and(|(previous, _)| previous.texture != video.texture);
     *applied = Some((video, frontend.vsync));
-    // Takes effect for textures loaded from now on (the next race).
+    if texture_changed {
+        // Bevy otherwise keeps the old GLB and image handles alive, so a new
+        // race would reuse the previous mip selection from the asset cache.
+        for path in [
+            format!("cars/{}/car.glb", frontend.draft.car),
+            "cars/gen22/car_lod1.glb".into(),
+            "cars/gen22/car_lod2.glb".into(),
+            format!("tracks/{}/visual.glb", frontend.draft.track),
+        ] {
+            server.reload(path);
+        }
+    }
     textures.0 = video.texture.dropped_mips();
     ai_lod.set_if_neq(crate::assets::OpponentLodDistance(video.ai_lod_distance()));
     shadow_map.size = video.shadow_resolution;
