@@ -50,8 +50,8 @@ impl Tab {
         Self::Camera,
         Self::Controls,
         Self::Graphics,
-        Self::Audio,
         Self::Hud,
+        Self::Audio,
         Self::Benchmark,
     ];
 
@@ -870,7 +870,7 @@ fn selection(
     section(ui, "Race distance & grid");
     ui.columns(2, |columns| {
         for column in columns.iter_mut() {
-            column.spacing_mut().slider_width = (column.available_width() - 110.).clamp(60., 160.);
+            column.spacing_mut().slider_width = (column.available_width() - 190.).clamp(50., 80.);
         }
         columns[0].add(egui::Slider::new(&mut draft.laps, 1..=30).text("Laps"));
         columns[1].add(egui::Slider::new(&mut draft.opponents, 0..=15).text("AI opponents"));
@@ -890,7 +890,7 @@ fn selection(
     });
     ui.columns(2, |columns| {
         for column in columns.iter_mut() {
-            column.spacing_mut().slider_width = (column.available_width() - 110.).clamp(60., 160.);
+            column.spacing_mut().slider_width = (column.available_width() - 190.).clamp(50., 80.);
         }
         columns[0].add(
             egui::Slider::new(&mut draft.setup.front_wing, 0.0..=10.0)
