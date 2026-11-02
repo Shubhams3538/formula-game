@@ -180,6 +180,8 @@ impl AiDriver {
             }
             Intent::Defend { side, .. } => side * (limit - 1.2),
         };
+        let mut lane_min = -limit;
+        let mut lane_max = limit;
         for rival in rivals {
             // Centres one car length apart is nose to tail, not alongside.
             let overlapping = rival.gap.abs() < car.spec.length + 0.5;
@@ -193,11 +195,23 @@ impl AiDriver {
                 continue;
             }
             let separation = rival.lateral - car.track_position.lateral;
+            // Nose-to-tail traffic must brake, not have both drivers swerve
+            // toward the same arbitrary side when their lateral positions tie.
+            if separation.abs() < car.spec.width * 0.5 {
+                continue;
+            }
             let needed = car.spec.width + if overlapping { 1.1 } else { 0.6 };
             if separation.abs() < needed + 1.5 {
                 // Keep a car's width (plus margin) away on the side we are on.
                 let side = if separation > 0.0 { -1.0 } else { 1.0 };
                 let bound = rival.lateral + side * needed;
+                if overlapping {
+                    if side < 0.0 {
+                        lane_max = lane_max.min(bound);
+                    } else {
+                        lane_min = lane_min.max(bound);
+                    }
+                }
                 lateral = if side < 0.0 {
                     lateral.min(bound)
                 } else {
@@ -209,7 +223,13 @@ impl AiDriver {
         // swings across the whole road through esses and must not lag.
         let offset = lateral.clamp(-limit, limit) - line_lateral;
         self.line_offset += (offset - self.line_offset) * (dt * 2.5).min(1.0);
-        let lateral_target = (line_lateral + self.line_offset).clamp(-limit, limit);
+        // Room owed to an overlapping car is a hard boundary. Smoothing the
+        // safety offset otherwise cuts across that car as the line changes.
+        let lateral_target = if lane_min <= lane_max {
+            (line_lateral + self.line_offset).clamp(lane_min, lane_max)
+        } else {
+            car.track_position.lateral.clamp(-limit, limit)
+        };
 
         // Pure pursuit toward the target point.
         let target = ahead_frame.point_at(lateral_target);
@@ -229,9 +249,11 @@ impl AiDriver {
         let anticipation = speed * 0.12 + 2.0;
         // A committed move outbrakes the car being passed: the attacker brakes
         // a few metres later, more so for aggressive drivers.
+        let crowded = in_pack(car, rivals);
         let late_braking = match self.intent {
             Intent::Attack { side, apex_s }
-                if self.attack_overlap(car, rivals)
+                if !crowded
+                    && self.attack_overlap(car, rivals)
                     && corner.is_some_and(|c| c.apex_s == apex_s && c.inside == side) =>
             {
                 3.0 + 6.0 * self.profile.aggression
@@ -240,7 +262,7 @@ impl AiDriver {
         };
         // A late-braking error only applies in the braking zone it was rolled for.
         let mistake = match corner {
-            Some(corner) if self.mistake_corner == Some(corner.apex_s) => {
+            Some(corner) if !crowded && self.mistake_corner == Some(corner.apex_s) => {
                 let to_apex = track.delta(s, corner.apex_s).rem_euclid(track.length);
                 let zone = track
                     .delta(corner.brake_s, corner.apex_s)
@@ -283,13 +305,16 @@ impl AiDriver {
             let clear = car.spec.width + 0.3;
             let in_line = (rival.lateral - car.track_position.lateral).abs() < clear
                 || (rival.lateral - lateral_target).abs() < clear;
-            if in_line && rival.gap > 0.0 && rival.gap < 4.0 + speed * 0.35 {
-                // Do not drive into the back of a car we cannot pass yet.
-                let closing = speed - rival.speed;
-                let room = rival.gap - 4.0;
-                if closing > 0.0 && room < closing * 1.2 {
-                    target_speed = target_speed.min(rival.speed - 0.5);
-                }
+            if in_line && rival.gap > 0.0 {
+                // Reserve the body length and braking distance for our closing
+                // speed. React to closing, not absolute speed: a steady tow
+                // must still let a faster car reach a passing opportunity.
+                let room = (rival.gap - car.spec.length - 1.5).max(0.0);
+                let deceleration = 8.0;
+                let closing = (speed - rival.speed).max(0.0);
+                let safe_speed =
+                    (rival.speed.powi(2) + 2.0 * deceleration * room).sqrt() - closing * 0.7;
+                target_speed = target_speed.min(safe_speed.max(0.0));
             }
         }
         let error = target_speed - speed;
@@ -345,6 +370,13 @@ impl AiDriver {
             return;
         };
         let to_brake = track.delta(s, corner.brake_s).rem_euclid(track.length);
+        // A packed braking zone has no free lane for an attacking or defensive
+        // swerve. Hold position until the pack spreads, then resume racing.
+        if in_pack(car, rivals) {
+            self.intent = Intent::Line;
+            self.mistake = 0.0;
+            return;
+        }
 
         // An occasional late-braking error, decided once per corner.
         if self.mistake_corner != Some(corner.apex_s) {
@@ -436,6 +468,18 @@ impl AiDriver {
             }
         }
     }
+}
+
+/// Multiple nearby cars leave no clear lane for a tactical move.
+fn in_pack(car: &Car, rivals: &[Rival]) -> bool {
+    rivals
+        .iter()
+        .filter(|rival| {
+            rival.gap.abs() < 20.0
+                && (rival.lateral - car.track_position.lateral).abs() < car.spec.width * 2.0
+        })
+        .count()
+        >= 2
 }
 
 /// Share of tyre friction the AI plans to use at low load.

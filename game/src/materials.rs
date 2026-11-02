@@ -80,10 +80,23 @@ pub fn prepare(
                     UvChannel::Uv0
                 };
                 let instance = liveries.instance(team, &handle.0, texture, channel, &mut materials);
+                if direct.is_none() {
+                    livery_finish(team, part, &mut materials.get_mut(&instance).unwrap());
+                }
                 commands.entity(entity).insert(MeshMaterial3d(instance));
             }
         }
         commands.entity(entity).insert(SurfaceReady);
+    }
+}
+
+/// RB22's sharper reflections affect only its cloned body material at every LOD.
+fn livery_finish(team: &str, part: &str, material: &mut StandardMaterial) {
+    if team == "redbull" && matches!(part, "main_body" | "mirrors") {
+        material.perceptual_roughness = 0.16;
+        // Uniform clearcoat washes out the blue and exposed carbon together.
+        material.clearcoat = 0.;
+        material.clearcoat_perceptual_roughness = 0.1;
     }
 }
 
@@ -439,6 +452,50 @@ mod tests {
                 &mut materials
             )
         );
+    }
+
+    #[test]
+    fn rb22_coat_changes_only_its_body_instances() {
+        let mut materials = Assets::<StandardMaterial>::default();
+        let mut images = Assets::<Image>::default();
+        let normal = images.add(Image::default());
+        let ao = images.add(Image::default());
+        let original = StandardMaterial {
+            normal_map_texture: Some(normal.clone()),
+            occlusion_texture: Some(ao.clone()),
+            perceptual_roughness: 0.3,
+            ..default()
+        };
+        let mut cache = TeamMaterials::default();
+        for part in ["main_body", "mirrors", "floor", "cockpit_foam"] {
+            let source = materials.add(original.clone());
+            for team in ["redbull", "ferrari"] {
+                let instance = cache.instance(
+                    team,
+                    &source,
+                    images.add(Image::default()),
+                    UvChannel::Uv0,
+                    &mut materials,
+                );
+                livery_finish(team, part, &mut materials.get_mut(&instance).unwrap());
+                let material = materials.get(&instance).unwrap();
+                let coated = team == "redbull" && matches!(part, "main_body" | "mirrors");
+                assert_eq!(material.clearcoat, 0.);
+                assert_eq!(
+                    material.perceptual_roughness,
+                    if coated { 0.16 } else { 0.3 }
+                );
+                assert_eq!(material.normal_map_texture, Some(normal.clone()));
+                assert_eq!(material.occlusion_texture, Some(ao.clone()));
+                assert_eq!(material.base_color_channel, UvChannel::Uv0);
+            }
+            let unchanged = materials.get(&source).unwrap();
+            assert_eq!(unchanged.clearcoat, original.clearcoat);
+            assert_eq!(
+                unchanged.perceptual_roughness,
+                original.perceptual_roughness
+            );
+        }
     }
 
     #[test]

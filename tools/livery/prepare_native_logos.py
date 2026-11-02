@@ -9,6 +9,7 @@ import json
 from pathlib import Path
 import subprocess
 import urllib.request
+import xml.etree.ElementTree as ET
 
 import numpy as np
 from PIL import Image, ImageDraw, ImageFilter
@@ -31,16 +32,50 @@ def transparent_background(image):
 
 def prepare(entry, source):
     if source.suffix.lower() == '.svg':
-        data = subprocess.run(['rsvg-convert', '-w', '4096', str(source)], check=True, capture_output=True).stdout
+        if 'svg_paths' in entry:
+            # Keep measured components of genuine artwork, such as a star without its ring.
+            root = ET.fromstring(source.read_bytes())
+            paths = list(root.iter('{http://www.w3.org/2000/svg}path'))
+            keep = {paths[index] for index in entry['svg_paths']}
+            for parent in root.iter():
+                for child in list(parent):
+                    if child.tag == '{http://www.w3.org/2000/svg}path' and child not in keep:
+                        parent.remove(child)
+            data = subprocess.run(['rsvg-convert', '-w', '4096'], input=ET.tostring(root), check=True, capture_output=True).stdout
+        else:
+            data = subprocess.run(['rsvg-convert', '-w', '4096', str(source)], check=True, capture_output=True).stdout
         image = Image.open(BytesIO(data)).convert('RGBA')
     else:
         image = Image.open(source).convert('RGBA')
+    if entry.get('source_quad'):
+        image = image.transform(tuple(entry['rectified_size']), Image.Transform.QUAD,
+                                entry['source_quad'], Image.Resampling.BICUBIC)
     if entry.get('source_crop'):
         image = image.crop(entry['source_crop'])
+    if entry.get('source_polygon'):
+        mask = Image.new('L', image.size)
+        ImageDraw.Draw(mask).polygon([tuple(point) for point in entry['source_polygon']], fill=255)
+        image.putalpha(Image.fromarray(np.minimum(np.array(image.getchannel('A')), np.array(mask))))
+    if entry.get('source_rotate'):
+        image = image.rotate(entry['source_rotate'], expand=True)
     if entry.get('remove_all_white'):
         pixels = np.array(image)
         pixels[pixels[:, :, :3].min(2) > 235, 3] = 0
         image = Image.fromarray(pixels)
+    if 'dark_ink' in entry:
+        # Isolate genuine dark photo lettering without substituting a font.
+        pixels = np.array(image)
+        alpha = np.where(pixels[:, :, :3].max(2) < entry['dark_ink'], pixels[:, :, 3], 0).astype(np.uint8)
+        image = Image.new('RGBA', image.size, 'white')
+        image.putalpha(Image.fromarray(alpha))
+    if 'rgb_ink' in entry:
+        # Select coloured photographic glyphs, retaining their negative space.
+        pixels = np.array(image)
+        lower, upper = np.asarray(entry['rgb_ink'])
+        selected = ((pixels[:, :, :3] >= lower) & (pixels[:, :, :3] <= upper)).all(2)
+        alpha = np.where(selected, pixels[:, :, 3], 0).astype(np.uint8)
+        image = Image.new('RGBA', image.size, 'white')
+        image.putalpha(Image.fromarray(alpha))
     if entry.get('photo_crop'):
         image = image.crop(entry['photo_crop']).rotate(entry.get('rotate', 0), expand=True)
         pixels = np.array(image)
@@ -72,6 +107,17 @@ def prepare(entry, source):
         image = Image.new('RGBA', image.size, 'white')
         image.putalpha(Image.fromarray(alpha))
         image = image.crop(image.getbbox())
+    if 'largest_components' in entry:
+        alpha = np.array(image.getchannel('A'))
+        labels, _ = ndimage.label(alpha > 0)
+        sizes = np.bincount(labels.ravel())
+        sizes[0] = 0
+        keep = np.argsort(sizes)[-entry['largest_components']:]
+        alpha[~np.isin(labels, keep)] = 0
+        image.putalpha(Image.fromarray(alpha))
+        image = image.crop(image.getbbox())
+    if entry.get('flip_x'):
+        image = image.transpose(Image.Transpose.FLIP_LEFT_RIGHT)
     if entry.get('color'):
         alpha = image.getchannel('A')
         image = Image.new('RGBA', image.size, entry['color'])

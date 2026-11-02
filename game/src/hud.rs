@@ -604,17 +604,16 @@ fn follow_events(session: &mut Session) {
             RaceEvent::LightsOut => pending.push(("LIGHTS OUT", GREEN, 2.0)),
             RaceEvent::LapCompleted { entrant, time, .. } if entrant == player => {
                 let best = session.race.entrants[player].timing.best_lap == Some(time);
-                pending.push((
-                    if best {
-                        "PERSONAL BEST"
-                    } else {
-                        "LAP COMPLETE"
-                    },
+                let label = if best {
+                    "PERSONAL BEST"
+                } else {
+                    "LAP COMPLETE"
+                };
+                session.messages.push(
+                    format!("{label}   {}", format_time(time)),
                     if best { PURPLE } else { WHITE },
                     2.5,
-                ));
-                let text = format_time(time);
-                session.messages.push(text, WHITE, 2.5);
+                );
             }
             RaceEvent::Finished { entrant, position } if entrant == player => {
                 session
@@ -884,40 +883,31 @@ pub fn draw(hud: &mut Hud, style: &HudStyle, session: &mut Session, display: Set
             );
         }
     }
-    let mut banner_y = height * 0.28;
+    let mut banner_y = 76.0 * scale;
     for (text, color, remaining) in &session.messages.active {
         let fade = remaining.min(0.4) / 0.4;
         let color = color.gamma_multiply(fade);
-        let text_width = hud.text_width(&style.bold, 40.0 * scale, text);
-        let banner_x = width * 0.5 - text_width * 0.5 - 24.0 * scale;
-        let banner_w = text_width + 48.0 * scale;
-        hud.plate(
-            egui::Rect::from_min_size(
-                egui::pos2(banner_x, banner_y),
-                egui::vec2(banner_w, 56. * scale),
-            ),
-            8. * scale,
-            colors.top.gamma_multiply(fade),
-            colors.bottom.gamma_multiply(fade),
-            colors.edge.gamma_multiply(fade),
-        );
-        hud.fill_round(
+        let font_size = 18.0 * scale;
+        let text_width = hud.text_width(&style.bold, font_size, text);
+        let banner_w = text_width + 32.0 * scale;
+        let banner_x = (width - banner_w) * 0.5;
+        hud.fill_rect(
             banner_x,
-            banner_y + 10.0 * scale,
-            4.0 * scale,
-            36.0 * scale,
-            2.0 * scale,
-            color,
+            banner_y,
+            banner_w,
+            34.0 * scale,
+            WELL.gamma_multiply(fade),
         );
-        hud.text(
+        hud.fill_rect(banner_x, banner_y, 3.0 * scale, 34.0 * scale, color);
+        hud.text_mid(
             &style.bold,
-            40.0 * scale,
-            (width * 0.5, banner_y + 2.0 * scale),
+            font_size,
+            (width * 0.5, banner_y + 17.0 * scale),
             Align::Center,
             color,
             text,
         );
-        banner_y += 64.0 * scale;
+        banner_y += 40.0 * scale;
     }
 
     instruments::draw(hud, style, session, display.layout, scale);

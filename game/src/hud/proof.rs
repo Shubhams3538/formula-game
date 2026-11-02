@@ -103,6 +103,11 @@ fn fixture(
             position: 5,
             until: session.race.tick + 900,
         });
+        session.race.events.push(RaceEvent::LapCompleted {
+            entrant: player,
+            lap: 1,
+            time: 108.432,
+        });
     }
     if proof.frame == 60 {
         frontend.display.layout = Layout::Gauges;

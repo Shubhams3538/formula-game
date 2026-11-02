@@ -14,6 +14,15 @@
   All cars currently use the supplied source livery. Keep the roster separate
   from artwork and preserve the source PBR materials and ambient occlusion.
 
+## 2026 grid (roster only)
+
+- Update the roster to the 2026 season: 11 teams including Cadillac, 2026 team IDs
+  and names (e.g. `alphatauri` -> Racing Bulls, `alfaromeo` -> Audi), 2026 driver
+  names, abbreviations and numbers. Covers `assets/cars/gen22/teams.json` and anything
+  keyed on team ID (livery dirs under `assets/cars/gen22/liveries/`, menus, grid size, AI).
+- Keep the ground-effect era (2022–2025) regulations, car model and physics as
+  they are. Do not adopt the 2026 technical regulations.
+
 ## Other
 
 - Car selection menu redesign.

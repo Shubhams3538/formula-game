@@ -162,6 +162,11 @@ class Paint:
 
     def mask(self, conditions):
         value = 1
+        for name, bounds in conditions.get('normal_bounds', {}).items():
+            direction = [int(axis == name) for axis in 'xyz']
+            component = self.vector_dot(self.normal, direction)
+            for operation, limit in [('GREATER_THAN', bounds[0]), ('LESS_THAN', bounds[1])]:
+                value = self.math('MULTIPLY', value, self.math(operation, component, limit))
         if 'panels' in conditions:
             matches = 0
             for panel in conditions['panels']:

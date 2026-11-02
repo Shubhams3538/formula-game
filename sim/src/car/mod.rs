@@ -721,6 +721,81 @@ mod tests {
     }
 
     #[test]
+    fn manual_seventh_reaches_its_shift_point_and_eighth_keeps_pulling() {
+        let track = oval_track();
+        for wing in [0.0, 5.0, 10.0] {
+            let mut car = car_on(&track);
+            car.assists.automatic_gears = false;
+            car.setup.front_wing = wing;
+            car.setup.rear_wing = wing;
+            car.velocity = car.forward() * (260.0 / 3.6);
+            car.powertrain.gear = 7;
+            let mut shifted_at = None;
+            for _ in 0..12 {
+                let speed = car.speed();
+                let (position, yaw) = track.grid_slot(0);
+                car.position = position;
+                car.yaw = yaw;
+                car.yaw_rate = 0.0;
+                car.velocity = car.forward() * speed;
+                car.track_position = track.project(position, None);
+                run(
+                    &mut car,
+                    &track,
+                    CarInput {
+                        throttle: 1.0,
+                        ..CarInput::default()
+                    },
+                    0.5,
+                );
+                if car.powertrain.rpm >= car.spec.engine.rev_limit * 0.985 {
+                    shifted_at = Some(car.speed());
+                    run(
+                        &mut car,
+                        &track,
+                        CarInput {
+                            throttle: 1.0,
+                            shift_up: true,
+                            ..CarInput::default()
+                        },
+                        1.0 / 360.0,
+                    );
+                    break;
+                }
+            }
+            let shift_speed = shifted_at.expect("seventh must reach the manual shift lights");
+            assert_eq!(car.powertrain.gear, 8);
+            launch(&mut car, &[], 5.0);
+            eprintln!(
+                "manual wing {wing}: shift at {:.1}, eighth {:.1} km/h",
+                shift_speed * 3.6,
+                car.speed() * 3.6
+            );
+            assert_eq!(car.powertrain.gear, 8);
+            assert!(
+                car.speed() > shift_speed + 0.5,
+                "wing {wing}: eighth stopped accelerating"
+            );
+        }
+    }
+
+    #[test]
+    fn gen22_reaches_eighth_without_drs_or_a_tow() {
+        let track = oval_track();
+        for wing in [0.0, 5.0, 10.0] {
+            let mut car = car_on(&track);
+            car.setup.front_wing = wing;
+            car.setup.rear_wing = wing;
+            let (times, speed) = launch(&mut car, &[280.0, 300.0], 30.0);
+            eprintln!(
+                "wing {wing}: gear {}, speed {speed:.1}, rpm {:.0}, 280/300 {times:?}",
+                car.powertrain.gear, car.powertrain.rpm
+            );
+            assert_eq!(car.powertrain.gear, 8, "wing {wing}: {speed:.1} km/h");
+        }
+    }
+
+    #[test]
     fn launch_and_top_speed_match_a_race_trim_f1_car() {
         let track = oval_track();
         let mut car = car_on(&track);

@@ -13,6 +13,7 @@ from mathutils import Vector
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from native_paint import part_for
+from uv_layout import require_native_parts
 
 VIEWS = {
     'side-left': ((8, 1.8, .85), (.045, 1.8, .6), 6.1),
@@ -24,10 +25,82 @@ VIEWS = {
     'rear': ((.045, 8, 1.6), (.045, 1.8, .55), 3.5),
     'front-wing': ((.045, -3.7, 2.7), (.045, -.3, .2), 2.25),
     'nose': ((.045, -3, 4.5), (.045, .25, .3), 2.3),
+    'engine-cover': ((6, 2.85, .9), (.045, 2.85, .74), 1.7),
     'rear-wing': ((-2.6, 6, 2), (.075, 4.5, .8), 1.9),
     'rear-wing-back': ((.075, 7, 1.15), (.075, 4.5, .85), 1.8),
     'cockpit': ((.045, 2.5, 1.1), (.045, 1.2, .65), 1.8),
 }
+
+
+def source_detail(objects):
+    """Keep source tyre marking coordinates and add the exporter's carbon weave."""
+    import numpy as np
+
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'car'))
+    from source_materials import Library, attach_normal
+
+    library = Library(Path('.'))
+    tyres = {}
+    textured = set()
+    for obj in objects:
+        mesh = obj.data
+        if not mesh.uv_layers:
+            continue
+        original_uv = mesh.uv_layers[0].name
+        if obj.name.startswith('Native review wheel.'):
+            source = bpy.data.objects[obj.name.removeprefix('Native review ')]
+            original = source.data.materials[0]
+            if original not in tyres:
+                material = original.copy()
+                nodes, links = material.node_tree.nodes, material.node_tree.links
+                shader = nodes.new('ShaderNodeBsdfPrincipled')
+                shader.inputs['Roughness'].default_value = .8
+                paint = nodes.new('ShaderNodeMixRGB')
+                paint.inputs[1].default_value = (.035, .035, .035, 1)
+                paint.inputs[2].default_value = (1, .7, .005, 1)
+                links.new(nodes['Image Texture.003'].outputs['Alpha'], paint.inputs[0])
+                links.new(paint.outputs[0], shader.inputs['Base Color'])
+                output = next(node for node in nodes if node.type == 'OUTPUT_MATERIAL' and node.is_active_output)
+                links.new(shader.outputs[0], output.inputs['Surface'])
+                tyres[original] = material
+            mesh.materials.clear()
+            mesh.materials.append(tyres[original])
+            continue
+        detail = mesh.uv_layers.new(name='ReviewDetailUV')
+        coordinates = np.empty(len(mesh.vertices) * 3, dtype=np.float32)
+        vertices = np.empty(len(mesh.loops), dtype=np.int32)
+        normals = np.empty(len(mesh.polygons) * 3, dtype=np.float32)
+        counts = np.empty(len(mesh.polygons), dtype=np.int32)
+        mesh.vertices.foreach_get('co', coordinates)
+        mesh.loops.foreach_get('vertex_index', vertices)
+        mesh.polygons.foreach_get('normal', normals)
+        mesh.polygons.foreach_get('loop_total', counts)
+        dominant = np.abs(normals.reshape(-1, 3)).argmax(axis=1)
+        axes = np.repeat(np.array([[1, 2], [0, 2], [0, 1]])[dominant], counts, axis=0)
+        points = coordinates.reshape(-1, 3)[vertices]
+        detail.data.foreach_set('uv', (np.take_along_axis(points, axes, axis=1) * 56).ravel())
+        mesh.uv_layers.active = mesh.uv_layers[original_uv]
+        mesh.uv_layers[original_uv].active_render = True
+        for material in mesh.materials:
+            if material in textured:
+                continue
+            textured.add(material)
+            attach_normal(material, library.carbon_normal, detail.name, .16)
+            shader = material.node_tree.nodes['Principled BSDF']
+            if shader.inputs['Base Color'].is_linked:
+                # Painted red/white remain smooth; only the dark carbon receives weave.
+                nodes, links = material.node_tree.nodes, material.node_tree.links
+                texture = shader.inputs['Base Color'].links[0].from_socket
+                dark = nodes.new('ShaderNodeMath')
+                dark.operation = 'LESS_THAN'
+                dark.inputs[1].default_value = .035
+                links.new(texture, dark.inputs[0])
+                strength = nodes.new('ShaderNodeMath')
+                strength.operation = 'MULTIPLY'
+                strength.inputs[1].default_value = .16
+                links.new(dark.outputs[0], strength.inputs[0])
+                normal = shader.inputs['Normal'].links[0].from_node
+                links.new(strength.outputs[0], normal.inputs['Strength'])
 
 
 def main():
@@ -37,7 +110,10 @@ def main():
     parser.add_argument('--views', nargs='+')
     parser.add_argument('--samples', type=int, default=12)
     parser.add_argument('--gpu', action='store_true', help='use a Cycles CUDA device when available')
+    parser.add_argument('--source-detail', action='store_true',
+                        help='show exporter carbon weave and original tyre material coordinates')
     args = parser.parse_args(sys.argv[sys.argv.index('--')+1:])
+    require_native_parts(args.textures)
     args.output.mkdir(parents=True, exist_ok=True)
     deps = bpy.context.evaluated_depsgraph_get()
     carbon = bpy.data.materials.new('Neutral carbon')
@@ -77,6 +153,8 @@ def main():
         for face in mesh.polygons:
             face.material_index = 0
         objects.append(obj)
+    if args.source_detail:
+        source_detail(objects)
     for obj in list(bpy.data.objects):
         if obj not in objects:
             bpy.data.objects.remove(obj, do_unlink=True)

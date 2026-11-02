@@ -11,6 +11,41 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 @unittest.skipUnless(importlib.util.find_spec("bpy"), "requires Blender")
 class NativePaintTest(unittest.TestCase):
+    def test_side_projector_leaves_top_panel_at_base_colour(self):
+        import bpy
+        import numpy as np
+        from native_paint import bake
+
+        bpy.ops.wm.read_factory_settings(use_empty=True)
+        mesh = bpy.data.meshes.new('vertical side and horizontal shoulder')
+        mesh.from_pydata([(0,-.5,0),(0,.5,0),(0,.5,1),(0,-.5,1),
+                         (0,-.5,1),(.5,-.5,1),(.5,.5,1),(0,.5,1)], [], [(0,1,2,3),(4,5,6,7)])
+        obj = bpy.data.objects.new('projector fixture', mesh)
+        bpy.context.scene.collection.objects.link(obj)
+        uv = mesh.uv_layers.new(name='OriginalUV')
+        for face in mesh.polygons:
+            left = face.index * .5
+            for loop, point in zip(face.loop_indices, [(left,0),(left+.5,0),(left+.5,1),(left,1)]):
+                uv.data[loop].uv = point
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            artwork = bpy.data.images.new('blue mark', 64, 64, alpha=True)
+            artwork.pixels.foreach_set(np.tile([0,0,1,1], 64*64).astype(np.float32))
+            artwork.filepath_raw = str(root/'mark.png')
+            artwork.file_format = 'PNG'
+            artwork.save()
+            spec = {'team':'fixture','palette':{'red':'#FF0000'},
+                    'frame':{'origin':[0,0,0],'yaw':0},
+                    'parts':{'fixture':{'base':'red'}},
+                    'decals':[{'part':'fixture','image':'mark.png','width':1,
+                               'center':[0,0,.5],'right':[0,1,0],'up':[0,0,1],
+                               'where':{'normal_bounds':{'z':[-.1,.6]}}}]}
+            bake({'fixture':[obj]},spec,root,root,64,[],None)
+            image = bpy.data.images.load(str(root/'fixture.png'),check_existing=False)
+            pixels = np.array(image.pixels[:]).reshape(64,64,4)
+            np.testing.assert_allclose(pixels[32,16,:3], [0,0,1], atol=.02)
+            np.testing.assert_allclose(pixels[32,48,:3], [1,0,0], atol=.02)
+
     def test_panel_tagging_retains_untouched_evaluated_uv0(self):
         import bpy
         import hashlib

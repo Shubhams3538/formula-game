@@ -264,6 +264,10 @@ impl CarSpec {
     }
 
     pub fn gen22(wheels: [WheelSpec; 4], length: f64, width: f64) -> Self {
+        let mut gear_ratios = gear_set(18.0, 5.22, 8);
+        // Seventh must reach its shift lights before high-wing drag balances
+        // engine power. Keep eighth's ratio for the low-drag/DRS top speed.
+        gear_ratios[6] = 6.0;
         Self {
             name: "GEN22".to_string(),
             // Race trim: the 798 kg minimum with driver plus a race-average fuel load.
@@ -280,7 +284,7 @@ impl CarSpec {
                 peak_power_rpm: 12_400.0,
                 rev_limit: 13_500.0,
                 idle_rpm: 4_500.0,
-                gear_ratios: gear_set(18.0, 5.22, 8),
+                gear_ratios,
                 reverse_ratio: 24.0,
                 upshift_time: 0.035,
                 downshift_time: 0.06,

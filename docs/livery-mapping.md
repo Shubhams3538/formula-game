@@ -1,9 +1,220 @@
 # Native and template livery authoring
 
-## Ferrari SF26 native UV0 painting
+## Flat UV0 authoring, the active workflow
 
-Ferrari is now authored from the real January 2026 SF26 launch photographs on
-FP04RB's original per-part UV0. No Monoposto sheet is read by this painter.
+New liveries are painted flat in 2D on FP04RB's own nine original UV0 layouts,
+like the source Audi paint and sticker layers. The main-body layout contains
+planar left, right and top views. Place side artwork on the corresponding side
+panel. Keep lighting, AO and material response out of the colour image.
+`native_paint.py` and the older `<team>.json` projector specs remain available,
+but are superseded for authoring. They are not dependencies of the new compositor.
+The UV1/direct-template path for existing teams is unchanged.
+
+### Generate the templates
+
+```sh
+python3 -I tools/livery/uv_template.py
+```
+
+The command opens `raw/gen22/fp04rb_new_rig.blend` using
+`/usr/sbin/blender -b --factory-startup --disable-autoexec` under
+`flock /tmp/f1-blender.lock`. Embedded `rig_ui.py` is never executed.
+Downloaded material-map PNGs in `~/Downloads/fp04rb/material_maps/` are decoded
+as image data. No downloaded Python or Paint.NET code runs. The source Audi
+`textures_audi_main_body.png`, `textures_audi_main_body_stickers.png`, palette
+and `.pdn` documents illustrate the original layered workflow; their colour
+pixels are not reused as the new team's paint.
+
+`raw/gen22/uv-templates/` contains the nine 4096-square template PNGs:
+`main_body`, `front_wing`, `rear_wing`, `mirrors`, `floor`, `cockpit_foam`,
+`winglets`, `front_covers` and `rear_covers`. Each overlays material-map tint,
+UV wire, panel names, FRONT arrows, reflection and shared-texel warnings, and
+a stretch diagnostic. Green means faces align with the panel's planar view;
+red means grazing faces where flat artwork distorts. This cosine diagnostic
+is not a guarantee of equal texel density or distortion-free artwork.
+
+`panels.json` records panel name -> part, source chart, UV bbox and concave
+boundary polygons, local-to-UV frame, orientation, reflection, front direction,
+physical bounds, overlap partners and projection cosine. `masks/` retains exact
+triangle coverage for panels and source material-map swatches. Very small
+hardware islands have indexed names instead of speculative anatomical labels.
+`panel-index.json` is a compact lookup with the largest outer polygon per
+panel; use the full masks/index when holes and disconnected fragments matter.
+The source-blend fingerprint and per-object UV0 hashes are recorded. Mesh
+archives preserve UV0; the generator never repacks or edits it.
+
+Templates flag both overlaps between islands and folds within an island.
+Those texels cannot carry different artwork on the surfaces sharing them.
+`allow_shared: true` acknowledges that limit for symmetric artwork. The
+1024-square overlap sampling can miss subpixel overlaps; inspect the template
+and the on-car result as well. `--reuse-meshes` skips Blender only when the
+cached export's source fingerprint still matches.
+
+### Paint a team
+
+The first layout is `tools/livery/ferrari-sf26.layout.json`. The compositor is
+team independent. A layout needs `schema: 1`, `team`, `source_sha256`, `palette`,
+`padding`, and all nine `parts`. Every part has a base `color`, optional `base`
+layers, and optional `stickers`, ordered bottom to top.
+
+Base layers accept a `color` or `gradient` with `from`, `to` and a two-point
+`axis`. Target a named `panel`, a union of `panels`, a material-map `region`
+from the index, and/or a polygon. Polygon `space: "panel"` uses panel-local
+coordinates; `space: "uv_px"` uses pixels in the 4096 source layout. Masks
+intersect, so a colour boundary cannot spill onto a neighbouring island.
+Optional `face_mask` selects an exported flat viewing mask, such as
+`main_body:left-side` or `main_body:right-side`. These side masks require a
+side-normal cosine above 0.7 and vertical-normal magnitude below 0.6. Use them
+to keep Shell, CEVA and UniCredit off the upward-facing sidepod shoulders.
+Top, bottom, front and rear masks are also indexed. Geometry is read only by
+the template exporter; composition intersects ordinary 2D PNG selections.
+
+Sticker coordinates use the panel's physical reading orientation. `position`
+is the centre in normalized panel coordinates, `width` is a fraction of panel
+width, and height preserves the cropped artwork's aspect ratio in texture
+pixels. Optional `size: [width, height]` overrides both dimensions. `rotation`
+is clockwise in that local frame. `flip: "auto"` uses the frame's reflection
+exactly once. `flip: "none"` suppresses it; `"x"` adds a horizontal flip.
+Stickers clip to their named panel unless `clip: false` is explicit. `variant`
+can select `<stem>-<variant>.png` or an alpha-preserving hex tint.
+
+For a curved UV strip or a mark crossing a seam, optional `warp_uv_px` stores a
+rectangular grid of flat destination pixel coordinates. The artwork's regular
+grid is mapped piecewise affinely onto those 2D points. The grid order explicitly
+sets handedness; `position`, `size`, `rotation` and `flip` do not apply to that
+warp. This is an image-editor control mesh, with no 3D positions, normals or
+projectors in the compositor. Keep separate complementary artwork halves when
+the two sides of a source UV seam need different flat footprints.
+
+```json
+{
+  "image": "shell-colour.png",
+  "panel": "sidepod-left",
+  "position": [0.43, 0.48],
+  "width": 0.22,
+  "rotation": 0,
+  "flip": "auto"
+}
+```
+
+```sh
+python3 -I tools/livery/compose_livery.py tools/livery/ferrari-sf26.layout.json \
+  --logos "$HOME/.cache/livery-2d/ferrari/logos" \
+  --out "$HOME/.cache/livery-2d/ferrari/final-4096"
+
+# Existing installer: UV0, 4096 player, 2048 LOD1, 1024 LOD2.
+python3 -I tools/livery/install_liveries.py --native \
+  --map "ferrari=$HOME/.cache/livery-2d/ferrari/final-4096"
+```
+
+Composition produces nine PNGs and nine `.ora` OpenRaster documents, retaining
+separate paint-region and sticker layers. PNGs receive nearest-covered-texel
+seam dilation. ORA layers retain clean editable artwork; dilation is reapplied
+after import. `native-manifest.json` records UV0, all parts, geometry/layout/
+panel-index/artwork hashes and output hashes, using the existing installer
+contract. `--size 1024` can make diagnostic drafts; installation requires 4096.
+The exporter streams one layer at a time into the ORA archive so large layouts
+do not retain dozens of full-resolution image buffers in memory.
+Composition stages the full set before publishing it. A failed layer leaves
+the previous output set intact. Preview validates all nine matching square
+PNGs before opening the scene for rendering, so missing paint cannot silently
+produce a neutral-material review.
+
+Ferrari review-01 adds artwork corrections alongside the prepared logos.
+Regenerate them from the recorded SVG and original launch photograph before
+composing the revised Ferrari layout:
+
+```sh
+python3 -I tools/livery/prepare_sf26_review_artwork.py \
+  --sources "$HOME/.cache/sf26-native/logos" \
+  --references "$HOME/.cache/sf26-native/refs" \
+  --out "$HOME/.cache/livery-2d/ferrari/logos"
+```
+
+`REVIEW-01-SOURCES.tsv` records their provenance. The small photographed badges
+retain the supplied photo's limited resolution; enlarged PNG dimensions do not
+add detail. UniCredit retains the transparent slash and dark outlined lettering.
+The HP halves are reproducible crops of the prepared HP artwork for its UV seam.
+
+For a material-detail comparison, pass `--source-detail` to the Blender preview.
+It applies the same metre-scaled carbon normal used by the car exporter only
+to dark paint texels, and uses the source tyre marking alpha and its coordinate
+graph with an opaque PBR shader.
+It does not change the installed car or compound
+selection. The default neutral-hardware preview remains useful for paint work.
+Concurrent authoring sessions on this workstation run Blender through
+`~/.cache/livery-2d/blender_slot.sh`, which owns one of the two shared slots.
+Do not start an additional unlocked Blender process while those slots are busy.
+
+Open the ORA documents in Krita or GIMP and save them beside `ora-index.json`.
+Editors can drop the embedded custom metadata; that sidecar retains the team
+and UV contract. Re-import reads actual layers, including normal-blend groups,
+visibility, offsets and opacity, rather than an editor's stale merged preview.
+Unsupported blend modes fail explicitly. Flatten those modes to normal layers
+in the editor before import.
+
+```sh
+python3 -I tools/livery/compose_livery.py \
+  --reimport "$HOME/.cache/livery-2d/ferrari/final-4096" \
+  --out "$HOME/.cache/livery-2d/ferrari/reimported"
+python3 -I tools/livery/install_liveries.py --native \
+  --map "ferrari=$HOME/.cache/livery-2d/ferrari/reimported"
+```
+
+### Review and verify
+
+```sh
+"$HOME/.cache/livery-2d/blender_slot.sh" /usr/sbin/blender -b --factory-startup \
+  --disable-autoexec raw/gen22/fp04rb_new_rig.blend --python-exit-code 1 \
+  --python tools/livery/render_native_preview.py -- \
+  "$HOME/.cache/livery-2d/ferrari/final-4096" "$HOME/.cache/livery-2d/ferrari/final-blender"
+
+flock /tmp/f1-renderer.lock env F1_TEST_ASSETS="$PWD/assets" F1_TEST_TEAM=ferrari \
+  F1_TEST_OUTPUT="$HOME/.cache/livery-2d/ferrari/game" \
+  cargo test -p f1-the-game rendered_car_review -- --ignored --nocapture
+
+python3 -I -m unittest discover -s tools/livery -p 'test_*.py'
+cargo test --workspace --lib --bins
+cargo clippy --workspace --all-targets -- -D warnings
+cargo fmt --all -- --check
+```
+
+The renderer needs a Vulkan display. Its native contract covers the player and
+both opponent LODs, including UV0 base colour, AO and normals. Restart after
+installation. Only the selected team's stale `template.png` files are removed;
+other teams and their direct sheets are preserved.
+
+Use `native_contact_sheet.py` with reference, Blender and game paths, including
+the opponent captures. Downscale inputs before reviewing; never open raw
+renders, textures or photos. Review one bounded contact at a time, at most two
+images per tool step, never re-view judged images, and record strict verdicts
+in `~/.cache/livery-2d/ferrari/ledger.md`. Build/install/runtime success does not
+establish a photographic match. Paint boundaries, colours, sponsor shapes,
+sizes and positions remain failures until the corresponding reference agrees.
+Only FP04RB's 2022 body geometry may remain as an allowed shape difference.
+
+For the next six teams, reuse this atlas and compositor with a separate
+`<team>-<car>.layout.json`, using each team's existing references, logos and
+spec in `~/.cache/native-2026/<team>/`. Those teams are not authored by this task.
+
+The flat Ferrari candidate is **not photographically accepted**. In particular,
+joining the top HP does not by itself fix its distorted side appearance.
+Read the current strict review ledger and final comparison
+contacts before treating the layout as finished artwork. The toolchain's
+tests and the native renderer contract establish separate technical results.
+The authoritative photo corrections retain the white cockpit sidewalls and
+surround, black rail text, carbon halo with white partner words, and the
+`ZYN 16` nose stack. Earlier instructions to make the surround red or remove
+the nose number were superseded. The rear-facing DRS face carries blue IBM;
+the upper wing planes stay carbon. CEVA and UniCredit use side-facing masks.
+Shell uses a flat control grid to retain its complete silhouette. These marks'
+remaining size/position differences and the side HP distortion are artwork
+failures, not accepted body-shape differences.
+
+## Retained 3D painter, superseded for authoring
+
+The older Ferrari painter uses the January 2026 SF26 launch photographs on
+FP04RB's original per-part UV0. No Monoposto sheet is read by that painter.
 McLaren continues to use its existing 2025 direct-template UV1 path below.
 `tools/livery/ferrari-sf26.json` records physical colour boundaries and decal
 projectors in the source car frame. `ferrari-sf26-logos.json` records public

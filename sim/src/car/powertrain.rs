@@ -124,7 +124,17 @@ impl Powertrain {
             }
             return;
         }
-        if self.rpm > spec.rev_limit * 0.985 && self.gear < top {
+        // Shift where the next ratio supplies more wheel power. Waiting for
+        // the limiter can strand seventh below its shift point at high drag.
+        let next_rpm = if self.gear < top {
+            Self::wheel_rpm(spec, self.gear + 1, speed, wheel_radius)
+        } else {
+            0.0
+        };
+        let more_power = self.rpm >= spec.peak_power_rpm
+            && power_shape(next_rpm / spec.peak_power_rpm)
+                > power_shape(self.rpm / spec.peak_power_rpm);
+        if self.gear < top && (self.rpm > spec.rev_limit * 0.985 || more_power) {
             self.shift_up(spec, speed);
         } else if self.gear > 1
             && self.rpm < spec.peak_power_rpm * 0.78
