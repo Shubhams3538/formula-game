@@ -24,6 +24,9 @@ pub struct CarInput {
     pub brake: f64,
     pub shift_up: bool,
     pub shift_down: bool,
+    /// Asks to open DRS; it opens only where the race allows it.
+    #[serde(default)]
+    pub drs: bool,
 }
 
 /// Driving aids. They help with control, never with racecraft, and are
@@ -39,6 +42,9 @@ pub struct Assists {
     /// Mild slide recovery, 0..1.
     pub stability: f64,
     pub automatic_gears: bool,
+    /// Lets this driver open DRS anywhere, not only where it is earned.
+    #[serde(default)]
+    pub drs_anywhere: bool,
 }
 
 impl Default for Assists {
@@ -49,7 +55,31 @@ impl Default for Assists {
             traction: 0.6,
             stability: 0.5,
             automatic_gears: false,
+            drs_anywhere: false,
         }
+    }
+}
+
+/// The rear-wing flap. The race sets `available`; the driver opens it, and
+/// braking or leaving the zone closes it.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Drs {
+    pub available: bool,
+    pub open: bool,
+    /// Flap position, 0 closed to 1 fully open.
+    pub flap: f64,
+}
+
+impl Drs {
+    fn update(&mut self, request: bool, brake: f64, dt: f64) {
+        if !self.available || brake > 0.0 {
+            self.open = false;
+        } else if request {
+            self.open = true;
+        }
+        let target = if self.open { 1.0 } else { 0.0 };
+        let rate = dt / crate::drs::ACTUATION;
+        self.flap += (target - self.flap).clamp(-rate, rate);
     }
 }
 
@@ -140,6 +170,7 @@ pub struct Car {
     pub tyres: [AxleTyres; 2],
     pub wheels: [WheelState; 4],
     pub aero: AeroInfluence,
+    pub drs: Drs,
     pub downforce: f64,
     pub track_position: TrackPosition,
     /// Smoothed body-frame acceleration (forward, left), m/s².
@@ -213,6 +244,7 @@ impl Car {
                 ..WheelState::default()
             }; 4],
             aero: AeroInfluence::default(),
+            drs: Drs::default(),
             downforce: 0.0,
             track_position,
             acceleration: DVec2::ZERO,
@@ -259,8 +291,10 @@ impl Car {
         const FULL_LOCK: f64 = 0.36;
         let spec = &self.spec;
         let lift = self.setup.front_lift_area(&spec.aero) + self.setup.rear_lift_area(&spec.aero);
+        // Compressions such as Eau Rouge press the tyres down and allow more lock.
+        let gravity = (GRAVITY + self.vertical_acceleration).clamp(GRAVITY * 0.3, GRAVITY * 2.5);
         let lateral_grip =
-            spec.tyre_friction * (GRAVITY + 0.5 * AIR_DENSITY * lift * speed * speed / spec.mass);
+            spec.tyre_friction * (gravity + 0.5 * AIR_DENSITY * lift * speed * speed / spec.mass);
         let kinematic = (spec.wheelbase() * lateral_grip / speed.max(1.0).powi(2)).atan();
         // Lets the driver take the front tyres just past their peak: enough to
         // feel understeer when overdriving, not enough to make full lock correct.
@@ -290,8 +324,13 @@ impl Car {
             if self.powertrain.gear == powertrain::NEUTRAL && input.throttle > 0.1 {
                 self.powertrain.shift_up(&spec.engine, forward_speed);
             }
-            self.powertrain
-                .auto_shift(&spec.engine, forward_speed, rear_radius, input.throttle);
+            self.powertrain.auto_shift(
+                &spec.engine,
+                forward_speed,
+                rear_radius,
+                input.throttle,
+                input.brake,
+            );
         }
         let throttle = input.throttle.clamp(0.0, 1.0);
         let brake = input.brake.clamp(0.0, 1.0);
@@ -304,16 +343,19 @@ impl Car {
         let response = 30.0 - 18.0 * self.assists.steering;
         self.steer_angle += (target - self.steer_angle) * (dt * response).min(1.0);
 
-        // Aerodynamics.
+        // Aerodynamics. An open DRS flap stalls part of the rear wing.
+        self.drs.update(input.drs, brake, dt);
         let dynamic_pressure = 0.5 * AIR_DENSITY * speed * speed;
         let front_downforce = dynamic_pressure
             * self.setup.front_lift_area(&spec.aero)
             * self.aero.front_downforce_scale;
         let rear_downforce = dynamic_pressure
-            * self.setup.rear_lift_area(&spec.aero)
+            * (self.setup.rear_lift_area(&spec.aero) - spec.aero.drs_lift * self.drs.flap)
             * self.aero.rear_downforce_scale;
         self.downforce = front_downforce + rear_downforce;
-        let drag = dynamic_pressure * self.setup.drag_area(&spec.aero) * self.aero.drag_scale;
+        let drag = dynamic_pressure
+            * (self.setup.drag_area(&spec.aero) - spec.aero.drs_drag * self.drs.flap)
+            * self.aero.drag_scale;
 
         // Vertical loads with quasi-static weight transfer.
         let weight =
@@ -627,7 +669,7 @@ mod tests {
     fn car_on(track: &Track) -> Car {
         let (position, yaw) = track.grid_slot(0);
         Car::new(
-            Arc::new(CarSpec::rb22(test_wheels(), 5.4, 1.9)),
+            Arc::new(CarSpec::gen22(test_wheels(), 5.4, 1.9)),
             Setup::default(),
             Assists {
                 automatic_gears: true,
@@ -643,6 +685,163 @@ mod tests {
         let dt = 1.0 / 360.0;
         for _ in 0..(seconds / dt) as usize {
             car.step(&input, track, dt);
+        }
+    }
+
+    /// Times from rest to each speed (km/h) at full throttle with automatic
+    /// gears, plus the speed reached after `seconds`.
+    fn launch(car: &mut Car, marks: &[f64], seconds: f64) -> (Vec<f64>, f64) {
+        let track = oval_track();
+        let input = CarInput {
+            throttle: 1.0,
+            ..CarInput::default()
+        };
+        let dt = 1.0 / 360.0;
+        let mut times = vec![f64::NAN; marks.len()];
+        for tick in 0..(seconds / dt) as usize {
+            // Stay on the straight: put the car back on the grid every half
+            // second, keeping its speed and gear.
+            if tick % 180 == 0 {
+                let (position, yaw) = track.grid_slot(0);
+                let speed = car.speed();
+                car.position = position;
+                car.yaw = yaw;
+                car.yaw_rate = 0.0;
+                car.velocity = car.forward() * speed;
+                car.track_position = track.project(position, None);
+            }
+            car.step(&input, &track, dt);
+            for (mark, time) in marks.iter().zip(&mut times) {
+                if time.is_nan() && car.speed() * 3.6 >= *mark {
+                    *time = tick as f64 * dt;
+                }
+            }
+        }
+        (times, car.speed() * 3.6)
+    }
+
+    #[test]
+    fn manual_seventh_reaches_its_shift_point_and_eighth_keeps_pulling() {
+        let track = oval_track();
+        for wing in [0.0, 5.0, 10.0] {
+            let mut car = car_on(&track);
+            car.assists.automatic_gears = false;
+            car.setup.front_wing = wing;
+            car.setup.rear_wing = wing;
+            car.velocity = car.forward() * (260.0 / 3.6);
+            car.powertrain.gear = 7;
+            let mut shifted_at = None;
+            for _ in 0..12 {
+                let speed = car.speed();
+                let (position, yaw) = track.grid_slot(0);
+                car.position = position;
+                car.yaw = yaw;
+                car.yaw_rate = 0.0;
+                car.velocity = car.forward() * speed;
+                car.track_position = track.project(position, None);
+                run(
+                    &mut car,
+                    &track,
+                    CarInput {
+                        throttle: 1.0,
+                        ..CarInput::default()
+                    },
+                    0.5,
+                );
+                if car.powertrain.rpm >= car.spec.engine.rev_limit * 0.985 {
+                    shifted_at = Some(car.speed());
+                    run(
+                        &mut car,
+                        &track,
+                        CarInput {
+                            throttle: 1.0,
+                            shift_up: true,
+                            ..CarInput::default()
+                        },
+                        1.0 / 360.0,
+                    );
+                    break;
+                }
+            }
+            let shift_speed = shifted_at.expect("seventh must reach the manual shift lights");
+            assert_eq!(car.powertrain.gear, 8);
+            launch(&mut car, &[], 5.0);
+            eprintln!(
+                "manual wing {wing}: shift at {:.1}, eighth {:.1} km/h",
+                shift_speed * 3.6,
+                car.speed() * 3.6
+            );
+            assert_eq!(car.powertrain.gear, 8);
+            assert!(
+                car.speed() > shift_speed + 0.5,
+                "wing {wing}: eighth stopped accelerating"
+            );
+        }
+    }
+
+    #[test]
+    fn gen22_reaches_eighth_without_drs_or_a_tow() {
+        let track = oval_track();
+        for wing in [0.0, 5.0, 10.0] {
+            let mut car = car_on(&track);
+            car.setup.front_wing = wing;
+            car.setup.rear_wing = wing;
+            let (times, speed) = launch(&mut car, &[280.0, 300.0], 30.0);
+            eprintln!(
+                "wing {wing}: gear {}, speed {speed:.1}, rpm {:.0}, 280/300 {times:?}",
+                car.powertrain.gear, car.powertrain.rpm
+            );
+            assert_eq!(car.powertrain.gear, 8, "wing {wing}: {speed:.1} km/h");
+        }
+    }
+
+    #[test]
+    fn launch_and_top_speed_match_a_race_trim_f1_car() {
+        let track = oval_track();
+        let mut car = car_on(&track);
+        let (times, top) = launch(&mut car, &[100.0, 200.0, 300.0], 30.0);
+        // Roughly 2.6 s to 100 km/h, 5 s to 200 and 10-11 s to 300, then
+        // ~320-330 km/h flat out without a tow or DRS.
+        assert!((2.4..3.0).contains(&times[0]), "{times:?}");
+        assert!((4.6..5.4).contains(&times[1]), "{times:?}");
+        assert!((10.0..11.5).contains(&times[2]), "{times:?}");
+        assert!((318.0..335.0).contains(&top), "{top} km/h");
+    }
+
+    #[test]
+    fn automatic_gears_blip_down_under_braking() {
+        let track = oval_track();
+        let mut car = car_on(&track);
+        launch(&mut car, &[], 9.0);
+        assert!(car.powertrain.gear >= 7, "gear {}", car.powertrain.gear);
+        let brake = CarInput {
+            brake: 1.0,
+            ..CarInput::default()
+        };
+        // Stay on the straight while braking from ~280 km/h.
+        for _ in 0..12 {
+            let (position, yaw) = track.grid_slot(0);
+            let speed = car.speed();
+            car.position = position;
+            car.yaw = yaw;
+            car.yaw_rate = 0.0;
+            car.velocity = car.forward() * speed;
+            run(&mut car, &track, brake, 0.25);
+            let wheel_rpm = powertrain::Powertrain::wheel_rpm(
+                &car.spec.engine,
+                car.powertrain.gear,
+                car.forward_speed(),
+                car.spec.wheels[2].radius,
+            );
+            if car.speed() > 25.0 {
+                // A gear low enough to keep the engine in its power band.
+                assert!(
+                    wheel_rpm > car.spec.engine.peak_power_rpm * 0.7,
+                    "{:.0} km/h in gear {} at {wheel_rpm:.0} rpm",
+                    car.speed() * 3.6,
+                    car.powertrain.gear
+                );
+            }
         }
     }
 
@@ -732,6 +931,70 @@ mod tests {
         };
         assert!(top_speed(0.85) > top_speed(1.0) + 1.0);
     }
+
+    #[test]
+    fn drs_opens_only_when_available_and_braking_closes_it() {
+        let track = oval_track();
+        let mut car = car_on(&track);
+        let request = CarInput {
+            throttle: 1.0,
+            drs: true,
+            ..CarInput::default()
+        };
+        run(&mut car, &track, request, 0.5);
+        assert!(
+            !car.drs.open && car.drs.flap == 0.0,
+            "opened outside a zone"
+        );
+        car.drs.available = true;
+        run(&mut car, &track, request, crate::drs::ACTUATION + 0.01);
+        assert!(car.drs.open && car.drs.flap == 1.0);
+        // The flap stays open without holding the button, until the brakes go on.
+        let cruise = CarInput {
+            throttle: 1.0,
+            ..CarInput::default()
+        };
+        run(&mut car, &track, cruise, 0.1);
+        assert!(car.drs.open);
+        let brake = CarInput {
+            brake: 0.5,
+            ..CarInput::default()
+        };
+        run(&mut car, &track, brake, crate::drs::ACTUATION + 0.01);
+        assert!(!car.drs.open && car.drs.flap == 0.0);
+        // Re-opening needs a fresh request.
+        run(&mut car, &track, cruise, 0.1);
+        assert!(!car.drs.open);
+    }
+
+    #[test]
+    fn open_drs_raises_top_speed_and_costs_rear_downforce() {
+        let track = oval_track();
+        let flat_out = |drs| CarInput {
+            throttle: 1.0,
+            drs,
+            ..CarInput::default()
+        };
+        let run_flat = |drs: bool| {
+            let mut car = car_on(&track);
+            car.velocity = car.forward() * 60.0;
+            car.powertrain.gear = 6;
+            car.drs.available = drs;
+            for _ in 0..12 {
+                let (position, yaw) = track.grid_slot(0);
+                car.position = position;
+                car.yaw = yaw;
+                car.yaw_rate = 0.0;
+                car.velocity = car.forward() * car.speed();
+                run(&mut car, &track, flat_out(drs), 1.0);
+            }
+            (car.speed(), car.downforce / car.speed().powi(2))
+        };
+        let (closed, closed_downforce) = run_flat(false);
+        let (open, open_downforce) = run_flat(true);
+        assert!(open > closed + 1.5, "{closed} -> {open} m/s");
+        assert!(open_downforce < closed_downforce * 0.95);
+    }
 }
 
 #[cfg(test)]
@@ -745,7 +1008,7 @@ mod debug_probe {
     fn probe_corner() {
         let track = oval_track();
         let mut car = Car::new(
-            Arc::new(CarSpec::rb22(test_wheels(), 5.4, 1.9)),
+            Arc::new(CarSpec::gen22(test_wheels(), 5.4, 1.9)),
             Setup::default(),
             Assists {
                 automatic_gears: true,
@@ -803,7 +1066,7 @@ mod debug_probe {
         let track = oval_track();
         let (position, yaw) = track.grid_slot(0);
         let mut car = Car::new(
-            Arc::new(CarSpec::rb22(test_wheels(), 5.4, 1.9)),
+            Arc::new(CarSpec::gen22(test_wheels(), 5.4, 1.9)),
             Setup::default(),
             Assists {
                 automatic_gears: true,

@@ -1,6 +1,11 @@
 //! Race HUD drawn through egui in Bevy.
 
 mod instruments;
+#[cfg(test)]
+mod proof;
+mod telemetry;
+mod timing;
+pub use telemetry::Telemetry;
 pub mod wheel;
 
 use crate::canvas::{rgba, Align, Finish, Hud};
@@ -13,6 +18,22 @@ use bevy_egui::{
 use racecraft_sim::race::{Phase, RaceEvent};
 use racecraft_sim::Track;
 use serde::{Deserialize, Serialize};
+
+impl Session {
+    /// Called once after each physics step, before either display renders.
+    pub fn sample_hud(&mut self) {
+        self.telemetry.update(&self.race, self.player);
+        self.delta.update(&self.race, self.player);
+    }
+
+    pub fn recover_hud(&mut self) {
+        self.telemetry.recover();
+        self.delta.lap.fill(f64::NAN);
+        self.delta.previous = None;
+        self.delta.average = Default::default();
+        self.delta.current = None;
+    }
+}
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Layout {
@@ -313,18 +334,27 @@ impl Minimap {
         )
     }
 
-    /// A 600 m car-relative window with more space ahead than behind.
+    /// Magnify the road around the car while smoothly compressing distant
+    /// sections into the same view. No part of the circuit needs to be clipped.
     fn nearby(&self, point: (f32, f32), player: (f32, f32), yaw: f64) -> (f32, f32) {
         let dx = (point.0 - player.0) as f64 * self.span;
         let dz = (point.1 - player.1) as f64 * self.span;
         let left = dx * yaw.cos() - dz * yaw.sin();
         let ahead = dx * yaw.sin() + dz * yaw.cos();
-        ((0.5 - left / 600.) as f32, (0.72 - ahead / 600.) as f32)
+        let radius = left.hypot(ahead);
+        let magnification = 0.44 / (radius + 400.);
+        (
+            (0.5 - left * magnification) as f32,
+            (0.54 - ahead * magnification) as f32,
+        )
     }
 }
 
 fn draw_map(hud: &Hud, _style: &HudStyle, session: &Session, mode: MapMode, scale: f32) {
-    let size = 240. * scale;
+    let size = match mode {
+        MapMode::FullCircuit => 240.,
+        MapMode::Nearby => 330.,
+    } * scale;
     let mx = hud.width() - size - 24. * scale;
     let my = 24. * scale;
     let inset = 24. * scale;
@@ -332,11 +362,6 @@ fn draw_map(hud: &Hud, _style: &HudStyle, session: &Session, mode: MapMode, scal
         egui::pos2(mx + inset, my + inset),
         egui::pos2(mx + size - inset, my + size - 16. * scale),
     );
-    let clipped = Hud {
-        painter: hud.painter.with_clip_rect(rect),
-        size: hud.size,
-        finish: hud.finish,
-    };
     let car = &session.race.entrants[session.player].car;
     let player = session.minimap.project(car.position.x, car.position.z);
     let map = |point| {
@@ -353,17 +378,14 @@ fn draw_map(hud: &Hud, _style: &HudStyle, session: &Session, mode: MapMode, scal
     for index in 0..points.len() {
         let a = map(points[index]);
         let b = map(points[(index + 1) % points.len()]);
-        if rect.intersects(
-            egui::Rect::from_two_pos(egui::pos2(a.0, a.1), egui::pos2(b.0, b.1)).expand(3. * scale),
-        ) {
-            clipped.line(a, b, 6. * scale, Color::from_black_alpha(150));
-            clipped.line(a, b, 3. * scale, hud.finish.colors().ink);
-        }
+        hud.line(a, b, 6. * scale, Color::from_black_alpha(150));
+        hud.line(a, b, 3. * scale, hud.finish.colors().ink);
     }
+
     let start = map(points[0]);
     for row in 0..3 {
         for column in 0..3 {
-            clipped.fill_rect(
+            hud.fill_rect(
                 start.0 + (column as f32 - 1.5) * 3. * scale,
                 start.1 + (row as f32 - 1.5) * 3. * scale,
                 3. * scale,
@@ -383,10 +405,20 @@ fn draw_map(hud: &Hud, _style: &HudStyle, session: &Session, mode: MapMode, scal
         let point = map(session
             .minimap
             .project(entrant.car.position.x, entrant.car.position.z));
+        let clipped = Hud {
+            painter: hud.painter.with_clip_rect(rect),
+            size: hud.size,
+            finish: hud.finish,
+        };
         clipped.circle(point, 4.5 * scale, WELL);
         clipped.circle(point, 3. * scale, WHITE);
     }
     let me = map(player);
+    let clipped = Hud {
+        painter: hud.painter.with_clip_rect(rect),
+        size: hud.size,
+        finish: hud.finish,
+    };
     clipped.circle(me, 7. * scale, WELL);
     clipped.circle(me, 5.5 * scale, ACCENT);
 }
@@ -409,42 +441,66 @@ impl Messages {
     }
 }
 
-/// Live delta against the player's best lap, sampled per centerline station.
+/// Best-lap reference recorded at exact station crossings on physics ticks.
 #[derive(Default)]
 pub struct Delta {
     best: Vec<f64>,
+    best_time: f64,
     lap: Vec<f64>,
     laps: u32,
+    previous: Option<(f64, f64)>,
+    average: telemetry::Average<72>,
     current: Option<f64>,
+    last_tick: Option<u64>,
 }
 
 impl Delta {
+    fn record_to(&mut self, distance: f64, elapsed: f64, spacing: f64) {
+        let (before, time) = self.previous.unwrap_or((0., 0.));
+        if distance > before && distance - before < 50. {
+            let first = (before / spacing).floor() as usize + 1;
+            let last = (distance / spacing).floor() as usize;
+            for station in first..=last.min(self.lap.len() - 1) {
+                if self.lap[station].is_nan() {
+                    let fraction = (station as f64 * spacing - before) / (distance - before);
+                    self.lap[station] = time + fraction * (elapsed - time);
+                }
+            }
+        }
+        self.previous = Some((distance, elapsed));
+    }
+
     fn update(&mut self, race: &racecraft_sim::Race, player: usize) {
+        if self.last_tick == Some(race.tick) {
+            return;
+        }
+        if self.last_tick.is_some_and(|tick| race.tick < tick) {
+            *self = Self::default();
+        }
         let timing = &race.entrants[player].timing;
         let count = race.track.stations.len();
+        let spacing = race.track.length / count as f64;
         if self.lap.len() != count {
+            *self = Self::default();
             self.lap = vec![f64::NAN; count];
+            self.lap[0] = 0.;
         }
+        self.last_tick = Some(race.tick);
         if timing.laps_completed != self.laps {
-            let filled = self.lap.iter().filter(|t| t.is_finite()).count();
-            if timing.laps_completed > self.laps
-                && timing.last_lap.is_some()
-                && timing.last_lap == timing.best_lap
-                && filled * 10 > count * 9
-            {
-                // Carry samples over stations skipped by a fast frame.
-                let mut last = 0.0;
-                for time in &mut self.lap {
-                    if time.is_finite() {
-                        last = *time;
-                    } else {
-                        *time = last;
-                    }
+            if let Some(last) = timing.last_lap {
+                self.record_to(race.track.length, last, spacing);
+                if timing.laps_completed == self.laps + 1
+                    && timing.last_lap == timing.best_lap
+                    && self.lap.iter().all(|time| time.is_finite())
+                {
+                    self.best.clone_from(&self.lap);
+                    self.best_time = last;
                 }
-                self.best = std::mem::replace(&mut self.lap, vec![f64::NAN; count]);
-            } else {
-                self.lap.fill(f64::NAN);
             }
+            self.lap.fill(f64::NAN);
+            self.lap[0] = 0.;
+            self.previous = None;
+            self.average = Default::default();
             self.laps = timing.laps_completed;
         }
         self.current = None;
@@ -452,15 +508,23 @@ impl Delta {
             || timing.finish_time.is_some()
             || timing.distance < 0.0
         {
+            self.average = Default::default();
             return;
         }
         let elapsed = race.time - timing.lap_start;
-        let station = race.track.station_at(timing.distance);
-        if self.lap[station].is_nan() {
-            self.lap[station] = elapsed;
-        }
-        if let Some(&best) = self.best.get(station) {
-            self.current = Some(elapsed - best);
+        let distance = timing.distance.rem_euclid(race.track.length);
+        self.record_to(distance, elapsed, spacing);
+        let station = (distance / spacing).floor() as usize;
+        if let Some(&before) = self.best.get(station) {
+            let after = self
+                .best
+                .get(station + 1)
+                .copied()
+                .unwrap_or(self.best_time);
+            let fraction = distance / spacing - station as f64;
+            let delta = elapsed - (before + fraction * (after - before));
+            self.average.push(delta);
+            self.current = Some(self.average.value(delta));
         }
     }
 }
@@ -469,6 +533,76 @@ pub fn format_time(seconds: f64) -> String {
     let minutes = (seconds / 60.0).floor();
     let rest = seconds - minutes * 60.0;
     format!("{}:{:06.3}", minutes as u32, rest)
+}
+
+/// Tenths are readable while running; completed times retain milliseconds.
+fn format_live_time(seconds: f64) -> String {
+    let tenths = (seconds.max(0.) * 10.).floor() as u64;
+    format!("{}:{:02}.{}", tenths / 600, tenths / 10 % 60, tenths % 10)
+}
+
+fn lap_clock(race: &racecraft_sim::Race, player: usize) -> String {
+    let timing = &race.entrants[player].timing;
+    if timing.finish_time.is_some() {
+        return timing
+            .last_lap
+            .map(format_time)
+            .unwrap_or_else(|| "-:--.---".into());
+    }
+    format_live_time(if matches!(race.phase, Phase::Countdown { .. }) {
+        0.
+    } else {
+        race.time - timing.lap_start
+    })
+}
+
+#[cfg(test)]
+mod timing_tests {
+    use super::*;
+
+    #[test]
+    fn running_clock_uses_tenths_and_finish_freezes_the_exact_last_lap() {
+        let mut session = crate::tests::session();
+        session.race.phase = Phase::Racing;
+        session.race.time = 65.987;
+        assert_eq!(lap_clock(&session.race, 0), "1:05.9");
+        session.race.entrants[0].timing.last_lap = Some(65.987);
+        session.race.entrants[0].timing.finish_time = Some(65.987);
+        session.race.time += 20.;
+        assert_eq!(lap_clock(&session.race, 0), "1:05.987");
+        assert_eq!(format_live_time(59.999), "0:59.9");
+        assert_eq!(format_live_time(60.), "1:00.0");
+    }
+
+    #[test]
+    fn an_identical_lap_has_no_station_sawtooth_including_the_finish_line() {
+        let mut session = crate::tests::session();
+        session.race.phase = Phase::Racing;
+        let length = session.race.track.length;
+        let lap_time = length / 40.;
+        for tick in 0..(lap_time * 360. * 3.) as u64 {
+            session.race.tick = tick;
+            session.race.time = tick as f64 / 360.;
+            let distance = session.race.time * 40.;
+            let laps = (distance / length).floor() as u32;
+            let timing = &mut session.race.entrants[0].timing;
+            timing.distance = distance;
+            timing.laps_completed = laps;
+            timing.lap_start = laps as f64 * lap_time;
+            if laps > 0 {
+                timing.last_lap = Some(lap_time);
+                timing.best_lap = Some(lap_time);
+            }
+            session.delta.update(&session.race, 0);
+            if laps > 0 {
+                let delta = session.delta.current.expect("best lap reference recorded");
+                assert!(
+                    delta.abs() < 1e-9,
+                    "identical lap delta at {distance}: {delta}"
+                );
+            }
+        }
+    }
 }
 
 fn follow_events(session: &mut Session) {
@@ -480,29 +614,16 @@ fn follow_events(session: &mut Session) {
             RaceEvent::LightsOut => pending.push(("LIGHTS OUT", GREEN, 2.0)),
             RaceEvent::LapCompleted { entrant, time, .. } if entrant == player => {
                 let best = session.race.entrants[player].timing.best_lap == Some(time);
-                pending.push((
-                    if best {
-                        "PERSONAL BEST"
-                    } else {
-                        "LAP COMPLETE"
-                    },
+                let label = if best {
+                    "PERSONAL BEST"
+                } else {
+                    "LAP COMPLETE"
+                };
+                session.messages.push(
+                    format!("{label}   {}", format_time(time)),
                     if best { PURPLE } else { WHITE },
                     2.5,
-                ));
-                let text = format_time(time);
-                session.messages.push(text, WHITE, 2.5);
-            }
-            RaceEvent::Overtake { entrant, passed } if entrant == player => {
-                let name = session.race.entrants[passed].name.clone();
-                session
-                    .messages
-                    .push(format!("PASSED {}", name.to_uppercase()), GREEN, 2.0);
-            }
-            RaceEvent::Overtake { entrant, passed } if passed == player => {
-                let name = session.race.entrants[entrant].name.clone();
-                session
-                    .messages
-                    .push(format!("PASSED BY {}", name.to_uppercase()), AMBER, 2.0);
+                );
             }
             RaceEvent::Finished { entrant, position } if entrant == player => {
                 session
@@ -528,7 +649,6 @@ pub fn draw(hud: &mut Hud, style: &HudStyle, session: &mut Session, display: Set
         return;
     }
     follow_events(session);
-    session.delta.update(&session.race, session.player);
     if session.race.phase == Phase::Finished {
         session.messages.active.clear();
     }
@@ -548,12 +668,6 @@ pub fn draw(hud: &mut Hud, style: &HudStyle, session: &mut Session, display: Set
     let player = &race.entrants[session.player];
     let car = &player.car;
     let lap = (player.timing.laps_completed + 1).min(race.laps);
-    let current = if matches!(race.phase, Phase::Countdown { .. }) {
-        0.0
-    } else {
-        race.time - player.timing.lap_start
-    };
-
     // Broadcast timing strip; instrument chrome belongs to the physical dials.
     let tower_x = 24.0 * scale;
     let tower_w = 278.0 * scale;
@@ -583,14 +697,37 @@ pub fn draw(hud: &mut Hud, style: &HudStyle, session: &mut Session, display: Set
         ink,
         &format!("{lap}/{}", race.laps),
     );
-    readout(
-        hud,
-        style,
-        14. * scale,
+    let team_position = format!(
+        "{}  P{}",
+        session
+            .identities
+            .get(session.player)
+            .and_then(Option::as_ref)
+            .map_or("", |id| id.team_short.as_str()),
+        race.position_of(session.player)
+    );
+    // Reserve room for LAP and even a three-digit lap count. Fit using the
+    // actual font, since equal character counts can have very different widths.
+    // Keep the team label to the right of the widest four-digit lap readout.
+    let team_width = (tower_w / scale - 152.).max(80.) * scale;
+    let font_size = 18.2 * scale;
+    let measured = hud.text_width(&style.regular, font_size, &team_position);
+    let fitted = font_size * (team_width / measured.max(1.)).min(1.);
+    let team_hud = Hud {
+        painter: hud.painter.with_clip_rect(egui::Rect::from_min_max(
+            egui::pos2(tower_x + tower_w - 12. * scale - team_width, y),
+            egui::pos2(tower_x + tower_w - 12. * scale, y + 35. * scale),
+        )),
+        size: hud.size,
+        finish: hud.finish,
+    };
+    team_hud.text_mid(
+        &style.regular,
+        fitted,
         (tower_x + tower_w - 12. * scale, mid),
         Align::Right,
         dim,
-        &format!("P{}", race.position_of(session.player)),
+        &team_position,
     );
     y += 38. * scale;
     let leader_distance = race.entrants[race.order()[0]].timing.distance;
@@ -638,11 +775,11 @@ pub fn draw(hud: &mut Hud, style: &HudStyle, session: &mut Session, display: Set
             if mine { ink } else { dim },
             &(rank + 1).to_string(),
         );
-        let team = if entrant.car.spec.name == "RB22" {
-            rgba(0.2, 0.3, 0.9, 1.0)
-        } else {
-            rgba(0.9, 0.75, 0.1, 1.0)
-        };
+        let identity = session.identities.get(index).and_then(Option::as_ref);
+        let team = identity.map_or(rgba(0.9, 0.75, 0.1, 1.0), |identity| {
+            let [r, g, b] = identity.primary;
+            Color::from_rgb(r, g, b)
+        });
         hud.fill_round(
             tower_x + 42.0 * scale,
             y + 7.0 * scale,
@@ -657,7 +794,7 @@ pub fn draw(hud: &mut Hud, style: &HudStyle, session: &mut Session, display: Set
             (tower_x + 54.0 * scale, mid),
             Align::Left,
             if mine { ink } else { dim },
-            &entrant.name.to_uppercase(),
+            &identity.map_or_else(|| entrant.name.to_uppercase(), |id| id.abbr.clone()),
         );
         let gap = if rank == 0 {
             "LEADER".to_string()
@@ -676,7 +813,13 @@ pub fn draw(hud: &mut Hud, style: &HudStyle, session: &mut Session, display: Set
                 format!("+{} LAP", (metres / race.track.length) as u32)
             } else {
                 // Each chaser covers the gap at its own pace, not the player's.
-                format!("+{:.1}", metres / entrant.car.speed().max(30.0))
+                format!(
+                    "+{:.1}",
+                    session.telemetry.gaps.get(index).map_or_else(
+                        || metres / entrant.car.speed().max(30.0),
+                        |gap| gap.value(metres / entrant.car.speed().max(30.0)),
+                    )
+                )
             }
         };
         readout(
@@ -690,57 +833,17 @@ pub fn draw(hud: &mut Hud, style: &HudStyle, session: &mut Session, display: Set
         );
         y += row;
     }
-    // Lap timer and split memory share one smoked timing strip.
-    y += 6.0 * scale;
-    hud.fill_rect(tower_x, y, tower_w, 94. * scale, smoke(200));
-    hud.line(
-        (tower_x + 14. * scale, y - 5. * scale),
-        (tower_x + tower_w - 14. * scale, y - 5. * scale),
+    y += 8. * scale;
+    timing::strip(hud, style, session, tower_x, y, tower_w, scale);
+    timing::pass_notice(
+        hud,
+        style,
+        session,
+        tower_x,
+        y + 260. * scale,
+        tower_w,
         scale,
-        colors.edge,
     );
-    let lines = [
-        ("TIME", format_time(current.max(0.0)), ink),
-        (
-            "LAST",
-            player
-                .timing
-                .last_lap
-                .map(format_time)
-                .unwrap_or_else(|| "-:--.---".into()),
-            dim,
-        ),
-        (
-            "BEST",
-            player
-                .timing
-                .best_lap
-                .map(format_time)
-                .unwrap_or_else(|| "-:--.---".into()),
-            PURPLE,
-        ),
-    ];
-    for (label, value, color) in lines {
-        let mid = y + 19.0 * scale;
-        hud.text_mid(
-            &style.bold,
-            16.0 * scale,
-            (tower_x + 16.0 * scale, mid),
-            Align::Left,
-            dim,
-            label,
-        );
-        readout(
-            hud,
-            style,
-            18.0 * scale,
-            (tower_x + tower_w - 14.0 * scale, mid),
-            Align::Right,
-            color,
-            &value,
-        );
-        y += row;
-    }
 
     // ---- Start lights / phase banners (top centre)
     if let Phase::Countdown { lights, .. } = race.phase {
@@ -791,65 +894,31 @@ pub fn draw(hud: &mut Hud, style: &HudStyle, session: &mut Session, display: Set
             );
         }
     }
-    if let Some(delta) = session.delta.current {
-        let text = format!("{delta:+.3}");
-        let box_w = 150.0 * scale;
-        let box_x = width * 0.5 - box_w * 0.5;
-        let color = if delta <= 0.0 { GREEN } else { ACCENT };
-        hud.fill_round(box_x, 82.0 * scale, box_w, 40.0 * scale, 6.0 * scale, WELL);
-        hud.stroke_round(
-            box_x,
-            82.0 * scale,
-            box_w,
-            40.0 * scale,
-            6.0 * scale,
-            2.0 * scale,
-            color,
-        );
-        readout(
-            hud,
-            style,
-            26.0 * scale,
-            (width * 0.5, 102.0 * scale),
-            Align::Center,
-            color,
-            &text,
-        );
-    }
-    let mut banner_y = height * 0.28;
+    let mut banner_y = 76.0 * scale;
     for (text, color, remaining) in &session.messages.active {
         let fade = remaining.min(0.4) / 0.4;
         let color = color.gamma_multiply(fade);
-        let text_width = hud.text_width(&style.bold, 40.0 * scale, text);
-        let banner_x = width * 0.5 - text_width * 0.5 - 24.0 * scale;
-        let banner_w = text_width + 48.0 * scale;
-        hud.plate(
-            egui::Rect::from_min_size(
-                egui::pos2(banner_x, banner_y),
-                egui::vec2(banner_w, 56. * scale),
-            ),
-            8. * scale,
-            colors.top.gamma_multiply(fade),
-            colors.bottom.gamma_multiply(fade),
-            colors.edge.gamma_multiply(fade),
-        );
-        hud.fill_round(
+        let font_size = 18.0 * scale;
+        let text_width = hud.text_width(&style.bold, font_size, text);
+        let banner_w = text_width + 32.0 * scale;
+        let banner_x = (width - banner_w) * 0.5;
+        hud.fill_rect(
             banner_x,
-            banner_y + 10.0 * scale,
-            4.0 * scale,
-            36.0 * scale,
-            2.0 * scale,
-            color,
+            banner_y,
+            banner_w,
+            34.0 * scale,
+            WELL.gamma_multiply(fade),
         );
-        hud.text(
+        hud.fill_rect(banner_x, banner_y, 3.0 * scale, 34.0 * scale, color);
+        hud.text_mid(
             &style.bold,
-            40.0 * scale,
-            (width * 0.5, banner_y + 2.0 * scale),
+            font_size,
+            (width * 0.5, banner_y + 17.0 * scale),
             Align::Center,
             color,
             text,
         );
-        banner_y += 64.0 * scale;
+        banner_y += 40.0 * scale;
     }
 
     instruments::draw(hud, style, session, display.layout, scale);
@@ -966,15 +1035,39 @@ mod tests {
             -std::f64::consts::FRAC_PI_2,
         ] {
             let center = map.nearby(player, player, yaw);
-            assert!((center.0 - 0.5).abs() < 1e-5 && (center.1 - 0.72).abs() < 1e-5);
+            assert!((center.0 - 0.5).abs() < 1e-5 && (center.1 - 0.54).abs() < 1e-5);
             let ahead = map.project(x + yaw.sin() * 300., z + yaw.cos() * 300.);
             let ahead = map.nearby(ahead, player, yaw);
-            assert!((ahead.0 - 0.5).abs() < 1e-4 && (ahead.1 - 0.22).abs() < 1e-4);
+            assert!((ahead.0 - center.0).abs() < 1e-4 && ahead.1 < center.1);
             let left = map.project(x + yaw.cos() * 300., z - yaw.sin() * 300.);
             let left = map.nearby(left, player, yaw);
-            assert!(left.0.abs() < 1e-4 && (left.1 - 0.72).abs() < 1e-4);
+            assert!(left.0 < center.0 && (left.1 - center.1).abs() < 1e-4);
+            for &point in &map.points {
+                let focused = map.nearby(point, player, yaw);
+                assert!((0. ..=1.).contains(&focused.0) && (0. ..=1.).contains(&focused.1));
+            }
         }
     }
+    #[test]
+    fn focused_map_keeps_far_sections_visible_and_gives_nearby_road_more_space() {
+        let session = crate::tests::session();
+        let map = &session.minimap;
+        for &player in map.points.iter().step_by(10) {
+            for yaw in [0., 1., 3.] {
+                for &point in &map.points {
+                    let point = map.nearby(point, player, yaw);
+                    assert!((0. ..=1.).contains(&point.0) && (0. ..=1.).contains(&point.1));
+                }
+            }
+        }
+        let p = (0.5, 0.5);
+        let near = map.nearby((p.0, p.1 + (100. / map.span) as f32), p, 0.);
+        let next = map.nearby((p.0, p.1 + (200. / map.span) as f32), p, 0.);
+        let far = map.nearby((p.0, p.1 + (5000. / map.span) as f32), p, 0.);
+        assert!(0.54 - near.1 > near.1 - next.1);
+        assert!(far.1 > 0. && far.1 < next.1);
+    }
+
     use racecraft_sim::car::spec::Compound;
 
     #[test]

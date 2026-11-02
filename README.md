@@ -1,9 +1,9 @@
 # Formula Game — F1 Racecraft
 
 A formula-style racing game built with Rust and Bevy. Race at Spa-Francorchamps
-with the RB6 or RB22, configurable driving aids, AI opponents, and three camera views.
+with the 2022 ground-effect GEN22 or legacy RB6, configurable driving aids, AI opponents, and three camera views.
 
-![RB22 at Spa-Francorchamps in chase view](docs/screenshots/spa-chase.png)
+![Previous modern-car build at Spa-Francorchamps in chase view](docs/screenshots/spa-chase.png)
 
 ## Download and play
 
@@ -35,7 +35,7 @@ fall back to extraction if FUSE mounting is unavailable. Release assets include
 
 ## What you can do
 
-- Drive the V8-era RB6 or modern RB22 against up to 15 AI opponents.
+- Drive the V8-era RB6 or modern GEN22 against up to 15 AI opponents.
 - Set race length, grid position, tyres, and front/rear wings.
 - Choose Beginner, Balanced, or Unassisted driving, with separate steering, braking, traction, and stability aids.
 - Switch between cockpit, TV pod, and chase cameras, and save camera positions per car.
@@ -44,7 +44,8 @@ fall back to extraction if FUSE mounting is unavailable. Release assets include
 
 **Start here:** choose your car in Race setup, leave Beginner aids enabled, and
 select Start race. Hold **W** to accelerate, use **A/D** to steer and **S** to brake.
-**Esc** opens the pause menu; **C** cycles cameras; **R** recovers the car.
+**Esc** opens the pause menu; **C** cycles cameras; **R** recovers the car;
+**F** (gamepad **B**) opens DRS when the badge above the dash is outlined green.
 
 ## Screenshots
 
@@ -64,7 +65,7 @@ These are captures from the game, not concept renders.
 
 ## Development
 
-A Bevy 0.20 racing game with a deterministic 360 Hz simcade simulation. Select a circuit, car and driving aids from the in-game menu, then race against up to 15 AI drivers. The default RB6 field matches the V8-era sound and proportions; the RB22 provides the modern car and matching field. The simulation includes manual gearing, tyre temperature and wear, wing setup, slipstream, dirty air, car contacts, track collisions, timing and results.
+A Bevy 0.20 racing game with a deterministic 360 Hz simcade simulation. Select a circuit, car and driving aids from the in-game menu, then race against up to 15 AI drivers. The default GEN22 field uses the 2022 teams and drivers; the legacy RB6 field matches the V8-era sound and proportions. The simulation includes manual gearing, tyre temperature and wear, wing setup, slipstream, dirty air, car contacts, track collisions, timing and results.
 
 ### Run from source
 
@@ -79,17 +80,19 @@ The generated assets are separate from this repository. [Download the complete a
 ```text
 assets/
   tracks/spa/{track.json,collision.bin,visual.glb}
-  cars/rb22/{car.json,car.glb}
+  cars/gen22/{car.json,car.glb,car_lod1.glb,car_lod2.glb,teams.json}
   cars/rb6/{car.json,car.glb}
 ```
 
 `tools/track/convert_spa.py` converts the upstream Spa track; `tools/car/prepare_car.py` prepares car models through Blender. Their module docstrings describe the source formats and arguments. The game uses the glTF files directly through Bevy. Car scenes must contain `body`, `wheel_fl`, `wheel_fr`, `wheel_rl` and `wheel_rr` nodes, with wheel pivots at their centres. The simulation and assets use +Z forward, +Y up, +X left, in metres.
 
-Normal launches open Race setup. Choose the circuit, car, laps, AI field, grid slot, tyres and wings, then select Start race. The race waits for its scenes to load before starting the countdown. `--quick-race` skips the menu using the CLI configuration; `--frames` also skips it for capture/testing. Run `cargo run -p f1-the-game -- --help` for the full CLI.
+Normal launches open Race setup. Choose the circuit, car, laps, AI field, grid slot, tyres and wings, then select Start race. The race waits for its scenes to load before starting the countdown. `--quick-race` skips the menu using the CLI configuration; `--frames` also skips it for capture/testing. GEN22 uses one shared stock car with neutral body paint. Custom team liveries are developed in a separate branch stacked on 2.0. Team and driver selections control race identities and HUD colours. Use `--car gen22 --team ferrari --driver leclerc` to choose a 2022 entry, or `--car rb6` for a legacy race. Team and driver default to the first team and its first driver in `teams.json`; `--car rb22` remains a deprecated alias for `gen22`. Run `cargo run -p f1-the-game -- --help` for the full CLI.
 
 **Spa is the only supported circuit in normal builds.** Other track assets are hidden from the menu and rejected by `--track`. To enable unfinished circuits for development, build or run with the opt-in Cargo feature: `cargo run --release -p f1-the-game --features exp -- --assets ./assets`. Experimental builds discover converted circuits such as Silverstone, Bahrain and COTA; deferred Nürburgring assets remain unavailable until their conversion is repaired. The ignored `assets` symlink points at the original asset tree for convenient local launching.
 
 The Graphics tab offers Low, Medium, High (default) and Ultra presets, applied immediately and saved with your preferences; `--graphics low|medium|high|ultra` sets one from the command line. Leaving the window during a race opens the pause menu, and rendering is throttled while the window is unfocused.
+
+Both HUD layouts and wheel dashboards average telemetry on physics ticks. Speed and RPM use a 100 ms window, gaps and tyre/aero readouts use 250 ms, and the best-lap delta uses 200 ms. Numbers refresh at 20 Hz; gears, pedals and warning lights stay immediate. Running clocks show tenths, while completed lap and sector times retain milliseconds. The timing strip keeps all three sector splits, marking old splits LAST until replaced. Position-change notices require 300 ms of continuous change with at least one metre clearance.
 
 Driving aids has Beginner, Balanced and Unassisted presets. Beginner is the default, including automatic gears. Steering guidance follows the racing line when you release steering; strong manual steering overrides it. Corner braking anticipates bends, adds brake pressure and reduces a held accelerator. ABS, traction and stability are separate controls. You still control acceleration. The coloured racing line previews corner speed, and STEER / BRAKE indicators light up during interventions. Pause-menu changes apply immediately. Unassisted disables all aids and automatic shifting.
 
@@ -99,8 +102,8 @@ Aids and per-car camera positions persist in `$XDG_CONFIG_HOME/f1-racecraft/pref
 
 On Linux with the NVIDIA driver under Wayland, the game presents through XWayland: NVIDIA's native Wayland presentation waits for each frame to finish before returning, which serialized CPU and GPU work (set `F1_WAYLAND=1` to keep native Wayland). Sky lighting is generated once per circuit rather than every frame. Together these took the High preset from 115 to 236 fps uncapped on an RTX 3050 laptop with unchanged output. Vertical sync is on by default; turn it off in Graphics or with `--no-vsync`.
 
-- `--benchmark DIR` runs the comparison workload: two computer-controlled cars
-  already moving, separated on the racing line, for 20 seconds. It checks the
+- `--benchmark DIR` runs the comparison workload: the selected field, including an automated player,
+  already moving and separated on the racing line, for 20 seconds. It checks the
   complete drive before opening the window and rejects contact or recovery.
   The measured drive must match that preflight exactly. Loading and warm-up
   are excluded, and VSync is disabled.
@@ -112,9 +115,14 @@ On Linux with the NVIDIA driver under Wayland, the game presents through XWaylan
   PNGs. The report includes frame-time percentiles, 1% low FPS, workload state
   hashes and asset fingerprints. Changed asset fingerprints are expected when
   comparing visual changes; keep them equal when measuring code alone.
+- `--benchmark-grid --benchmark DIR` measures the stationary default grid for
+  20 seconds, retaining all cars and the player camera. Use it separately from
+  the moving workload to check the packed field. Reports record physical render
+  resolution, window size, field size and the selected asset fingerprints.
 - `--frames N --capture FILE` remains a capture utility. Its old FPS log is
   diagnostic, not the repeatable moving benchmark.
 - `F1_DETERMINISTIC=1` with a capture run advances exactly 1/60 s per frame and restarts temporal jitter with the race, so captures from different builds can be compared pixel by pixel.
+- Settings → Graphics has presets plus detailed video settings (anti-aliasing, sharpening, shadows, ambient occlusion, sky, haze, texture detail, AI car detail and Bevy post-processing). Texture detail applies from the next race. Imported textures use BC7 on supported GPUs, keeping Ultra maps at full resolution. The first load encodes and caches blocks in `$XDG_CACHE_HOME/f1-racecraft/bc7-v1`, or `~/.cache/f1-racecraft/bc7-v1`; later loads reuse them. `F1_VIDEO` takes a JSON `graphics::Video` and overrides the settings, including for `--frames` captures and benchmarks.
 - `F1_PROFILE=1` logs per-pass CPU and GPU timings; `--features profile` writes a Chrome trace for ui.perfetto.dev.
 - F3 shows frame rate and frame times in game.
 
@@ -173,19 +181,44 @@ Normal packaging always builds without `exp` and includes only Spa.
 | Frame-rate readout | F3 | — |
 | Quit | Quit game in menu, or window close | Window close |
 
-There are exactly three camera modes: seated cockpit, TV pod above the driver's head, and third-person chase. Use 1 / 2 / 3, C, or Cameras & controls. F4 pauses the race with a live camera preview: adjust height, forward position, pitch, field of view, vibration and horizon stabilization. Positions save separately for RB6 and RB22. Camera cuts reset temporal history; chase smoothing accounts for car velocity to avoid trailing farther behind at speed. `--manual-gears` disables automatic shifting. Keyboard steering and brake pressure are smoothed; gamepad steering has a deadzone and response curve.
+There are exactly three camera modes: seated cockpit, TV pod above the driver's head, and third-person chase. Use 1 / 2 / 3, C, or Cameras & controls. F4 pauses the race with a live camera preview: adjust height, forward position, pitch, field of view, vibration and horizon stabilization. Positions save separately for RB6 and GEN22. Camera cuts reset temporal history; chase smoothing accounts for car velocity to avoid trailing farther behind at speed. `--manual-gears` disables automatic shifting. Keyboard steering and brake pressure are smoothed; gamepad steering has a deadzone and response curve.
 
-The RB6 and RB22 cockpit steering wheels turn with the interpolated front-wheel steering angle, including steering assistance, at a 6:1 ratio. The existing wheel geometry and its attached controls rotate around the wheel centre; the dashboard stays fixed. This uses the steering materials in the supplied converted car models.
+The RB6 and GEN22 cockpit steering wheels turn with the interpolated front-wheel steering angle, including steering assistance, at a 6:1 ratio. GEN22 uses the named `steering_wheel` node, including its live LCD and LEDs; RB6 keeps its legacy wheel and screen pod.
+
+GEN22 opponents use exterior-only near and distant models. The player alone carries
+the full source steering wheel and cockpit controls. The full player geometry
+remains visible; a sun-only LOD1 proxy casts its shadow,
+and opponents use LOD2 shadow proxies when available. Triangle indices are
+reordered once on load to reuse GPU vertex work without reducing geometry.
+Opponent meshes crossfade around 40 m; older asset packages without `car_lod2.glb` use LOD1 throughout.
+
+On GEN22, press F or gamepad East to press the DRS cap with the driver's left thumb, even when DRS is unavailable. The wheel LCD uses the HUD's DRS states: dim when unavailable, outlined green when ready, solid green while open. Braking closes the flap. Button and dial legends retain their source UVs independently of the live LCD.
+
+DRS follows the modern rules. Each circuit gets up to two zones, found from its
+longest straights that end in a braking corner (at Spa: Kemmel into Les Combes,
+and the pit straight into La Source). From lap 2, a car within one second of the
+car ahead at a zone's detection point may open the flap in that zone with F
+(gamepad B). AI cars use it whenever it is earned. Braking or leaving the zone
+closes it. An open flap removes about 10% of the car's drag and some rear
+downforce. The 2010 RB6 predates DRS and has none.
+
+**DRS anywhere** (Driving aids tab, or `--drs-anywhere`) drops the zone and
+one-second rules for your car: F opens the flap anywhere on track from the
+start, and braking still closes it. AI cars keep to the race rules. The
+setting is saved with your other aids.
+
+GEN22 retains original per-part UVs and baked ambient occlusion, with neutral body paint. The player model retains a detailed cockpit with distinct carbon, brass, anodized metal, coloured controls and stickers. Opponents use a lighter mesh with projected normal maps. See [the asset contract](docs/gen22-car.md) for source preparation, rebuilds and comparison renders.
+
 
 The HUD includes the timing tower, lap times, countdown lights, race messages, shift lights, speed, pedals, tyre temperatures/wear, lock-up/sliding indicators, aero effects, minimap and results.
 
 Open **HUD & map** from Race setup or the pause menu to choose between **Digital cockpit**, with illuminated segments and a neutral gear aperture, and **Analog telemetry**, with separate metal-rimmed RPM, speed, pedal and G-force instruments. Tyre temperatures and live tow/wake effects use needle gauges in both layouts. The unboxed minimap supports Full circuit and Nearby track modes. Driving-aid buttons, camera shortcut strips and map headings are omitted while racing; their settings and keyboard shortcuts remain available. The G-force plot uses one G per ring. Both layouts use live simulation data and leave the physical cockpit wheel visible.
 
-The minimap setting is independent: **Full circuit** shows the whole field; **Nearby track** follows the car through a 600 m window with the road ahead pointing up. Both choices apply immediately, survive new races, and are saved with your other preferences. Automated capture runs use the defaults and never write your preferences.
+The minimap setting is independent: **Full circuit** shows the whole field; **Nearby track** magnifies the road around the car with the road ahead pointing up, while compressing distant sections to keep the complete circuit visible. Neither mode uses a rectangular background or crops the track. Both choices apply immediately, survive new races, and are saved with your other preferences. Automated capture runs use the defaults and never write your preferences.
 
 ## Engine sound
 
-The engine voices are synthesized in real time from cylinder firing pulses, exhaust-pipe resonances and intake noise. The RB6 defaults to a high-revving flat-plane V8; the RB22 uses a V6 turbo hybrid with turbo spool, lift-off chatter and electric whine. The **Audio** settings tab also offers a Ferrari-inspired V12 voice on either car. These are stylized procedural interpretations, not recordings of specific Ferrari engines. Sound overrides map the car's idle-to-redline range onto the chosen voice without changing its physics.
+The engine voices are synthesized in real time from cylinder firing pulses, exhaust-pipe resonances and intake noise. The RB6 defaults to a high-revving flat-plane V8; the GEN22 uses a V6 turbo hybrid with turbo spool, lift-off chatter and electric whine. The **Audio** settings tab also offers a Ferrari-inspired V12 voice on either car. These are stylized procedural interpretations, not recordings of specific Ferrari engines. Sound overrides map the car's idle-to-redline range onto the chosen voice without changing its physics.
 
 The mix adds the three nearest rivals with stereo placement, distance filtering and Doppler shift, plus tyre scrub/lock-up squeal, wind, kerb and off-road rumble, drivetrain whine and collision thumps. Cockpit and external views have different balances. A gentle presence dip, stereo-linked compression and soft limiting control harshness and leave output headroom. Saved sliders control master volume, your engine, other cars and effects. Press M to mute; pause and mute fade smoothly, and `--mute` starts muted.
 
@@ -214,6 +247,10 @@ F1_TEST_ASSETS=/path/to/assets cargo test -p racecraft-sim --test spa -- --nocap
 cargo run -p f1-the-game -- --assets /path/to/assets --frames 180 --capture /tmp/f1-bevy.png
 # Full renderer check with injected controls, camera editor and twelve screenshots:
 F1_TEST_ASSETS=/path/to/assets cargo test -p f1-the-game rendered_game_flows -- --ignored --nocapture
+# GEN22 direct-template player and opponent LOD1/LOD2 review, thirteen captures:
+F1_TEST_ASSETS=/path/to/assets cargo test -p f1-the-game rendered_car_review -- --ignored --nocapture
+# GEN22 DRS key presses, thumb/cap release, both LODs and eight cockpit captures:
+F1_TEST_ASSETS=/path/to/assets cargo test -p f1-the-game rendered_wheel_drs_controls -- --ignored --nocapture
 # Real menu pointer input, live aids, Spa race launches and both car models:
 F1_TEST_ASSETS=/path/to/full/original/assets cargo test -p f1-the-game rendered_menu_and_track_selection -- --ignored --nocapture
 F1_TEST_ASSETS=/path/to/assets cargo test -p f1-the-game --test cli_exit -- --ignored --nocapture
@@ -224,7 +261,7 @@ cargo test -p f1-the-game live_engine_playback -- --ignored --nocapture
 
 Capture counts frames after scene loading and exits after writing the image. Missing assets and screenshot-write errors return a failing exit code. Spa integration tests print a skip notice when no generated assets are available; use `F1_TEST_ASSETS` to run them against an external tree.
 
-The ignored renderer tests need a Vulkan-capable display. The gameplay check verifies scene hierarchy, car materials, driving, all three cameras, pause/resume and recovery, and writes grid/cockpit/onboard/paused/racing/results screenshots plus both instrument layouts and both map modes under `/tmp/f1-bevy-proof`. Its results screenshot uses a forced finish state; race completion is covered by the simulation tests. The menu check clicks actual egui tabs, aid presets, both HUD/map selectors and Start, switches through Spa and both cars (all four circuits with `--features exp`), checks that old scene roots are removed, and confirms live aid changes while paused. Set `F1_TEST_OUTPUT` to choose a capture directory. `tools/verify_hud.sh` runs these checks on an isolated Weston/XWayland display and captures landscape and tall-window layouts; it requires Weston and a Vulkan-capable GPU. The existing Spa AI lap-time benchmark still fails its unchanged target; see MIGRATION.md for the baseline comparison.
+The ignored renderer tests need a Vulkan-capable display. The gameplay check verifies scene hierarchy, car materials, driving, all three cameras, pause/resume and recovery, and writes grid/cockpit/onboard/paused/racing/results screenshots plus both instrument layouts and both map modes under `/tmp/f1-bevy-proof`. Its results screenshot uses a forced finish state; race completion is covered by the simulation tests. The menu check clicks actual egui tabs, aid presets, both HUD/map selectors and Start, switches through Spa and both cars (all four circuits with `--features exp`), checks that old scene roots are removed, and confirms live aid changes while paused. Set `F1_TEST_OUTPUT` to choose a capture directory. `tools/verify_hud.sh` runs these checks on an isolated Weston/XWayland display and captures landscape and tall-window layouts; it requires Weston and a Vulkan-capable GPU. The Spa AI integration race passes its lap-time ceiling (best ~125 s from a standing start; ~116 s flying laps).
 
 The CLI exit test launches separate game processes, quits after 1 and 12 frames, captures the first frame, and checks a failed screenshot write. Pipeline compilation runs on Bevy's render thread to prevent early shutdown racing a background GPU compiler worker. First-use pipeline compilation can block a frame; this avoids the reproduced NVIDIA teardown crash.
 

@@ -7,6 +7,7 @@ use crate::aero;
 use crate::ai::{AiDriver, DriverProfile, Rival};
 use crate::car::spec::{CarSpec, Setup};
 use crate::car::{Assists, Car, CarInput};
+use crate::drs;
 use crate::rng::Rng;
 use crate::track::Track;
 use glam::{DVec2, DVec3};
@@ -61,6 +62,7 @@ pub struct Entrant {
     pub driver: Driver,
     pub timing: Timing,
     pub livery: [f32; 3],
+    drs: drs::Tracker,
     /// Last on-track pose and its centerline station, used to recover a car
     /// that is stuck or beached.
     safe_pose: (DVec3, f64, usize),
@@ -113,6 +115,8 @@ pub struct Race {
     pub time: f64,
     pub tick: u64,
     pub events: Vec<RaceEvent>,
+    /// Empty when no car in the field has DRS.
+    pub drs_zones: Vec<drs::Zone>,
     order: Vec<usize>,
     finish_order: Vec<usize>,
     rng: Rng,
@@ -157,12 +161,19 @@ impl Race {
                         ..Timing::default()
                     },
                     livery: config.livery,
+                    drs: drs::Tracker::default(),
                     safe_pose: (position, yaw, track_station),
                 }
             })
             .collect();
         let order = (0..entrants.len()).collect();
+        let drs_zones = if entrants.iter().any(|e| e.car.spec.aero.has_drs()) {
+            drs::zones(&track)
+        } else {
+            Vec::new()
+        };
         Self {
+            drs_zones,
             track,
             entrants,
             laps,
@@ -205,6 +216,7 @@ impl Race {
         let rivals: Vec<Vec<Rival>> = (0..self.entrants.len())
             .map(|index| self.rivals_of(index))
             .collect();
+        self.update_drs();
 
         for (index, entrant) in self.entrants.iter_mut().enumerate() {
             entrant.car.aero = influences[index];
@@ -233,6 +245,35 @@ impl Race {
         self.resolve_car_contacts();
         self.recover_stuck_cars();
         self.update_timing();
+    }
+
+    /// Earns DRS at each detection point (within [`drs::GAP`] of the car ahead,
+    /// from lap [`drs::ENABLED_AFTER_LAPS`] + 1) and opens it inside the zone.
+    fn update_drs(&mut self) {
+        let racing = matches!(self.phase, Phase::Racing | Phase::Finishing);
+        let gaps: Vec<Option<f64>> = (0..self.entrants.len())
+            .map(|index| self.physical_gap_ahead(index))
+            .collect();
+        for (index, entrant) in self.entrants.iter_mut().enumerate() {
+            let timing = &entrant.timing;
+            let qualifies = || {
+                racing
+                    && timing.finish_time.is_none()
+                    && timing.laps_completed >= drs::ENABLED_AFTER_LAPS
+                    && gaps[index].is_some_and(|gap| gap <= drs::GAP)
+            };
+            let open = entrant.drs.update(
+                &self.track,
+                &self.drs_zones,
+                entrant.car.track_position.s,
+                qualifies,
+            );
+            let anywhere = entrant.car.assists.drs_anywhere;
+            entrant.car.drs.available = (open || anywhere)
+                && racing
+                && entrant.timing.finish_time.is_none()
+                && entrant.car.spec.aero.has_drs();
+        }
     }
 
     fn advance_phase(&mut self, dt: f64) -> bool {
@@ -454,6 +495,8 @@ impl Race {
         let entrant = &mut self.entrants[index];
         let before = entrant.car.track_position.s;
         reset_car(&mut entrant.car, &track, position, yaw, station);
+        // A recovered car gives up any DRS it had earned.
+        entrant.drs.reset();
         entrant.timing.distance += track.delta(before, entrant.car.track_position.s);
     }
 
@@ -576,7 +619,19 @@ impl Race {
         let ahead = self.order[position - 2];
         let distance =
             self.entrants[ahead].timing.distance - self.entrants[entrant].timing.distance;
-        Some(distance / self.entrants[entrant].car.speed().max(20.0))
+        Some(distance / self.entrants[entrant].car.speed().max(f64::EPSILON))
+    }
+
+    fn physical_gap_ahead(&self, entrant: usize) -> Option<f64> {
+        let follower = self.entrants[entrant].car.track_position.s;
+        self.entrants
+            .iter()
+            .enumerate()
+            .filter(|(index, other)| *index != entrant && other.timing.finish_time.is_none())
+            .map(|(_, other)| self.track.delta(follower, other.car.track_position.s))
+            .filter(|gap| *gap > 0.0)
+            .min_by(f64::total_cmp)
+            .map(|distance| distance / self.entrants[entrant].car.speed().max(f64::EPSILON))
     }
 }
 
@@ -613,7 +668,7 @@ mod tests {
     use crate::track::oval_track;
 
     fn field(humans: usize, ai: usize) -> Vec<EntrantConfig> {
-        let spec = Arc::new(CarSpec::rb22(test_wheels(), 5.4, 1.9));
+        let spec = Arc::new(CarSpec::gen22(test_wheels(), 5.4, 1.9));
         (0..humans + ai)
             .map(|index| EntrantConfig {
                 name: format!("Driver {index}"),
@@ -629,6 +684,80 @@ mod tests {
                 livery: [1.0; 3],
             })
             .collect()
+    }
+
+    #[test]
+    fn following_cars_earn_drs_from_lap_two_and_open_it_in_the_zone() {
+        let track = Arc::new(crate::track::stadium(800.0, 30.0, Vec::new()));
+        let mut race = Race::new(track.clone(), field(0, 3), 4, 11);
+        assert_eq!(race.drs_zones.len(), 2);
+        let mut opened_on_lap = [None; 3];
+        while race.phase != Phase::Finished && race.time < 400.0 {
+            race.step(&[]);
+            for (index, entrant) in race.entrants.iter().enumerate() {
+                let car = &entrant.car;
+                if car.drs.flap > 0.0 {
+                    let s = car.track_position.s;
+                    assert!(
+                        race.drs_zones.iter().any(|zone| zone.contains(&track, s))
+                            || car.drs.flap < 1.0,
+                        "flap fully open outside a zone at {s}"
+                    );
+                    opened_on_lap[index].get_or_insert(entrant.timing.laps_completed);
+                }
+            }
+        }
+        // Nobody opens on the first lap; someone close behind does later.
+        assert!(opened_on_lap
+            .iter()
+            .flatten()
+            .all(|&lap| lap >= drs::ENABLED_AFTER_LAPS));
+        assert!(
+            opened_on_lap.iter().any(Option::is_some),
+            "{opened_on_lap:?}"
+        );
+        assert_eq!(race.phase, Phase::Finished);
+    }
+
+    #[test]
+    fn drs_anywhere_lets_its_driver_open_the_flap_off_zone_from_lap_one() {
+        let track = Arc::new(crate::track::stadium(800.0, 30.0, Vec::new()));
+        let flap_after_start = |anywhere: bool| {
+            let mut configs = field(1, 0);
+            configs[0].assists.drs_anywhere = anywhere;
+            let mut race = Race::new(track.clone(), configs, 3, 5);
+            let input = [CarInput {
+                throttle: 1.0,
+                drs: true,
+                ..CarInput::default()
+            }];
+            while race.phase != Phase::Racing {
+                race.step(&input);
+            }
+            // Still near the grid: lap one, outside both zones.
+            for _ in 0..(0.5 * PHYSICS_RATE) as usize {
+                race.step(&input);
+            }
+            let car = &race.entrants[0].car;
+            assert!(!race
+                .drs_zones
+                .iter()
+                .any(|zone| zone.contains(&track, car.track_position.s)));
+            car.drs.flap
+        };
+        assert_eq!(flap_after_start(false), 0.0);
+        assert_eq!(flap_after_start(true), 1.0);
+    }
+
+    #[test]
+    fn a_field_without_drs_has_no_zones() {
+        let track = Arc::new(crate::track::stadium(800.0, 30.0, Vec::new()));
+        let mut configs = field(0, 2);
+        for config in &mut configs {
+            config.spec = Arc::new(CarSpec::rb6(test_wheels(), 5.4, 1.9));
+        }
+        let race = Race::new(track, configs, 1, 1);
+        assert!(race.drs_zones.is_empty());
     }
 
     #[test]
@@ -719,6 +848,34 @@ mod tests {
         assert_eq!(first.0, Phase::Finished, "race did not finish");
         assert!(first.2.iter().all(Option::is_some));
         assert_eq!(first, run(), "simulation must be deterministic");
+    }
+
+    #[test]
+    fn a_faster_ai_gets_past_a_slower_leader() {
+        let track = Arc::new(oval_track());
+        let spec = Arc::new(CarSpec::gen22(test_wheels(), 5.4, 1.9));
+        let driver = |name: &str, pace: f64| EntrantConfig {
+            name: name.into(),
+            spec: spec.clone(),
+            setup: Setup::default(),
+            assists: Assists::default(),
+            ai: Some(DriverProfile {
+                pace,
+                aggression: 0.6,
+                consistency: 1.0,
+            }),
+            human_slot: 0,
+            livery: [1.0; 3],
+        };
+        let entrants = vec![driver("Slow", 0.95), driver("Fast", 0.99)];
+        let mut race = Race::new(track, entrants, 6, 3);
+        let mut ticks = 0;
+        while race.phase != Phase::Finished && ticks < (300.0 * PHYSICS_RATE) as usize {
+            race.step(&[]);
+            ticks += 1;
+        }
+        assert_eq!(race.phase, Phase::Finished);
+        assert_eq!(race.order()[0], 1, "the faster car stayed stuck behind");
     }
 
     #[test]

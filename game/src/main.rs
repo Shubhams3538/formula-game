@@ -11,10 +11,12 @@ mod graphics;
 mod hud;
 mod materials;
 mod menu;
+mod meshes;
 mod options;
 mod pose;
 mod preferences;
 mod sky;
+mod teams;
 #[cfg(test)]
 mod tests;
 mod textures;
@@ -36,6 +38,8 @@ use std::process::ExitCode;
 #[derive(Resource)]
 pub struct Session {
     pub race: Race,
+    pub identities: Vec<Option<teams::Identity>>,
+    pub rig: teams::Rig,
     pub player: usize,
     pub camera: camera::ChaseCamera,
     pub controls: controls::Controls,
@@ -43,6 +47,7 @@ pub struct Session {
     pub minimap: hud::Minimap,
     pub messages: hud::Messages,
     pub delta: hud::Delta,
+    pub telemetry: hud::Telemetry,
     pub ready: bool,
     pub screen: menu::Screen,
     pub guidance: driving::Guidance,
@@ -102,6 +107,14 @@ fn build_app(mut options: Options) -> Result<App, String> {
         .assets
         .canonicalize()
         .map_err(|error| format!("asset directory {}: {error}", options.assets.display()))?;
+    let teams = if options.car == "gen22" {
+        teams::Teams::load(&options.assets)?
+    } else {
+        teams::Teams::load(&options.assets).unwrap_or_default()
+    };
+    if options.car == "gen22" {
+        teams.selection(&options.team, &options.driver)?;
+    }
     let mut race = assets::load_race(&options)?;
     let benchmark = if options.benchmark.is_some() {
         let (planned_race, run) = benchmark::Run::plan(&options, &race)?;
@@ -117,7 +130,10 @@ fn build_app(mut options: Options) -> Result<App, String> {
     let mut rig = camera::ChaseCamera::new(&race, player);
     rig.select(frontend.draft.camera);
     rig.configure(frontend.views[&options.car].clone());
+    rig.set_cockpit_eye(teams::Rig::load(&options)?.cockpit_eye);
     let session = Session {
+        identities: teams.field(&options)?,
+        rig: teams::Rig::load(&options)?,
         guidance: driving::Guidance::new(&race, player),
         corner_braking: frontend.corner_braking,
         show_racing_line: frontend.show_racing_line,
@@ -131,6 +147,7 @@ fn build_app(mut options: Options) -> Result<App, String> {
         paused: !quick_race,
         messages: default(),
         delta: default(),
+        telemetry: default(),
         ready: false,
         screen: if quick_race {
             menu::Screen::Racing
@@ -172,7 +189,10 @@ fn build_app(mut options: Options) -> Result<App, String> {
             std::time::Duration::from_secs_f64(1.0 / 60.0),
         ));
     }
-    if !capture_run {
+    if capture_run {
+        // Benchmarks and captures must not inherit Bevy's unfocused 60 Hz cap.
+        app.insert_resource(bevy::winit::WinitSettings::continuous());
+    } else {
         // A paused race in the background only needs to redraw occasionally.
         app.insert_resource(bevy::winit::WinitSettings {
             focused_mode: bevy::winit::UpdateMode::Continuous,
@@ -202,10 +222,13 @@ fn build_app(mut options: Options) -> Result<App, String> {
             session.show_performance = std::env::var_os("F1_SHOW_FPS").is_some();
         })
         .insert_resource(Time::<Fixed>::from_hz(PHYSICS_RATE))
+        .insert_resource(teams)
         .insert_resource(session)
         .insert_resource(options)
         .insert_resource(frontend)
         .init_resource::<Capture>()
+        .init_resource::<textures::TextureDetail>()
+        .init_resource::<assets::OpponentLodDistance>()
         .add_systems(
             Startup,
             (assets::setup, hud::setup, audio::setup, wheel_dash::setup),
@@ -218,15 +241,16 @@ fn build_app(mut options: Options) -> Result<App, String> {
             (
                 menu::apply,
                 graphics::apply,
-                textures::prepare,
+                assets::update_opponent_lods.after(graphics::apply),
                 materials::prepare,
                 assets::check_loading,
                 benchmark::advance,
-                assets::rig_wheel_shells,
                 assets::sync_cars,
+                assets::animate_controls,
                 wheel_dash::attach,
                 wheel_dash::lights,
                 camera::update,
+                assets::helmet_visibility,
                 audio::update,
                 driving::racing_line,
             )
@@ -234,7 +258,12 @@ fn build_app(mut options: Options) -> Result<App, String> {
         )
         .add_systems(EguiPrimaryContextPass, (hud::update, menu::ui).chain())
         .add_systems(wheel_dash::WheelDashPass, wheel_dash::draw)
+        .add_systems(
+            PostUpdate,
+            (textures::prepare, meshes::prepare).after(bevy::asset::AssetEventSystems),
+        )
         .add_systems(Last, capture);
+    textures::register_normal_scales(&mut app);
     if profile {
         // F1_PROFILE=1 logs per-pass CPU/GPU render timings every few seconds.
         app.add_plugins((
@@ -291,6 +320,7 @@ fn step_race(mut session: ResMut<Session>, benchmark: Option<Res<benchmark::Run>
         1. / PHYSICS_RATE,
     );
     race.step(&[input]);
+    session.sample_hud();
 }
 
 #[derive(Resource, Default)]

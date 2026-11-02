@@ -99,21 +99,48 @@ impl Powertrain {
         self.refusal_timer = 0.25;
     }
 
-    /// Picks the gear an automatic gearbox would use.
-    pub fn auto_shift(&mut self, spec: &EngineSpec, speed: f64, wheel_radius: f64, throttle: f64) {
+    /// Picks the gear an automatic gearbox would use, one shift at a time
+    /// like the sequential box. Under braking it blips down as soon as the
+    /// next gear is safe, the way a driver does, so the car arrives at the
+    /// apex in the right gear with engine braking and drive ready.
+    pub fn auto_shift(
+        &mut self,
+        spec: &EngineSpec,
+        speed: f64,
+        wheel_radius: f64,
+        throttle: f64,
+        brake: f64,
+    ) {
         if self.shift_timer > 0.0 || self.gear < 1 {
             return;
         }
-        let up_rpm = spec.rev_limit * 0.985;
-        // Kick down for acceleration on throttle; off throttle only when the
-        // engine is close to bogging, so engine braking stays gentle.
-        let down_rpm = spec.peak_power_rpm * if throttle > 0.6 { 0.68 } else { 0.5 };
-        if self.rpm > up_rpm && self.gear < spec.gear_ratios.len() as i32 {
+        let top = spec.gear_ratios.len() as i32;
+        let lower = |gear: i32| Self::wheel_rpm(spec, gear - 1, speed, wheel_radius);
+        if brake > 0.05 || throttle < 0.2 {
+            // Slowing: drop a gear whenever it lands below this rpm.
+            let safe = spec.rev_limit * if brake > 0.05 { 0.92 } else { 0.85 };
+            if self.gear > 1 && lower(self.gear) < safe {
+                self.shift_down(spec, speed, wheel_radius);
+            }
+            return;
+        }
+        // Shift where the next ratio supplies more wheel power. Waiting for
+        // the limiter can strand seventh below its shift point at high drag.
+        let next_rpm = if self.gear < top {
+            Self::wheel_rpm(spec, self.gear + 1, speed, wheel_radius)
+        } else {
+            0.0
+        };
+        let more_power = self.rpm >= spec.peak_power_rpm
+            && power_shape(next_rpm / spec.peak_power_rpm)
+                > power_shape(self.rpm / spec.peak_power_rpm);
+        if self.gear < top && (self.rpm > spec.rev_limit * 0.985 || more_power) {
             self.shift_up(spec, speed);
         } else if self.gear > 1
-            && self.rpm < down_rpm
-            && Self::wheel_rpm(spec, self.gear - 1, speed, wheel_radius) < spec.rev_limit * 0.95
+            && self.rpm < spec.peak_power_rpm * 0.78
+            && lower(self.gear) < spec.rev_limit * 0.95
         {
+            // Kick down when the engine is well off its power band.
             self.shift_down(spec, speed, wheel_radius);
         }
     }
@@ -185,7 +212,7 @@ mod tests {
 
     #[test]
     fn engine_braking_opposes_motion_in_forward_and_reverse_gears() {
-        let spec = CarSpec::rb22(test_wheels(), 5.4, 1.9).engine;
+        let spec = CarSpec::gen22(test_wheels(), 5.4, 1.9).engine;
         for gear in [REVERSE, 1] {
             for speed in [-5.0, 5.0] {
                 let mut powertrain = Powertrain::new(&spec);
@@ -204,7 +231,7 @@ mod tests {
 
     #[test]
     fn shifting_cannot_skip_gears_during_the_torque_cut() {
-        let spec = CarSpec::rb22(test_wheels(), 5.4, 1.9).engine;
+        let spec = CarSpec::gen22(test_wheels(), 5.4, 1.9).engine;
         for up in [false, true] {
             let mut powertrain = Powertrain::new(&spec);
             powertrain.gear = 3;
@@ -229,7 +256,7 @@ mod tests {
 
     #[test]
     fn early_upshift_loses_acceleration() {
-        let spec = CarSpec::rb22(test_wheels(), 5.4, 1.9).engine;
+        let spec = CarSpec::gen22(test_wheels(), 5.4, 1.9).engine;
         let radius = 0.355;
         let speed_at = |gear: i32, rpm: f64| {
             rpm / (spec.gear_ratios[(gear - 1) as usize] * 60.0 / (2.0 * PI)) * radius
@@ -247,7 +274,7 @@ mod tests {
 
     #[test]
     fn over_revving_downshift_is_refused() {
-        let spec = CarSpec::rb22(test_wheels(), 5.4, 1.9).engine;
+        let spec = CarSpec::gen22(test_wheels(), 5.4, 1.9).engine;
         let mut powertrain = Powertrain::new(&spec);
         powertrain.gear = 7;
         powertrain.shift_down(&spec, 85.0, 0.355);
@@ -261,7 +288,7 @@ mod tests {
 
     #[test]
     fn limiter_cuts_power() {
-        let spec = CarSpec::rb22(test_wheels(), 5.4, 1.9).engine;
+        let spec = CarSpec::gen22(test_wheels(), 5.4, 1.9).engine;
         let mut powertrain = Powertrain::new(&spec);
         powertrain.rpm = spec.rev_limit + 100.0;
         let speed = (spec.rev_limit + 100.0) / (spec.gear_ratios[0] * 60.0 / (2.0 * PI)) * 0.355;

@@ -51,7 +51,7 @@ for name in ('first', 'repeat'):
     report = json.loads((folder / 'benchmark.json').read_text())
     assert report['duration_seconds'] == 20
     assert report['physics_ticks'] == 7200
-    assert report['ai_cars'] == 2 and report['human_cars'] == 0
+    assert report['ai_cars'] == 8 and report['human_cars'] == 0
     assert report['contacts'] == 0 and report['minimum_clearance_metres'] >= 12
     assert report['preflight_matches_measured'] is True
     assert report['vsync'] is False

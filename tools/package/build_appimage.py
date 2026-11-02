@@ -99,10 +99,31 @@ def needed(path):
     return re.findall(r"\(NEEDED\).*\[(.*?)\]", run("readelf", "-d", str(path)))
 
 
+def validate_gen22_assets(directory):
+    """Reject incomplete car and roster files before packaging them."""
+    for name in ("car.glb", "car_lod1.glb", "car.json", "teams.json"):
+        path = directory / name
+        if not path.is_file():
+            raise RuntimeError(f"Missing GEN22 asset: {path}")
+    roster = json.loads((directory / "teams.json").read_text())
+    if not roster["teams"]:
+        raise RuntimeError("GEN22 roster must not be empty")
+    lods = ["", "lod1"]
+    if (directory / "car_lod2.glb").is_file():
+        lods.append("lod2")
+    for lod in lods:
+        for compound in ("soft", "medium", "hard"):
+            path = directory / "tyres" / lod / (compound + ".png")
+            if not path.is_file():
+                raise RuntimeError(f"Missing GEN22 asset: {path}")
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--exp", action="store_true", help="build with experimental circuits enabled")
     args = parser.parse_args()
+    assets = Path(os.environ.get("F1_PACKAGE_ASSETS", str(ROOT / "assets"))).resolve()
+    validate_gen22_assets(assets / "cars/gen22")
     tracks = ["spa", "silverstone", "bahrain", "cota"] if args.exp else ["spa"]
     CACHE.mkdir(parents=True, exist_ok=True)
     DIST.mkdir(exist_ok=True)
@@ -119,9 +140,7 @@ def main():
     subprocess.run(["strip", "--strip-unneeded", str(binary)], check=True)
     shutil.copy2(ROOT / "tools/package/AppRun", APP / "AppRun")
     (APP / "AppRun").chmod(0o755)
-    assets = Path(os.environ.get("F1_PACKAGE_ASSETS", str(ROOT / "assets"))).resolve()
     for category, ids, files in [
-        ("cars", ["rb6", "rb22"], ["car.json", "car.glb"]),
         ("tracks", tracks, ["track.json", "collision.bin", "visual.glb"]),
     ]:
         for item in ids:
@@ -129,6 +148,12 @@ def main():
             destination.mkdir(parents=True)
             for filename in files:
                 shutil.copy2(assets / category / item / filename, destination / filename)
+
+    # Keep stock car assets and tyres; exclude locally installed custom artwork.
+    for car in ["gen22", "rb6"]:
+        shutil.copytree(assets / "cars" / car,
+                        APP / "usr/share/f1-racecraft/assets/cars" / car,
+                        ignore=shutil.ignore_patterns("liveries"))
 
     # Only generic x86-64 official packages are used. The build host's CachyOS
     # AVX2/v3-optimized libraries must not impose that CPU requirement on players.

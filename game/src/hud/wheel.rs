@@ -93,14 +93,9 @@ pub fn draw(hud: &Hud, style: &HudStyle, session: &Session) {
         side_w,
         62.,
         colors.ink,
-        &format!("{:.0}", car.speed() * 3.6),
+        &format!("{:.0}", session.telemetry.speed.value(car.speed() * 3.6)),
     );
     cell(hud, style, right, rows[1], side_w, "LAP TIME");
-    let current = if matches!(race.phase, Phase::Countdown { .. }) {
-        0.
-    } else {
-        race.time - player.timing.lap_start
-    };
     value(
         hud,
         right,
@@ -108,7 +103,7 @@ pub fn draw(hud: &Hud, style: &HudStyle, session: &Session) {
         side_w,
         40.,
         colors.ink,
-        &format_time(current.max(0.)),
+        &lap_clock(race, session.player),
     );
     cell(hud, style, right, rows[2], side_w, "TYRES °C");
     for (axle, label) in [(0, "F"), (1, "R")] {
@@ -136,7 +131,10 @@ pub fn draw(hud: &Hud, style: &HudStyle, session: &Session) {
             (right + side_w - 14., mid - 15.),
             Align::Right,
             band.color(),
-            &format!("{:.0}", tyre.temperature),
+            &format!(
+                "{:.0}",
+                session.telemetry.temperatures[axle].value(tyre.temperature)
+            ),
         );
     }
 
@@ -180,8 +178,31 @@ pub fn draw(hud: &Hud, style: &HudStyle, session: &Session) {
         (gear_x + gear_w - 14., PAD + gear_h - 45.),
         Align::Right,
         colors.ink,
-        &format!("{:.0}", car.powertrain.rpm),
+        &format!(
+            "{:.0}",
+            (session.telemetry.rpm.value(car.powertrain.rpm) / 50.).round() * 50.
+        ),
     );
+    if let Some(lamp) = instruments::DrsLamp::of(session) {
+        let (fill, ink) = match lamp {
+            instruments::DrsLamp::Off => (Color::from_rgb(20, 22, 23), colors.muted),
+            instruments::DrsLamp::Ready => (Color::from_rgb(20, 22, 23), GREEN),
+            instruments::DrsLamp::Open => (GREEN, Color::from_rgb(8, 9, 10)),
+        };
+        let (x, y, w, h) = (gear_x + 10., PAD + 304., gear_w - 20., 40.);
+        hud.fill_round(x, y, w, h, 4., fill);
+        if lamp == instruments::DrsLamp::Ready {
+            hud.stroke_round(x, y, w, h, 4., 2.5, GREEN);
+        }
+        hud.text_mid(
+            &style.bold,
+            28.,
+            (x + w * 0.5, y + h * 0.5),
+            Align::Center,
+            ink,
+            "DRS",
+        );
+    }
     if let Some(refusal) = car.powertrain.last_refusal {
         let text = match refusal {
             ShiftRefusal::OverRev => "OVER-REV",
@@ -271,7 +292,7 @@ pub fn draw_compact(hud: &Hud, style: &HudStyle, session: &Session) {
         (10. + side_w - 12., y + 40.),
         Align::Right,
         colors.ink,
-        &format!("{:.0}", car.speed() * 3.6),
+        &format!("{:.0}", session.telemetry.speed.value(car.speed() * 3.6)),
     );
     let (delta, delta_color) = match session.delta.current {
         Some(delta) => (

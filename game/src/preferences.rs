@@ -9,6 +9,10 @@ use std::{collections::BTreeMap, path::PathBuf};
 
 #[derive(Clone, PartialEq, Serialize, Deserialize)]
 pub struct Preferences {
+    #[serde(default)]
+    pub team: String,
+    #[serde(default)]
+    pub driver: String,
     pub aids: Assists,
     pub corner_braking: f64,
     pub racing_line: bool,
@@ -16,6 +20,9 @@ pub struct Preferences {
     pub views: BTreeMap<String, Tuning>,
     #[serde(default)]
     pub graphics: crate::graphics::Quality,
+    /// Detailed video settings; absent in older files, then derived from `graphics`.
+    #[serde(default)]
+    pub video: Option<crate::graphics::Video>,
     #[serde(default = "vsync_default")]
     pub vsync: bool,
     #[serde(default)]
@@ -31,21 +38,27 @@ fn vsync_default() -> bool {
 impl Preferences {
     pub fn defaults(options: &Options) -> Self {
         Self {
+            team: options.team.clone(),
+            driver: options.driver.clone(),
             aids: options.player_assists(),
             corner_braking: options.corner_braking,
             racing_line: options.assist_level > 0.,
             camera: options.camera,
-            views: ["rb6", "rb22"]
+            views: ["rb6", "gen22"]
                 .map(|id| (id.into(), Tuning::for_car(id)))
                 .into(),
             graphics: options.graphics,
+            video: None,
             vsync: options.vsync,
             display: crate::hud::Settings::default(),
             audio: crate::audio::Settings::default(),
         }
     }
     pub fn sanitize(&mut self) {
-        for id in ["rb6", "rb22"] {
+        if let Some(old) = self.views.remove("rb22") {
+            self.views.entry("gen22".into()).or_insert(old);
+        }
+        for id in ["rb6", "gen22"] {
             self.views
                 .entry(id.into())
                 .or_insert_with(|| Tuning::for_car(id));
@@ -67,6 +80,13 @@ impl Preferences {
             tuning.sanitize();
         }
         self.audio.sanitize();
+        if let Some(video) = &mut self.video {
+            video.sanitize();
+        }
+    }
+
+    pub fn video(&self) -> crate::graphics::Video {
+        self.video.unwrap_or_else(|| self.graphics.video())
     }
 }
 
@@ -101,9 +121,13 @@ impl Store {
         }
         if options.graphics_explicit {
             prefs.graphics = options.graphics;
+            prefs.video = None;
         }
         if !options.vsync {
             prefs.vsync = false;
+        }
+        if options.drs_anywhere {
+            prefs.aids.drs_anywhere = true;
         }
         if options.aids_explicit {
             prefs.aids = options.player_assists();
@@ -145,9 +169,11 @@ mod tests {
     fn preferences_round_trip_aids_and_per_car_cameras() {
         let options = Options::parse(std::iter::empty()).unwrap();
         let mut prefs = Preferences::defaults(&options);
+        prefs.team = "ferrari".into();
+        prefs.driver = "leclerc".into();
         prefs.corner_braking = 0.35;
         prefs.aids.automatic_gears = false;
-        prefs.views.get_mut("rb22").unwrap().cockpit.height = 1.12;
+        prefs.views.get_mut("gen22").unwrap().cockpit.height = 1.12;
         prefs.audio.engine = crate::audio::EngineChoice::V12;
         prefs.audio.opponents = 0.25;
         prefs.display = crate::hud::Settings {
@@ -163,6 +189,23 @@ mod tests {
         let restored: Preferences = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
         assert!(restored == prefs);
         std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn legacy_modern_camera_key_migrates_without_overwriting_new_views() {
+        let mut prefs = Preferences::defaults(&Options::parse(std::iter::empty()).unwrap());
+        let mut old = crate::camera::Tuning::for_car("gen22");
+        old.cockpit.height = 1.12;
+        prefs.views.remove("gen22");
+        prefs.views.insert("rb22".into(), old.clone());
+        prefs.sanitize();
+        assert_eq!(prefs.views["gen22"], old);
+        assert!(!prefs.views.contains_key("rb22"));
+        prefs
+            .views
+            .insert("rb22".into(), crate::camera::Tuning::for_car("rb6"));
+        prefs.sanitize();
+        assert_eq!(prefs.views["gen22"], old);
     }
 
     #[test]

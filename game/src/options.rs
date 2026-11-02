@@ -9,6 +9,8 @@ pub struct Options {
     pub assets: PathBuf,
     pub track: String,
     pub car: String,
+    pub team: String,
+    pub driver: String,
     pub laps: u32,
     pub opponents: usize,
     pub grid_slot: usize,
@@ -22,10 +24,12 @@ pub struct Options {
     pub benchmark: Option<PathBuf>,
     pub benchmark_seed: u64,
     pub benchmark_start: f64,
+    pub benchmark_grid: bool,
     pub mute: bool,
     pub quick_race: bool,
     pub camera: Mode,
     pub driver_aids: Option<Assists>,
+    pub drs_anywhere: bool,
     pub corner_braking: f64,
     pub aids_explicit: bool,
     pub camera_explicit: bool,
@@ -38,7 +42,9 @@ impl Options {
     pub const USAGE: &'static str = "usage: f1-the-game [options]
   --assets DIR        asset directory (default: ./assets)
   --track NAME        circuit (default: spa; other circuits require an exp build)
-  --car rb6|rb22      car and matching AI field (default: rb6, V8 era)
+  --car gen22|rb6     car (default: gen22; rb22 is a deprecated alias)
+  --team ID           2022 team (default: first team in teams.json)
+  --driver ID         driver in that team (default: its first driver)
   --laps N            race length (default: 3)
   --opponents N       AI cars (default: 7)
   --grid N            starting slot, 1 = pole (default: 6)
@@ -46,6 +52,7 @@ impl Options {
   --rear-wing N       0-10 (default: 5)
   --tyres soft|medium|hard
   --auto-gears        let the car shift for you
+  --drs-anywhere      open DRS anywhere on track, not only in earned zones
   --manual-gears      disable automatic shifting
   --mute              start with sound muted (M toggles sound)
   --quick-race        skip the race selection menu
@@ -55,7 +62,8 @@ impl Options {
   --no-vsync          render as fast as the GPU allows
   --size WxH          window size (default: 1600x900)
   --frames N --capture FILE   render N frames, save the last one, exit
-  --benchmark DIR     20-second moving-start, two-AI benchmark + sampled PNGs
+  --benchmark DIR     20-second moving-start, selected field + sampled PNGs
+  --benchmark-grid    hold the default grid for a worst-field GPU comparison
   --benchmark-seed N  deterministic drive and screenshot seed (default: 24301)
   --benchmark-start M start distance along circuit in metres (default: 0)";
 
@@ -63,7 +71,9 @@ impl Options {
         let mut options = Self {
             assets: PathBuf::from("assets"),
             track: "spa".to_string(),
-            car: "rb6".to_string(),
+            car: "gen22".to_string(),
+            team: String::new(),
+            driver: String::new(),
             laps: 3,
             opponents: 7,
             grid_slot: 6,
@@ -77,10 +87,12 @@ impl Options {
             benchmark: None,
             benchmark_seed: 0x5EED,
             benchmark_start: 0.,
+            benchmark_grid: false,
             mute: false,
             quick_race: false,
             camera: Mode::Chase,
             driver_aids: None,
+            drs_anywhere: false,
             corner_braking: 1.,
             aids_explicit: false,
             camera_explicit: false,
@@ -101,10 +113,15 @@ impl Options {
                 "--track" => options.track = value()?,
                 "--car" => {
                     options.car = value()?;
-                    if !matches!(options.car.as_str(), "rb6" | "rb22") {
-                        return Err("car must be rb6 or rb22".into());
+                    if options.car == "rb22" {
+                        options.car = "gen22".into();
+                    }
+                    if !matches!(options.car.as_str(), "rb6" | "gen22") {
+                        return Err("car must be rb6 or gen22".into());
                     }
                 }
+                "--team" => options.team = value()?,
+                "--driver" => options.driver = value()?,
                 "--laps" => {
                     options.laps = value()?
                         .parse::<u32>()
@@ -140,6 +157,9 @@ impl Options {
                 "--manual-gears" => {
                     options.automatic_gears = false;
                     options.aids_explicit = true;
+                }
+                "--drs-anywhere" => {
+                    options.drs_anywhere = true;
                 }
                 "--mute" => options.mute = true,
                 "--no-vsync" => options.vsync = false,
@@ -189,6 +209,7 @@ impl Options {
                     options.frames = Some(frames);
                 }
                 "--capture" => options.capture = Some(PathBuf::from(value()?)),
+                "--benchmark-grid" => options.benchmark_grid = true,
                 "--benchmark" => options.benchmark = Some(PathBuf::from(value()?)),
                 "--benchmark-seed" => {
                     options.benchmark_seed = value()?
@@ -205,12 +226,13 @@ impl Options {
                 other => return Err(format!("unknown option {other}")),
             }
         }
+        if options.benchmark_grid && options.benchmark.is_none() {
+            return Err("--benchmark-grid requires --benchmark".into());
+        }
         if options.benchmark.is_some() {
             if options.frames.is_some() || options.capture.is_some() {
                 return Err("--benchmark cannot be combined with --frames or --capture".into());
             }
-            options.opponents = 1;
-            options.grid_slot = 1;
             options.quick_race = true;
             options.vsync = false;
         }
@@ -239,13 +261,16 @@ impl Options {
     }
 
     pub fn player_assists(&self) -> Assists {
-        self.driver_aids.unwrap_or(Assists {
+        let mut aids = self.driver_aids.unwrap_or(Assists {
             steering: self.assist_level,
             braking: self.assist_level,
             traction: self.assist_level,
             stability: self.assist_level,
             automatic_gears: self.automatic_gears,
-        })
+            drs_anywhere: false,
+        });
+        aids.drs_anywhere |= self.drs_anywhere;
+        aids
     }
 }
 
@@ -258,14 +283,14 @@ mod tests {
     }
 
     #[test]
-    fn benchmark_has_two_computer_slots_and_rejects_conflicting_capture_modes() {
+    fn benchmark_preserves_the_field_and_rejects_conflicting_capture_modes() {
         for args in [
             vec!["--benchmark", "out", "--opponents", "12", "--grid", "8"],
             vec!["--opponents", "12", "--grid", "8", "--benchmark", "out"],
         ] {
             let options = parse(&args).unwrap();
-            assert_eq!(options.opponents, 1);
-            assert_eq!(options.grid_slot, 1);
+            assert_eq!(options.opponents, 12);
+            assert_eq!(options.grid_slot, 8);
             assert!(options.quick_race && !options.vsync);
         }
         for args in [
@@ -354,8 +379,14 @@ mod tests {
 
     #[test]
     fn reference_era_v8_is_default_and_modern_car_remains_selectable() {
-        assert_eq!(parse(&[]).unwrap().car, "rb6");
-        assert_eq!(parse(&["--car", "rb22"]).unwrap().car, "rb22");
+        assert_eq!(parse(&[]).unwrap().car, "gen22");
+        assert_eq!(parse(&["--car", "rb22"]).unwrap().car, "gen22");
+        let options = parse(&["--team", "ferrari", "--driver", "leclerc"]).unwrap();
+        assert_eq!(
+            (options.team.as_str(), options.driver.as_str()),
+            ("ferrari", "leclerc")
+        );
+        assert_eq!(parse(&["--car", "gen22"]).unwrap().car, "gen22");
     }
 
     #[test]
@@ -368,8 +399,12 @@ mod tests {
             traction: 0.8,
             stability: 0.,
             automatic_gears: false,
+            drs_anywhere: false,
         };
         options.driver_aids = Some(selected);
         assert_eq!(options.player_assists(), selected);
+        // The command-line DRS mode applies on top of saved aids.
+        let options = parse(&["--drs-anywhere"]).unwrap();
+        assert!(options.player_assists().drs_anywhere && !options.aids_explicit);
     }
 }

@@ -48,6 +48,7 @@ impl Benchmark {
         &mut self,
         draft: &Options,
         graphics: crate::graphics::Quality,
+        video: crate::graphics::Video,
         size: egui::Vec2,
     ) -> Result<(), String> {
         let cache = std::env::var_os("XDG_CACHE_HOME")
@@ -72,6 +73,10 @@ impl Benchmark {
         let mut command = Command::new(executable);
         command
             .args(arguments(draft, graphics, size, &output))
+            .env(
+                "F1_VIDEO",
+                serde_json::to_string(&video).map_err(|e| e.to_string())?,
+            )
             .stdin(Stdio::null())
             .stdout(Stdio::from(
                 log.try_clone().map_err(|error| error.to_string())?,
@@ -95,7 +100,7 @@ fn arguments(
         Mode::Tv => "tv",
         Mode::Chase => "chase",
     };
-    vec![
+    let mut args = vec![
         "--assets".into(),
         draft.assets.as_os_str().to_owned(),
         "--track".into(),
@@ -104,6 +109,10 @@ fn arguments(
         draft.car.clone().into(),
         "--camera".into(),
         camera.into(),
+        "--opponents".into(),
+        draft.opponents.to_string().into(),
+        "--grid".into(),
+        draft.grid_slot.to_string().into(),
         "--graphics".into(),
         graphics.label().to_ascii_lowercase().into(),
         "--size".into(),
@@ -115,20 +124,29 @@ fn arguments(
         draft.benchmark_seed.to_string().into(),
         "--benchmark-start".into(),
         draft.benchmark_start.to_string().into(),
-    ]
+    ];
+    if !draft.team.is_empty() {
+        args.extend(["--team".into(), draft.team.clone().into()]);
+    }
+    if !draft.driver.is_empty() {
+        args.extend(["--driver".into(), draft.driver.clone().into()]);
+    }
+    args
 }
 
 pub(super) fn panel(ui: &mut egui::Ui, frontend: &mut Frontend, size: egui::Vec2) {
     section(ui, "Repeatable performance test");
-    ui.label(
-        "Two computer-controlled cars, already moving. A fixed 20-second drive with no contact.",
-    );
+    ui.label(format!(
+        "{} computer-controlled cars, already moving. A fixed 20-second drive with no contact.",
+        frontend.draft.opponents + 1
+    ));
     ui.add_space(12.);
     let available = frontend
         .catalog
         .circuits
         .iter()
         .any(|track| track.id == frontend.draft.track && track.unavailable.is_none());
+    let available = available && frontend.catalog.car_available(&frontend.draft);
     let run = ui.add_enabled(
         available && frontend.benchmark.child.is_none(),
         egui::Button::new(RichText::new("Run 20-second benchmark").strong())
@@ -138,9 +156,10 @@ pub(super) fn panel(ui: &mut egui::Ui, frontend: &mut Frontend, size: egui::Vec2
     #[cfg(test)]
     frontend.widgets.insert("benchmark-run", run.rect);
     if run.clicked() {
-        if let Err(error) = frontend
-            .benchmark
-            .launch(&frontend.draft, frontend.graphics, size)
+        if let Err(error) =
+            frontend
+                .benchmark
+                .launch(&frontend.draft, frontend.graphics, frontend.video, size)
         {
             frontend.benchmark.message = Some(format!("Could not start benchmark: {error}"));
         }
@@ -212,7 +231,9 @@ mod tests {
     fn menu_launch_uses_selected_settings_and_the_normal_cli_contract() {
         let mut draft = Options::parse(std::iter::empty()).unwrap();
         draft.track = if cfg!(feature = "exp") { "cota" } else { "spa" }.into();
-        draft.car = "rb22".into();
+        draft.car = "gen22".into();
+        draft.team = "ferrari".into();
+        draft.driver = "leclerc".into();
         draft.camera = Mode::Cockpit;
         let args = arguments(
             &draft,
@@ -223,11 +244,13 @@ mod tests {
         let parsed =
             Options::parse(args.into_iter().map(|arg| arg.into_string().unwrap())).unwrap();
         assert_eq!(parsed.track, draft.track);
-        assert_eq!(parsed.car, "rb22");
+        assert_eq!(parsed.car, "gen22");
+        assert_eq!(parsed.team, draft.team);
+        assert_eq!(parsed.driver, draft.driver);
         assert_eq!(parsed.camera, Mode::Cockpit);
         assert_eq!((parsed.width, parsed.height), (958, 1078));
         assert_eq!(parsed.graphics, crate::graphics::Quality::Ultra);
-        assert_eq!(parsed.opponents, 1);
+        assert_eq!(parsed.opponents, draft.opponents);
         assert_eq!(
             parsed.benchmark.unwrap(),
             Path::new("/tmp/benchmark output")

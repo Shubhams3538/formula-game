@@ -20,6 +20,8 @@ pub struct Controls {
     brake: f64,
     shift_up: bool,
     shift_down: bool,
+    drs: bool,
+    drs_press_age: Option<f32>,
 }
 
 #[derive(Default)]
@@ -28,6 +30,22 @@ pub struct Actions {
     pub pause: bool,
     pub camera: bool,
     pub reset: bool,
+}
+
+/// Shared 0..1 press envelope for wheel buttons, paddles and fingers.
+pub fn press_amount(age: f32) -> f32 {
+    const PRESS: f32 = 0.04;
+    const HOLD: f32 = 0.1;
+    const RELEASE: f32 = 0.22;
+    if !(0. ..RELEASE).contains(&age) {
+        0.
+    } else if age < PRESS {
+        age / PRESS
+    } else if age < HOLD {
+        1.
+    } else {
+        1. - (age - HOLD) / (RELEASE - HOLD)
+    }
 }
 
 const STICK_DEADZONE: f32 = 0.08;
@@ -86,6 +104,7 @@ pub fn update(
     if actions.reset {
         let player = session.player;
         session.race.recover(player);
+        session.recover_hud();
     }
 }
 
@@ -145,6 +164,13 @@ impl Controls {
         self.shift_down |= pressed(&[KeyCode::KeyQ, KeyCode::ControlLeft, KeyCode::ControlRight])
             || pad_pressed(GamepadButton::LeftTrigger)
             || pad_pressed(GamepadButton::West);
+        // Opens DRS where the race allows it; braking closes it.
+        self.drs_press_age = self.drs_press_age.map(|age| age + dt as f32);
+        let drs_pressed = pressed(&[KeyCode::KeyF]) || pad_pressed(GamepadButton::East);
+        self.drs |= drs_pressed;
+        if drs_pressed {
+            self.drs_press_age = Some(0.);
+        }
 
         Actions {
             menu: pressed(&[KeyCode::Escape]),
@@ -162,10 +188,17 @@ impl Controls {
             brake: self.brake,
             shift_up: self.shift_up,
             shift_down: self.shift_down,
+            drs: self.drs,
         };
         self.shift_up = false;
         self.shift_down = false;
+        self.drs = false;
         command
+    }
+
+    /// Visual press survives consumption of the one-tick physics command.
+    pub fn drs_press(&self) -> f32 {
+        self.drs_press_age.map(press_amount).unwrap_or(0.)
     }
 
     pub fn steer(&self) -> f64 {
@@ -199,6 +232,27 @@ mod tests {
         controls.update(&keys, None, 0.01);
         assert!(controls.car_input().shift_down);
         assert!(!controls.car_input().shift_down);
+        keys.clear();
+        keys.press(KeyCode::KeyF);
+        controls.update(&keys, None, 0.01);
+        assert!(controls.car_input().drs);
+        assert!(!controls.car_input().drs);
+    }
+
+    #[test]
+    fn gamepad_drs_press_releases_without_repeating_while_held() {
+        let keys = ButtonInput::default();
+        let mut pad = Gamepad::default();
+        let mut controls = Controls::default();
+        pad.digital_mut().press(GamepadButton::East);
+        controls.update(&keys, Some(&pad), 0.);
+        assert!(controls.car_input().drs);
+        pad.digital_mut().clear();
+        controls.update(&keys, Some(&pad), 0.06);
+        assert_eq!(controls.drs_press(), 1.);
+        assert!(!controls.car_input().drs);
+        controls.update(&keys, Some(&pad), 0.3);
+        assert_eq!(controls.drs_press(), 0.);
     }
 
     #[test]

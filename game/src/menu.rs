@@ -128,10 +128,17 @@ impl Catalog {
         });
         for (id, name, description) in [
             ("rb6", "Red Bull RB6", "2010 / V8 / 7-speed / 18,000 RPM"),
-            ("rb22", "Red Bull RB22", "Modern era / 8-speed / 15,000 RPM"),
+            (
+                "gen22",
+                "2022 ground effect",
+                "V6 hybrid / 8-speed / shared team model",
+            ),
         ] {
             let car = root.join("cars").join(id);
-            if car.join("car.glb").is_file() && car.join("car.json").is_file() {
+            if car.join("car.glb").is_file()
+                && car.join("car.json").is_file()
+                && (id != "gen22" || car.join("teams.json").is_file())
+            {
                 catalog.cars.push(CarChoice {
                     id: id.into(),
                     name,
@@ -141,16 +148,25 @@ impl Catalog {
         }
         catalog
     }
+
+    fn car_available(&self, options: &Options) -> bool {
+        self.cars.iter().any(|car| car.id == options.car)
+            && (options.car != "gen22"
+                || options.opponents == 0
+                || options.assets.join("cars/gen22/car_lod1.glb").is_file())
+    }
 }
 
 #[derive(Resource)]
 pub struct Frontend {
     pub catalog: Catalog,
+    pub teams: crate::teams::Teams,
     pub draft: Options,
     pub aids: Assists,
     pub corner_braking: f64,
     pub show_racing_line: bool,
     pub graphics: crate::graphics::Quality,
+    pub video: crate::graphics::Video,
     pub vsync: bool,
     pub display: hud::Settings,
     pub audio: crate::audio::Settings,
@@ -172,13 +188,33 @@ impl Frontend {
         let (store, prefs) = crate::preferences::Store::load(options);
         let mut draft = options.clone();
         draft.camera = prefs.camera;
+        let teams = crate::teams::Teams::load(&options.assets).unwrap_or_default();
+        if !options.quick_race && options.frames.is_none() {
+            if options.team.is_empty() {
+                draft.team = prefs.team.clone();
+            }
+            if options.driver.is_empty() && (options.team.is_empty() || options.team == prefs.team)
+            {
+                draft.driver = prefs.driver.clone();
+            }
+        }
+        if let Ok((team, driver)) = teams
+            .selection(&draft.team, &draft.driver)
+            .or_else(|_| teams.selection(&draft.team, ""))
+            .or_else(|_| teams.selection("", ""))
+        {
+            draft.team = team.id.clone();
+            draft.driver = driver.id.clone();
+        }
         Self {
             catalog: Catalog::discover(&options.assets),
+            teams,
             draft,
             aids: prefs.aids,
             corner_braking: prefs.corner_braking,
             show_racing_line: prefs.racing_line,
             graphics: prefs.graphics,
+            video: video_override().unwrap_or_else(|| prefs.video()),
             vsync: prefs.vsync,
             display: prefs.display,
             audio: prefs.audio,
@@ -192,6 +228,22 @@ impl Frontend {
             tab: Tab::Race,
             #[cfg(test)]
             widgets: default(),
+        }
+    }
+}
+
+/// `F1_VIDEO` (a JSON `graphics::Video`) overrides the video settings,
+/// including for capture and benchmark runs.
+fn video_override() -> Option<crate::graphics::Video> {
+    let json = std::env::var("F1_VIDEO").ok()?;
+    match serde_json::from_str::<crate::graphics::Video>(&json) {
+        Ok(mut video) => {
+            video.sanitize();
+            Some(video)
+        }
+        Err(error) => {
+            warn!("ignoring F1_VIDEO: {error}");
+            None
         }
     }
 }
@@ -237,12 +289,15 @@ pub fn apply(
         }
     }
     let prefs = crate::preferences::Preferences {
+        team: frontend.draft.team.clone(),
+        driver: frontend.draft.driver.clone(),
         aids: frontend.aids,
         corner_braking: frontend.corner_braking,
         racing_line: frontend.show_racing_line,
         camera: frontend.draft.camera,
         views: frontend.views.clone(),
         graphics: frontend.graphics,
+        video: (frontend.video != frontend.graphics.video()).then_some(frontend.video),
         vsync: frontend.vsync,
         display: frontend.display,
         audio: frontend.audio,
@@ -263,12 +318,7 @@ pub fn apply(
         frontend.error = Some("This circuit is not ready. Select an available circuit.".into());
         return;
     }
-    if !frontend
-        .catalog
-        .cars
-        .iter()
-        .any(|car| car.id == frontend.draft.car)
-    {
+    if !frontend.catalog.car_available(&frontend.draft) {
         frontend.error = Some("This car is not available in the asset directory.".into());
         return;
     }
@@ -284,11 +334,23 @@ pub fn apply(
             return;
         }
     };
-    for root in &roots {
-        commands.entity(root).despawn();
-    }
     let player = selected.grid_slot - 1;
+    let rig = match crate::teams::Rig::load(&selected) {
+        Ok(rig) => rig,
+        Err(error) => {
+            frontend.error = Some(error);
+            return;
+        }
+    };
+    let identities = match frontend.teams.field(&selected) {
+        Ok(field) => field,
+        Err(error) => {
+            frontend.error = Some(error);
+            return;
+        }
+    };
     let mut camera = ChaseCamera::new(&race, player);
+    camera.set_cockpit_eye(rig.cockpit_eye);
     camera.select(selected.camera);
     camera.configure(
         frontend
@@ -297,6 +359,9 @@ pub fn apply(
             .cloned()
             .unwrap_or_else(|| crate::camera::Tuning::for_car(&selected.car)),
     );
+    for root in &roots {
+        commands.entity(root).despawn();
+    }
     let sun = race.track.sun_direction;
     for mut light in &mut lights {
         *light = Transform::IDENTITY
@@ -306,6 +371,8 @@ pub fn apply(
         window.title = format!("F1 Racecraft - {}", race.track.name);
     }
     *session = Session {
+        identities,
+        rig,
         guidance: crate::driving::Guidance::new(&race, player),
         corner_braking: frontend.corner_braking,
         show_racing_line: frontend.show_racing_line,
@@ -319,6 +386,7 @@ pub fn apply(
         paused: true,
         messages: default(),
         delta: default(),
+        telemetry: default(),
         ready: false,
         screen: Screen::Loading,
     };
@@ -541,7 +609,7 @@ pub fn ui(
                             }
                             let available = frontend.catalog.circuits.iter().any(|track| {
                                 track.id == frontend.draft.track && track.unavailable.is_none()
-                            }) && frontend.catalog.cars.iter().any(|car| car.id == frontend.draft.car);
+                            }) && frontend.catalog.car_available(&frontend.draft);
                             let start = ui.add_enabled(available && !frontend.pending && frontend.benchmark.child.is_none(),
                                 egui::Button::new(RichText::new(if frontend.race_started {
                                     "Start new race"
@@ -574,17 +642,27 @@ pub fn ui(
 fn race_setup(ui: &mut egui::Ui, frontend: &mut Frontend) {
     if ui.available_width() > 850. {
         ui.columns(2, |columns| {
-            selection(&mut columns[0], &frontend.catalog, &mut frontend.draft);
+            selection(
+                &mut columns[0],
+                &frontend.catalog,
+                &frontend.teams,
+                &mut frontend.draft,
+            );
             preview(&mut columns[1], &frontend.catalog, &frontend.draft);
         });
     } else {
-        selection(ui, &frontend.catalog, &mut frontend.draft);
+        selection(ui, &frontend.catalog, &frontend.teams, &mut frontend.draft);
         ui.separator();
         preview(ui, &frontend.catalog, &frontend.draft);
     }
 }
 
-fn selection(ui: &mut egui::Ui, catalog: &Catalog, draft: &mut Options) {
+fn selection(
+    ui: &mut egui::Ui,
+    catalog: &Catalog,
+    teams: &crate::teams::Teams,
+    draft: &mut Options,
+) {
     ui.spacing_mut().slider_width = (ui.available_width() - 180.).clamp(80., 420.);
     section(ui, "Circuit");
     let selected = catalog
@@ -607,12 +685,77 @@ fn selection(ui: &mut egui::Ui, catalog: &Catalog, draft: &mut Options) {
         });
     ui.add_space(4.);
     section(ui, "Car");
-    for car in &catalog.cars {
-        ui.radio_value(&mut draft.car, car.id.clone(), car.name);
+    if catalog.cars.iter().any(|car| car.id == "gen22") {
+        ui.radio_value(&mut draft.car, "gen22".into(), "2022 ground effect");
+        ui.add_enabled_ui(draft.car == "gen22", |ui| {
+            let selected = teams.teams.iter().find(|t| t.id == draft.team);
+            egui::ComboBox::from_id_salt("team")
+                .width(ui.available_width().min(340.))
+                .selected_text(selected.map_or("Choose team", |t| t.short.as_str()))
+                .show_ui(ui, |ui| {
+                    for team in &teams.teams {
+                        ui.horizontal(|ui| {
+                            for color in [
+                                &team.colors.primary,
+                                &team.colors.secondary,
+                                &team.colors.accent,
+                            ] {
+                                let rgb = crate::teams::rgb(color).unwrap_or([128; 3]);
+                                let (rect, _) = ui.allocate_exact_size(
+                                    egui::vec2(12., 16.),
+                                    egui::Sense::hover(),
+                                );
+                                ui.painter().rect_filled(
+                                    rect,
+                                    2.,
+                                    Color32::from_rgb(rgb[0], rgb[1], rgb[2]),
+                                );
+                            }
+                            if ui
+                                .selectable_value(&mut draft.team, team.id.clone(), &team.short)
+                                .clicked()
+                            {
+                                draft.driver = team.drivers[0].id.clone();
+                            }
+                        })
+                        .response
+                        .on_hover_text(&team.name);
+                    }
+                });
+            if let Some(team) = teams.teams.iter().find(|t| t.id == draft.team) {
+                let driver_label =
+                    |driver: &crate::teams::Driver| format!("#{}  {}", driver.number, driver.name);
+                egui::ComboBox::from_id_salt("driver")
+                    .width(ui.available_width().min(340.))
+                    .selected_text(
+                        team.drivers
+                            .iter()
+                            .find(|d| d.id == draft.driver)
+                            .map_or("Choose driver".into(), driver_label),
+                    )
+                    .show_ui(ui, |ui| {
+                        for driver in &team.drivers {
+                            ui.selectable_value(
+                                &mut draft.driver,
+                                driver.id.clone(),
+                                driver_label(driver),
+                            );
+                        }
+                    });
+            }
+            ui.add_enabled(false, egui::Label::new("Livery: Source model"));
+        });
     }
-    if let Some(car) = catalog.cars.iter().find(|car| car.id == draft.car) {
-        ui.label(RichText::new(car.description).color(DIM));
-    }
+    egui::CollapsingHeader::new("Legacy cars")
+        .default_open(draft.car != "gen22")
+        .show(ui, |ui| {
+            for car in catalog.cars.iter().filter(|car| car.id != "gen22") {
+                ui.radio_value(&mut draft.car, car.id.clone(), car.name);
+                if draft.car == car.id {
+                    ui.label(RichText::new(car.description).color(DIM));
+                }
+            }
+        });
     ui.separator();
     ui.add(egui::Slider::new(&mut draft.laps, 1..=30).text("Laps"));
     ui.add(egui::Slider::new(&mut draft.opponents, 0..=15).text("AI opponents"));
@@ -711,7 +854,8 @@ fn preview(ui: &mut egui::Ui, catalog: &Catalog, draft: &Options) {
     section(ui, "Drive your way");
     ui.label("Choose individual driving aids or a preset in Driving aids. You can adjust them from the pause menu without restarting.");
     ui.label(
-        RichText::new("C cycles cameras / 1 cockpit / 2 TV / 3 third person / Esc menu").color(DIM),
+        RichText::new("C cycles cameras / 1 cockpit / 2 TV / 3 third person / F DRS / Esc menu")
+            .color(DIM),
     );
 }
 
@@ -731,6 +875,8 @@ fn aids_panel(ui: &mut egui::Ui, frontend: &mut Frontend) -> [egui::Rect; 3] {
                     traction: 1.,
                     stability: 1.,
                     automatic_gears: true,
+                    // A mode, not an aid: presets leave it alone.
+                    drs_anywhere: aids.drs_anywhere,
                 };
             }
             let balanced = ui.button("Balanced");
@@ -743,6 +889,8 @@ fn aids_panel(ui: &mut egui::Ui, frontend: &mut Frontend) -> [egui::Rect; 3] {
                     traction: 0.6,
                     stability: 0.5,
                     automatic_gears: true,
+                    // A mode, not an aid: presets leave it alone.
+                    drs_anywhere: aids.drs_anywhere,
                 };
             }
             let unassisted = ui.button("Unassisted");
@@ -755,16 +903,23 @@ fn aids_panel(ui: &mut egui::Ui, frontend: &mut Frontend) -> [egui::Rect; 3] {
                     traction: 0.,
                     stability: 0.,
                     automatic_gears: false,
+                    // A mode, not an aid: presets leave it alone.
+                    drs_anywhere: aids.drs_anywhere,
                 };
             }
             [beginner.rect, balanced.rect, unassisted.rect]
         })
         .inner;
     ui.separator();
-    ui.horizontal(|ui| {
+    ui.horizontal_wrapped(|ui| {
         ui.checkbox(&mut aids.automatic_gears, "Automatic gears")
             .on_hover_text("Manual shifts: E / Shift up, Q / Ctrl down.");
         ui.checkbox(&mut frontend.show_racing_line, "Racing line");
+        ui.checkbox(&mut aids.drs_anywhere, "DRS anywhere")
+            .on_hover_text(
+                "Open DRS with F (gamepad B) anywhere on track. Braking still closes it. \
+             AI cars keep to the race rules.",
+            );
     });
     ui.add_space(8.);
     let count = if ui.available_width() >= 1000. { 2 } else { 1 };
@@ -910,18 +1065,192 @@ fn warm_fonts(context: &egui::Context) {
 }
 
 fn graphics_panel(ui: &mut egui::Ui, frontend: &mut Frontend, session: &mut Session) {
-    let selected = &mut frontend.graphics;
+    use crate::graphics::{AntiAlias, Level, ShadowFilter, TextureDetail, ToneMap};
     section(ui, "Graphics preset");
-    ui.label("Changes apply immediately.");
+    ui.label("Changes apply immediately. Texture detail applies from the next race.");
     ui.add_space(6.);
-    for quality in crate::graphics::Quality::ALL {
-        ui.radio_value(selected, quality, quality.label());
-        ui.label(RichText::new(quality.description()).size(15.).color(DIM));
-    }
+    ui.horizontal(|ui| {
+        for quality in crate::graphics::Quality::ALL {
+            let active = frontend.video.preset() == Some(quality);
+            if ui
+                .selectable_label(active, quality.label())
+                .on_hover_text(quality.description())
+                .clicked()
+            {
+                frontend.graphics = quality;
+                frontend.video = quality.video();
+            }
+        }
+        let custom = frontend.video.preset().is_none();
+        ui.add_enabled(false, egui::Button::new("Custom").selected(custom));
+    });
     ui.add_space(8.);
     ui.checkbox(&mut frontend.vsync, "Vertical sync")
         .on_hover_text("Off renders as fast as the GPU allows, with possible tearing.");
     ui.checkbox(&mut session.show_performance, "Show frame rate  F3");
+    ui.add_space(12.);
+
+    let video = &mut frontend.video;
+    fn choice<T: Copy + PartialEq>(
+        ui: &mut egui::Ui,
+        id: &str,
+        label: &str,
+        value: &mut T,
+        all: &[T],
+        name: fn(T) -> &'static str,
+    ) {
+        ui.horizontal(|ui| {
+            ui.label(label);
+            egui::ComboBox::from_id_salt(id)
+                .selected_text(name(*value))
+                .show_ui(ui, |ui| {
+                    for &option in all {
+                        ui.selectable_value(value, option, name(option));
+                    }
+                });
+        });
+    }
+    let column_count = if ui.available_width() >= 720. { 2 } else { 1 };
+    ui.columns(column_count, |columns| {
+        let ui = &mut columns[0];
+        section(ui, "Anti-aliasing and sharpness");
+        choice(
+            ui,
+            "aa",
+            "Anti-aliasing",
+            &mut video.anti_alias,
+            &AntiAlias::ALL,
+            AntiAlias::label,
+        );
+        if video.anti_alias == AntiAlias::Msaa4 {
+            ui.label(
+                RichText::new("MSAA disables ambient occlusion.")
+                    .size(15.)
+                    .color(DIM),
+            );
+        }
+        ui.add(egui::Slider::new(&mut video.sharpening, 0.0..=1.0).text("Sharpening"));
+        ui.add_space(10.);
+        section(ui, "Shadows and lighting");
+        ui.horizontal(|ui| {
+            ui.label("Shadow resolution");
+            egui::ComboBox::from_id_salt("shadow_res")
+                .selected_text(video.shadow_resolution.to_string())
+                .show_ui(ui, |ui| {
+                    for size in [1024, 2048, 4096, 8192] {
+                        ui.selectable_value(&mut video.shadow_resolution, size, size.to_string());
+                    }
+                });
+        });
+        ui.add(egui::Slider::new(&mut video.shadow_cascades, 1..=4).text("Shadow cascades"));
+        ui.add(
+            egui::Slider::new(&mut video.shadow_distance, 30.0..=300.0)
+                .text("Shadow distance")
+                .suffix(" m"),
+        );
+        choice(
+            ui,
+            "shadow_filter",
+            "Shadow filtering",
+            &mut video.shadow_filter,
+            &ShadowFilter::ALL,
+            ShadowFilter::label,
+        );
+        choice(
+            ui,
+            "ao",
+            "Ambient occlusion",
+            &mut video.ambient_occlusion,
+            &Level::ALL,
+            Level::label,
+        );
+        ui.add_enabled(
+            video.ambient_occlusion != Level::Off,
+            egui::Checkbox::new(&mut video.contact_shadows, "Contact shadows"),
+        );
+        choice(
+            ui,
+            "sky",
+            "Sky lighting",
+            &mut video.sky,
+            &Level::ALL[1..],
+            Level::label,
+        );
+        ui.add(egui::Slider::new(&mut video.haze, 0.0..=1.0).text("Haze"));
+        ui.add_space(10.);
+        section(ui, "Textures");
+        choice(
+            ui,
+            "textures",
+            "Texture detail",
+            &mut video.texture,
+            &TextureDetail::ALL,
+            TextureDetail::label,
+        );
+        choice(
+            ui,
+            "ai_detail",
+            "AI detail",
+            &mut video.ai_detail,
+            &Level::ALL,
+            Level::label,
+        );
+
+        let ui = &mut columns[column_count - 1];
+        section(ui, "Post-processing");
+        choice(
+            ui,
+            "tonemap",
+            "Tonemapping",
+            &mut video.tonemapping,
+            &ToneMap::ALL,
+            ToneMap::label,
+        );
+        ui.add(
+            egui::Slider::new(&mut video.exposure, -3.0..=3.0)
+                .text("Exposure")
+                .suffix(" EV"),
+        );
+        ui.add(egui::Slider::new(&mut video.saturation, 0.0..=2.0).text("Saturation"));
+        ui.add(egui::Slider::new(&mut video.contrast, 0.5..=1.5).text("Contrast"));
+        ui.add(egui::Slider::new(&mut video.temperature, -1.0..=1.0).text("Temperature"));
+        ui.add(egui::Slider::new(&mut video.bloom, 0.0..=1.0).text("Bloom"));
+        ui.add(egui::Slider::new(&mut video.vignette, 0.0..=1.0).text("Vignette"));
+        ui.add(
+            egui::Slider::new(&mut video.chromatic_aberration, 0.0..=1.0)
+                .text("Chromatic aberration"),
+        );
+        ui.add(egui::Slider::new(&mut video.motion_blur, 0.0..=1.0).text("Motion blur"));
+        ui.checkbox(&mut video.depth_of_field, "Depth of field");
+        ui.add_enabled_ui(video.depth_of_field, |ui| {
+            ui.checkbox(&mut video.bokeh, "Bokeh (slower)");
+            ui.add(
+                egui::Slider::new(&mut video.focus_distance, 1.0..=200.0)
+                    .logarithmic(true)
+                    .text("Focus distance")
+                    .suffix(" m"),
+            );
+        });
+        if ui.button("Reset post-processing").clicked() {
+            let base = crate::graphics::Video::default();
+            video.tonemapping = base.tonemapping;
+            video.exposure = base.exposure;
+            video.saturation = base.saturation;
+            video.contrast = base.contrast;
+            video.temperature = base.temperature;
+            video.bloom = base.bloom;
+            video.vignette = base.vignette;
+            video.chromatic_aberration = base.chromatic_aberration;
+            video.motion_blur = base.motion_blur;
+            video.depth_of_field = base.depth_of_field;
+            video.bokeh = base.bokeh;
+            video.focus_distance = base.focus_distance;
+            video.haze = base.haze;
+        }
+    });
+    if let Some(preset) = frontend.video.preset() {
+        frontend.graphics = preset;
+    }
 }
 
 fn audio_panel(ui: &mut egui::Ui, frontend: &mut Frontend) {
@@ -1005,7 +1334,7 @@ fn display_panel(ui: &mut egui::Ui, frontend: &mut Frontend) {
         (
             hud::MapMode::Nearby,
             "Nearby track",
-            "A close view of the next bends and nearby cars. Your car points up.",
+            "Zooms around your car while keeping the whole circuit visible. Your car points up.",
             "map-nearby",
         ),
     ] {
@@ -1065,6 +1394,28 @@ fn controls_panel(ui: &mut egui::Ui, selected: &mut Mode, session: &mut Session)
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn gen22_requires_roster_and_opponent_lod_for_the_selected_field() {
+        let root = std::env::temp_dir().join(format!("f1-car-catalog-{}", std::process::id()));
+        let car = root.join("cars/gen22");
+        std::fs::create_dir_all(&car).unwrap();
+        for name in ["car.glb", "car.json"] {
+            std::fs::write(car.join(name), []).unwrap();
+        }
+        let mut options = Options::parse(std::iter::empty()).unwrap();
+        options.assets = root.clone();
+        options.opponents = 0;
+        assert!(!Catalog::discover(&root).car_available(&options));
+        std::fs::write(car.join("teams.json"), []).unwrap();
+        let catalog = Catalog::discover(&root);
+        assert!(catalog.car_available(&options));
+        options.opponents = 1;
+        assert!(!catalog.car_available(&options));
+        std::fs::write(car.join("car_lod1.glb"), []).unwrap();
+        assert!(catalog.car_available(&options));
+        std::fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn discovery_distinguishes_complete_incomplete_and_deferred_tracks() {

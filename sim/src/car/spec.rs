@@ -122,6 +122,15 @@ pub struct AeroSpec {
     pub drag_area: f64,
     pub front_wing_drag: f64,
     pub rear_wing_drag: f64,
+    /// CdA and rear ClA removed by a fully open DRS flap; zero without DRS.
+    pub drs_drag: f64,
+    pub drs_lift: f64,
+}
+
+impl AeroSpec {
+    pub fn has_drs(&self) -> bool {
+        self.drs_drag > 0.0
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -245,19 +254,24 @@ impl CarSpec {
         self.wheels[2].position.z + self.wheelbase() * self.front_weight
     }
 
-    /// Red Bull RB22-style 2026 car: heavier, very strong power unit, less downforce.
-    pub fn rb22_with(geometry: &CarGeometry) -> Self {
-        Self::rb22(geometry.wheels, geometry.length, geometry.width)
+    /// Shared 2022 ground-effect car; handling is tuned for simcade racing.
+    pub fn gen22_with(geometry: &CarGeometry) -> Self {
+        Self::gen22(geometry.wheels, geometry.length, geometry.width)
     }
 
     pub fn rb6_with(geometry: &CarGeometry) -> Self {
         Self::rb6(geometry.wheels, geometry.length, geometry.width)
     }
 
-    pub fn rb22(wheels: [WheelSpec; 4], length: f64, width: f64) -> Self {
+    pub fn gen22(wheels: [WheelSpec; 4], length: f64, width: f64) -> Self {
+        let mut gear_ratios = gear_set(18.0, 5.22, 8);
+        // Seventh must reach its shift lights before high-wing drag balances
+        // engine power. Keep eighth's ratio for the low-drag/DRS top speed.
+        gear_ratios[6] = 6.0;
         Self {
-            name: "RB22".to_string(),
-            mass: 800.0,
+            name: "GEN22".to_string(),
+            // Race trim: the 798 kg minimum with driver plus a race-average fuel load.
+            mass: 850.0,
             yaw_inertia: 1150.0,
             cg_height: 0.27,
             front_weight: 0.455,
@@ -265,23 +279,27 @@ impl CarSpec {
             length,
             width,
             engine: EngineSpec {
-                max_power: 690_000.0,
+                // Wheel power with a race-average ERS deployment, not a qualifying peak.
+                max_power: 640_000.0,
                 peak_power_rpm: 12_400.0,
                 rev_limit: 13_500.0,
                 idle_rpm: 4_500.0,
-                gear_ratios: gear_set(20.0, 5.2, 8),
+                gear_ratios,
                 reverse_ratio: 24.0,
                 upshift_time: 0.035,
                 downshift_time: 0.06,
             },
             aero: AeroSpec {
-                front_lift_area: 1.2,
-                rear_lift_area: 1.55,
+                front_lift_area: 1.86,
+                rear_lift_area: 2.4,
                 front_wing_lift: 0.12,
                 rear_wing_lift: 0.16,
                 drag_area: 0.98,
                 front_wing_drag: 0.022,
                 rear_wing_drag: 0.042,
+                // About 10% of the car's drag: roughly +12 km/h at the end of Kemmel.
+                drs_drag: 0.13,
+                drs_lift: 0.4,
             },
             tyre_friction: 1.72,
             peak_slip_angle: 0.095,
@@ -320,6 +338,9 @@ impl CarSpec {
                 drag_area: 0.9,
                 front_wing_drag: 0.022,
                 rear_wing_drag: 0.042,
+                // DRS arrived in 2011.
+                drs_drag: 0.0,
+                drs_lift: 0.0,
             },
             tyre_friction: 1.75,
             peak_slip_angle: 0.09,
@@ -331,12 +352,14 @@ impl CarSpec {
 }
 
 /// Overall ratios from `first` to `top`, slightly closer together at the top.
+/// Overall ratios from `first` to `top`, spaced so each gear adds a similar
+/// slice of road speed, the way race gearboxes are stacked: low gears are not
+/// bunched together and the top gears are not left with big rpm drops.
 fn gear_set(first: f64, top: f64, gears: usize) -> Vec<f64> {
     (0..gears)
         .map(|index| {
-            let t = index as f64 / (gears - 1) as f64;
-            let t = t.powf(0.88);
-            first * (top / first).powf(t)
+            let t = (index as f64 / (gears - 1) as f64).powf(0.9);
+            first / (1.0 + (first / top - 1.0) * t)
         })
         .collect()
 }
@@ -361,8 +384,20 @@ mod tests {
     use super::*;
 
     #[test]
+    fn geometry_tolerates_modern_rig_metadata() {
+        let wheel = serde_json::json!({"centre":[0.8,0.36,1.8],"radius":0.36,"width":0.36});
+        let rear = serde_json::json!({"centre":[0.8,0.36,-1.8],"radius":0.36,"width":0.36});
+        let json = serde_json::json!({"wheels":{"fl":wheel,"fr":wheel,"rl":rear,"rr":rear},"extents":{"min":[-1.,0.,-2.8],"max":[1.,1.2,2.8]},"cockpit_eye":[0.,1.,-0.2],"drs":{"open_angle":-0.3},"steering_wheel":{"axis":[0.,0.,1.]},"faces":[]});
+        let geometry = CarGeometry::from_json(&serde_json::to_vec(&json).unwrap()).unwrap();
+        let spec = CarSpec::gen22_with(&geometry);
+        assert_eq!(spec.name, "GEN22");
+        assert_eq!(spec.mass, 850.);
+        assert!((spec.wheelbase() - 3.6).abs() < 1e-9);
+    }
+
+    #[test]
     fn wings_trade_downforce_for_drag() {
-        let spec = CarSpec::rb22(test_wheels(), 5.4, 1.9);
+        let spec = CarSpec::gen22(test_wheels(), 5.4, 1.9);
         let low = Setup {
             front_wing: 1.0,
             rear_wing: 1.0,
@@ -380,9 +415,17 @@ mod tests {
 
     #[test]
     fn gears_are_monotonic() {
-        let ratios = gear_set(20.0, 5.2, 8);
+        let ratios = gear_set(18.0, 5.22, 8);
         assert_eq!(ratios.len(), 8);
         assert!(ratios.windows(2).all(|pair| pair[0] > pair[1]));
-        assert!((ratios[7] - 5.2).abs() < 1e-9);
+        assert!((ratios[0] - 18.0).abs() < 1e-9);
+        assert!((ratios[7] - 5.22).abs() < 1e-9);
+        // Each gear adds a similar slice of road speed (speed ∝ 1/ratio), so
+        // the low gears are not bunched together.
+        let steps: Vec<f64> = ratios.windows(2).map(|p| 1.0 / p[1] - 1.0 / p[0]).collect();
+        let (min, max) = steps
+            .iter()
+            .fold((f64::MAX, 0.0_f64), |(a, b), &x| (a.min(x), b.max(x)));
+        assert!(max < min * 1.5, "{steps:?}");
     }
 }
