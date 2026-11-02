@@ -144,8 +144,8 @@ fn unpack(executable: &Path, destination: &Path) -> io::Result<()> {
         "assets/tracks/spa/visual.glb",
         "assets/cars/rb6/car.json",
         "assets/cars/rb6/car.glb",
-        "assets/cars/rb22/car.json",
-        "assets/cars/rb22/car.glb",
+        "assets/cars/gen22/car.json",
+        "assets/cars/gen22/car.glb",
     ] {
         if !destination.join(file).is_file() {
             return Err(invalid("A required game file is missing"));

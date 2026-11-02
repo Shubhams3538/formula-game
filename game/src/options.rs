@@ -160,7 +160,6 @@ impl Options {
                 }
                 "--drs-anywhere" => {
                     options.drs_anywhere = true;
-                    options.aids_explicit = true;
                 }
                 "--mute" => options.mute = true,
                 "--no-vsync" => options.vsync = false,
@@ -406,6 +405,6 @@ mod tests {
         assert_eq!(options.player_assists(), selected);
         // The command-line DRS mode applies on top of saved aids.
         let options = parse(&["--drs-anywhere"]).unwrap();
-        assert!(options.player_assists().drs_anywhere && options.aids_explicit);
+        assert!(options.player_assists().drs_anywhere && !options.aids_explicit);
     }
 }

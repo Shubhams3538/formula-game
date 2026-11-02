@@ -1187,6 +1187,14 @@ fn graphics_panel(ui: &mut egui::Ui, frontend: &mut Frontend, session: &mut Sess
             &TextureDetail::ALL,
             TextureDetail::label,
         );
+        choice(
+            ui,
+            "ai_detail",
+            "AI detail",
+            &mut video.ai_detail,
+            &Level::ALL,
+            Level::label,
+        );
 
         let ui = &mut columns[column_count - 1];
         section(ui, "Post-processing");
@@ -1235,9 +1243,14 @@ fn graphics_panel(ui: &mut egui::Ui, frontend: &mut Frontend, session: &mut Sess
             video.chromatic_aberration = base.chromatic_aberration;
             video.motion_blur = base.motion_blur;
             video.depth_of_field = base.depth_of_field;
+            video.bokeh = base.bokeh;
+            video.focus_distance = base.focus_distance;
             video.haze = base.haze;
         }
     });
+    if let Some(preset) = frontend.video.preset() {
+        frontend.graphics = preset;
+    }
 }
 
 fn audio_panel(ui: &mut egui::Ui, frontend: &mut Frontend) {

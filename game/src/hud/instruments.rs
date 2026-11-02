@@ -22,7 +22,9 @@ pub(super) enum DrsLamp {
 impl DrsLamp {
     pub(super) fn of(session: &Session) -> Option<Self> {
         let car = &session.race.entrants[session.player].car;
-        if !car.spec.aero.has_drs() || session.race.drs_zones.is_empty() {
+        if !car.spec.aero.has_drs()
+            || (session.race.drs_zones.is_empty() && !car.assists.drs_anywhere)
+        {
             return None;
         }
         Some(if car.drs.flap > 0.0 {

@@ -72,7 +72,7 @@ pub struct Drs {
 
 impl Drs {
     fn update(&mut self, request: bool, brake: f64, dt: f64) {
-        if !self.available || brake > 0.05 {
+        if !self.available || brake > 0.0 {
             self.open = false;
         } else if request {
             self.open = true;

@@ -180,7 +180,8 @@ pub fn spawn_visuals(
         .load(GltfAssetLabel::Scene(0).from_asset(format!("tracks/{}/visual.glb", options.track)));
     let car =
         server.load(GltfAssetLabel::Scene(0).from_asset(format!("cars/{}/car.glb", options.car)));
-    let opponent = if options.car == "gen22" {
+    let has_gen22_lod1 = options.assets.join("cars/gen22/car_lod1.glb").is_file();
+    let opponent = if options.car == "gen22" && has_gen22_lod1 {
         server.load(GltfAssetLabel::Scene(0).from_asset("cars/gen22/car_lod1.glb"))
     } else {
         car.clone()
@@ -743,6 +744,23 @@ pub fn load_race(options: &Options) -> Result<Race, String> {
         && !root.join("cars/gen22/car_lod1.glb").is_file()
     {
         return Err("missing asset cars/gen22/car_lod1.glb".into());
+    }
+    if options.car == "gen22" {
+        let mut lods = vec![String::new(), "lod1".into()];
+        if root.join("cars/gen22/car_lod2.glb").is_file() {
+            lods.push("lod2".into());
+        }
+        for lod in lods {
+            for compound in ["soft", "medium", "hard"] {
+                let path = root
+                    .join("cars/gen22/tyres")
+                    .join(&lod)
+                    .join(format!("{compound}.png"));
+                if !path.is_file() {
+                    return Err(format!("missing asset {}", path.display()));
+                }
+            }
+        }
     }
     let track = Arc::new(Track::load(&track_dir)?);
     let geometry = CarGeometry::load(root.join(format!("cars/{}/car.json", options.car)))?;

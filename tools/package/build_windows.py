@@ -90,14 +90,19 @@ def main():
     required = [
         *(Path("cars") / car / name for car in ("rb6", "gen22")
           for name in ("car.json", "car.glb")),
-        *(Path("cars/gen22") / name for name in ("car_lod1.glb", "car_lod2.glb", "teams.json")),
+        *(Path("cars/gen22") / name for name in ("car_lod1.glb", "teams.json")),
         *(Path("cars/gen22/tyres") / lod / (compound + ".png")
-          for lod in ("", "lod1", "lod2") for compound in ("soft", "medium", "hard")),
+          for lod in ("", "lod1") for compound in ("soft", "medium", "hard")),
         *(Path("tracks/spa") / name for name in ("track.json", "collision.bin", "visual.glb")),
     ]
     for name in required:
         if not (assets / name).is_file():
             raise FileNotFoundError(assets / name)
+    if (assets / "cars/gen22/car_lod2.glb").is_file():
+        for compound in ("soft", "medium", "hard"):
+            path = assets / "cars/gen22/tyres/lod2" / f"{compound}.png"
+            if not path.is_file():
+                raise FileNotFoundError(path)
     if not args.skip_build:
         subprocess.run(cargo + ["build", "--release", "--locked", "-p",
                         "f1-the-game", "--target", args.target], cwd=ROOT, check=True)

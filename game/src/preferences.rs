@@ -126,6 +126,9 @@ impl Store {
         if !options.vsync {
             prefs.vsync = false;
         }
+        if options.drs_anywhere {
+            prefs.aids.drs_anywhere = true;
+        }
         if options.aids_explicit {
             prefs.aids = options.player_assists();
             prefs.corner_braking = options.corner_braking;

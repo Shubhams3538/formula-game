@@ -108,7 +108,10 @@ def validate_gen22_assets(directory):
     roster = json.loads((directory / "teams.json").read_text())
     if not roster["teams"]:
         raise RuntimeError("GEN22 roster must not be empty")
-    for lod in ("", "lod1", "lod2"):
+    lods = ["", "lod1"]
+    if (directory / "car_lod2.glb").is_file():
+        lods.append("lod2")
+    for lod in lods:
         for compound in ("soft", "medium", "hard"):
             path = directory / "tyres" / lod / (compound + ".png")
             if not path.is_file():

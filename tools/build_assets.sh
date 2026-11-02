@@ -6,6 +6,7 @@ zip_dir=${ZIP_DIR:-$repo}
 output=${ASSET_DIR:-$repo/assets}
 python=${PYTHON:-python3}
 blender=${BLENDER:-blender}
+export BLENDER="$blender"
 selection=${1:-all}
 export OPENBLAS_NUM_THREADS=${OPENBLAS_NUM_THREADS:-1}
 temporary=()

@@ -48,6 +48,7 @@ impl Benchmark {
         &mut self,
         draft: &Options,
         graphics: crate::graphics::Quality,
+        video: crate::graphics::Video,
         size: egui::Vec2,
     ) -> Result<(), String> {
         let cache = std::env::var_os("XDG_CACHE_HOME")
@@ -72,6 +73,10 @@ impl Benchmark {
         let mut command = Command::new(executable);
         command
             .args(arguments(draft, graphics, size, &output))
+            .env(
+                "F1_VIDEO",
+                serde_json::to_string(&video).map_err(|e| e.to_string())?,
+            )
             .stdin(Stdio::null())
             .stdout(Stdio::from(
                 log.try_clone().map_err(|error| error.to_string())?,
@@ -141,6 +146,7 @@ pub(super) fn panel(ui: &mut egui::Ui, frontend: &mut Frontend, size: egui::Vec2
         .circuits
         .iter()
         .any(|track| track.id == frontend.draft.track && track.unavailable.is_none());
+    let available = available && frontend.catalog.car_available(&frontend.draft);
     let run = ui.add_enabled(
         available && frontend.benchmark.child.is_none(),
         egui::Button::new(RichText::new("Run 20-second benchmark").strong())
@@ -150,9 +156,10 @@ pub(super) fn panel(ui: &mut egui::Ui, frontend: &mut Frontend, size: egui::Vec2
     #[cfg(test)]
     frontend.widgets.insert("benchmark-run", run.rect);
     if run.clicked() {
-        if let Err(error) = frontend
-            .benchmark
-            .launch(&frontend.draft, frontend.graphics, size)
+        if let Err(error) =
+            frontend
+                .benchmark
+                .launch(&frontend.draft, frontend.graphics, frontend.video, size)
         {
             frontend.benchmark.message = Some(format!("Could not start benchmark: {error}"));
         }

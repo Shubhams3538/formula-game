@@ -74,6 +74,8 @@ impl CompoundMaterials {
         materials: &mut Assets<StandardMaterial>,
     ) -> Handle<StandardMaterial> {
         self.0
+            .retain(|(_, source), _| materials.get(*source).is_some());
+        self.0
             .entry((compound.to_owned(), source.id()))
             .or_insert_with(|| {
                 let mut material = materials.get(source).unwrap().clone();

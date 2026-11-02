@@ -17,6 +17,8 @@ def main():
     for folder in ('textures_audi','shadow_maps','material_maps'):
         destination=args.output/folder
         destination.mkdir(parents=True,exist_ok=True)
+        for stale in destination.glob('*.png'):
+            stale.unlink()
         for path in sorted((args.source/folder).glob('*.png')):
             with Image.open(path) as image:
                 image.load()

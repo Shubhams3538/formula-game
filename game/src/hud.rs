@@ -405,12 +405,22 @@ fn draw_map(hud: &Hud, _style: &HudStyle, session: &Session, mode: MapMode, scal
         let point = map(session
             .minimap
             .project(entrant.car.position.x, entrant.car.position.z));
-        hud.circle(point, 4.5 * scale, WELL);
-        hud.circle(point, 3. * scale, WHITE);
+        let clipped = Hud {
+            painter: hud.painter.with_clip_rect(rect),
+            size: hud.size,
+            finish: hud.finish,
+        };
+        clipped.circle(point, 4.5 * scale, WELL);
+        clipped.circle(point, 3. * scale, WHITE);
     }
     let me = map(player);
-    hud.circle(me, 7. * scale, WELL);
-    hud.circle(me, 5.5 * scale, ACCENT);
+    let clipped = Hud {
+        painter: hud.painter.with_clip_rect(rect),
+        size: hud.size,
+        finish: hud.finish,
+    };
+    clipped.circle(me, 7. * scale, WELL);
+    clipped.circle(me, 5.5 * scale, ACCENT);
 }
 
 /// Short-lived banner messages.
@@ -698,7 +708,8 @@ pub fn draw(hud: &mut Hud, style: &HudStyle, session: &mut Session, display: Set
     );
     // Reserve room for LAP and even a three-digit lap count. Fit using the
     // actual font, since equal character counts can have very different widths.
-    let team_width = 142. * scale;
+    // Keep the team label to the right of the widest four-digit lap readout.
+    let team_width = (tower_w / scale - 152.).max(80.) * scale;
     let font_size = 18.2 * scale;
     let measured = hud.text_width(&style.regular, font_size, &team_position);
     let fitted = font_size * (team_width / measured.max(1.)).min(1.);

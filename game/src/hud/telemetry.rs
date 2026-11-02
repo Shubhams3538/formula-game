@@ -87,6 +87,8 @@ impl Telemetry {
     pub(super) fn recover(&mut self) {
         self.speed = Average::default();
         self.rpm = Average::default();
+        self.tow = Average::default();
+        self.wake = Average::default();
         self.gaps.clear();
         self.rivals.clear();
         self.pass = None;

@@ -250,9 +250,9 @@ impl Race {
     /// Earns DRS at each detection point (within [`drs::GAP`] of the car ahead,
     /// from lap [`drs::ENABLED_AFTER_LAPS`] + 1) and opens it inside the zone.
     fn update_drs(&mut self) {
-        let racing = self.phase == Phase::Racing;
+        let racing = matches!(self.phase, Phase::Racing | Phase::Finishing);
         let gaps: Vec<Option<f64>> = (0..self.entrants.len())
-            .map(|index| self.gap_ahead(index))
+            .map(|index| self.physical_gap_ahead(index))
             .collect();
         for (index, entrant) in self.entrants.iter_mut().enumerate() {
             let timing = &entrant.timing;
@@ -269,8 +269,10 @@ impl Race {
                 qualifies,
             );
             let anywhere = entrant.car.assists.drs_anywhere;
-            entrant.car.drs.available =
-                (open || anywhere) && racing && entrant.car.spec.aero.has_drs();
+            entrant.car.drs.available = (open || anywhere)
+                && racing
+                && entrant.timing.finish_time.is_none()
+                && entrant.car.spec.aero.has_drs();
         }
     }
 
@@ -617,7 +619,19 @@ impl Race {
         let ahead = self.order[position - 2];
         let distance =
             self.entrants[ahead].timing.distance - self.entrants[entrant].timing.distance;
-        Some(distance / self.entrants[entrant].car.speed().max(20.0))
+        Some(distance / self.entrants[entrant].car.speed().max(f64::EPSILON))
+    }
+
+    fn physical_gap_ahead(&self, entrant: usize) -> Option<f64> {
+        let follower = self.entrants[entrant].car.track_position.s;
+        self.entrants
+            .iter()
+            .enumerate()
+            .filter(|(index, other)| *index != entrant && other.timing.finish_time.is_none())
+            .map(|(_, other)| self.track.delta(follower, other.car.track_position.s))
+            .filter(|gap| *gap > 0.0)
+            .min_by(f64::total_cmp)
+            .map(|distance| distance / self.entrants[entrant].car.speed().max(f64::EPSILON))
     }
 }
 
