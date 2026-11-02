@@ -38,18 +38,20 @@ pub(crate) enum Tab {
     Camera,
     Controls,
     Graphics,
+    Effects,
     Audio,
     Hud,
     Benchmark,
 }
 
 impl Tab {
-    const ALL: [Self; 8] = [
+    const ALL: [Self; 9] = [
         Self::Race,
         Self::Aids,
         Self::Camera,
         Self::Controls,
         Self::Graphics,
+        Self::Effects,
         Self::Hud,
         Self::Audio,
         Self::Benchmark,
@@ -59,8 +61,8 @@ impl Tab {
         match self {
             Self::Race | Self::Aids => "GAMEPLAY",
             Self::Camera | Self::Controls => "DRIVING",
-            Self::Graphics | Self::Hud => "VISUALS",
-            Self::Audio => "SOUND",
+            Self::Graphics | Self::Effects | Self::Hud => "VISUALS",
+            Self::Audio => "AUDIO",
             Self::Benchmark => "TOOLS",
         }
     }
@@ -71,8 +73,9 @@ impl Tab {
             Self::Aids => "Driving assists",
             Self::Camera => "Camera",
             Self::Controls => "Controls",
-            Self::Graphics => "Video",
-            Self::Audio => "Audio",
+            Self::Graphics => "Graphics",
+            Self::Effects => "Effects",
+            Self::Audio => "Sound",
             Self::Hud => "Interface",
             Self::Benchmark => "Benchmark",
         }
@@ -84,8 +87,9 @@ impl Tab {
             Self::Aids => "Choose an assist preset or tune braking, steering and car control.",
             Self::Camera => "Choose your driving view and adjust its framing.",
             Self::Controls => "See the keyboard and gamepad bindings.",
-            Self::Graphics => "Balance image quality and performance.",
-            Self::Audio => "Set engine sound and the overall mix.",
+            Self::Graphics => "Set image quality, detail and lighting.",
+            Self::Effects => "Tune exposure, color, lens and motion effects.",
+            Self::Audio => "Choose an engine sound and balance the race mix.",
             Self::Hud => "Customize dashboard and track map readouts.",
             Self::Benchmark => "Measure performance with your current setup.",
         }
@@ -600,12 +604,12 @@ pub fn ui(
                         if let Some(error) = &frontend.error {
                             ui.colored_label(Color32::from_rgb(255, 150, 150), error);
                         }
-                        let footer_height = if size.x < 800. { 132. } else { 96. };
+                        let footer_height = if size.x < 800. { 180. } else { 160. };
                         let body_height = (ui.available_height() - footer_height).max(48.);
                         let body = housing().inner_margin(10).show(ui, |ui| {
                             let pane_height = (body_height - 28.).max(24.);
-                            let nav_width = if size.x < 760. { 142. } else { 194. };
-                            let nav_button_height = ((pane_height - 170.) / 8.).clamp(18., 38.);
+                            let nav_width = if size.x < 760. { 180. } else { 194. };
+                            let nav_button_height = ((pane_height - 190.) / 9.).clamp(18., 38.);
                             ui.horizontal_top(|ui| {
                                 ui.allocate_ui_with_layout(
                                     egui::vec2(nav_width, pane_height),
@@ -624,15 +628,10 @@ pub fn ui(
                                             }
                                             let selected = frontend.tab == tab;
                                             let label = tab.label();
-                                            let text = if selected {
-                                                format!("{label}   ›")
-                                            } else {
-                                                label.to_owned()
-                                            };
                                             let response = ui.add_sized(
                                                 egui::vec2(nav_width, nav_button_height),
                                                 egui::Button::new(
-                                                    RichText::new(text)
+                                                    RichText::new(label)
                                                         .strong()
                                                         .color(if selected {
                                                             Color32::WHITE
@@ -669,7 +668,7 @@ pub fn ui(
                                     );
                                     ui.add_space(5.);
                                     ui.separator();
-                                    let page_height = (pane_height - 104.).max(20.);
+                                    let page_height = (ui.available_height() - 4.).max(20.);
                                     ui.allocate_ui_with_layout(
                                         egui::vec2(ui.available_width(), page_height),
                                         egui::Layout::top_down(egui::Align::Min),
@@ -697,6 +696,7 @@ pub fn ui(
                                             Tab::Graphics => {
                                                 graphics_panel(ui, &mut frontend, &mut session)
                                             }
+                                            Tab::Effects => effects_panel(ui, &mut frontend),
                                             Tab::Audio => audio_panel(ui, &mut frontend),
                                             Tab::Hud => display_panel(ui, &mut frontend),
                                             Tab::Benchmark => benchmark::panel(
@@ -714,15 +714,15 @@ pub fn ui(
                         #[cfg(not(test))]
                         let _ = body;
                         ui.add_space(14.);
+                        let available = frontend.catalog.circuits.iter().any(|track| {
+                            track.id == frontend.draft.track && track.unavailable.is_none()
+                        }) && frontend.catalog.car_available(&frontend.draft);
                         ui.horizontal_wrapped(|ui| {
                             if frontend.race_started && session.ready && ui.add_enabled(frontend.benchmark.child.is_none(),
                                 egui::Button::new(RichText::new("Resume race").strong()).fill(RED)
                                     .min_size(egui::vec2(160., 44.))).clicked() {
                                 resume(&mut session);
                             }
-                            let available = frontend.catalog.circuits.iter().any(|track| {
-                                track.id == frontend.draft.track && track.unavailable.is_none()
-                            }) && frontend.catalog.car_available(&frontend.draft);
                             let start = ui.add_enabled(available && !frontend.pending && frontend.benchmark.child.is_none(),
                                 egui::Button::new(RichText::new(if frontend.race_started {
                                     "Start new race"
@@ -733,9 +733,13 @@ pub fn ui(
                             frontend.widgets.insert("start", start.rect);
                             if start.clicked() { frontend.pending = true; }
                         });
-                        ui.label(RichText::new(if session.screen == Screen::Paused {
-                            "A new race replaces this session. Driving settings apply immediately."
-                        } else { "Beginner aids include corner braking, steering guidance and automatic gears." }).color(DIM));
+                        ui.label(RichText::new(if !available {
+                            "Choose an available circuit and car before starting a race."
+                        } else if session.screen == Screen::Paused {
+                            "Start new race replaces this session. Driving settings apply immediately."
+                        } else {
+                            "Settings apply immediately. Presets are under Driving assists."
+                        }).color(DIM));
                     },
                 );
             });
@@ -798,8 +802,9 @@ fn selection(
         });
     ui.add_space(4.);
     section(ui, "Car");
+    let has_2022_car = catalog.cars.iter().any(|car| car.id == "gen22");
     ui.horizontal_wrapped(|ui| {
-        if catalog.cars.iter().any(|car| car.id == "gen22") {
+        if has_2022_car {
             ui.radio_value(&mut draft.car, "gen22".into(), "2022 car");
         }
         for car in catalog.cars.iter().filter(|car| car.id != "gen22") {
@@ -807,6 +812,9 @@ fn selection(
                 .on_hover_text(car.description);
         }
     });
+    if !has_2022_car {
+        ui.label(RichText::new("2022 car unavailable with current assets.").color(DIM));
+    }
     if draft.car == "gen22" {
         let selected = teams.teams.iter().find(|t| t.id == draft.team);
         ui.horizontal(|ui| {
@@ -878,7 +886,7 @@ fn selection(
     draft.grid_slot = draft.grid_slot.clamp(1, draft.opponents + 1);
     ui.add(egui::Slider::new(&mut draft.grid_slot, 1..=draft.opponents + 1).text("Grid position"));
     section(ui, "Tyres & aero");
-    ui.horizontal(|ui| {
+    ui.horizontal_wrapped(|ui| {
         ui.label("Tyres");
         for (compound, label) in [
             (Compound::Soft, "Soft"),
@@ -1039,7 +1047,7 @@ fn aids_panel(ui: &mut egui::Ui, frontend: &mut Frontend) -> [egui::Rect; 3] {
     ui.add_space(6.);
     ui.columns(2, |columns| {
         for column in columns.iter_mut() {
-            column.spacing_mut().slider_width = (column.available_width() - 210.).clamp(80., 260.);
+            column.spacing_mut().slider_width = (column.available_width() - 240.).clamp(50., 220.);
         }
         section(&mut columns[0], "Driving guidance");
         columns[0]
@@ -1165,10 +1173,30 @@ fn warm_fonts(context: &egui::Context) {
     });
 }
 
-fn graphics_panel(ui: &mut egui::Ui, frontend: &mut Frontend, session: &mut Session) {
-    use crate::graphics::{AntiAlias, Level, ShadowFilter, TextureDetail, ToneMap};
-    section(ui, "Quality preset");
+fn video_choice<T: Copy + PartialEq>(
+    ui: &mut egui::Ui,
+    id: &str,
+    label: &str,
+    value: &mut T,
+    all: &[T],
+    name: fn(T) -> &'static str,
+) {
     ui.horizontal(|ui| {
+        ui.label(label);
+        egui::ComboBox::from_id_salt(id)
+            .selected_text(name(*value))
+            .show_ui(ui, |ui| {
+                for &option in all {
+                    ui.selectable_value(value, option, name(option));
+                }
+            });
+    });
+}
+
+fn graphics_panel(ui: &mut egui::Ui, frontend: &mut Frontend, session: &mut Session) {
+    use crate::graphics::{AntiAlias, Level, ShadowFilter, TextureDetail};
+    section(ui, "Quality preset");
+    ui.horizontal_wrapped(|ui| {
         for quality in crate::graphics::Quality::ALL {
             let active = frontend.video.preset() == Some(quality);
             if ui
@@ -1183,42 +1211,23 @@ fn graphics_panel(ui: &mut egui::Ui, frontend: &mut Frontend, session: &mut Sess
         let custom = frontend.video.preset().is_none();
         ui.add_enabled(false, egui::Button::new("Custom").selected(custom));
     });
-    ui.horizontal(|ui| {
+    ui.horizontal_wrapped(|ui| {
         ui.checkbox(&mut frontend.vsync, "Vertical sync")
             .on_hover_text("Off renders as fast as the GPU allows, with possible tearing.");
         ui.checkbox(&mut session.show_performance, "Show frame rate  F3");
-        ui.label(RichText::new("Changes apply immediately.").color(DIM));
     });
     ui.add_space(6.);
 
     let video = &mut frontend.video;
-    fn choice<T: Copy + PartialEq>(
-        ui: &mut egui::Ui,
-        id: &str,
-        label: &str,
-        value: &mut T,
-        all: &[T],
-        name: fn(T) -> &'static str,
-    ) {
-        ui.horizontal(|ui| {
-            ui.label(label);
-            egui::ComboBox::from_id_salt(id)
-                .selected_text(name(*value))
-                .show_ui(ui, |ui| {
-                    for &option in all {
-                        ui.selectable_value(value, option, name(option));
-                    }
-                });
-        });
-    }
-    ui.columns(2, |columns| {
+    let column_count = if ui.available_width() >= 640. { 2 } else { 1 };
+    ui.columns(column_count, |columns| {
         for column in columns.iter_mut() {
-            column.spacing_mut().slider_width = (column.available_width() - 210.).clamp(80., 260.);
+            column.spacing_mut().slider_width = (column.available_width() - 240.).clamp(50., 220.);
         }
-        let rendering = &mut columns[0];
-        section(rendering, "Rendering");
-        choice(
-            rendering,
+        let quality = &mut columns[0];
+        section(quality, "Image quality");
+        video_choice(
+            quality,
             "aa",
             "Anti-aliasing",
             &mut video.anti_alias,
@@ -1226,17 +1235,33 @@ fn graphics_panel(ui: &mut egui::Ui, frontend: &mut Frontend, session: &mut Sess
             AntiAlias::label,
         );
         if video.anti_alias == AntiAlias::Msaa4 {
-            rendering.label(
-                RichText::new("MSAA disables ambient occlusion.")
-                    .size(15.)
-                    .color(DIM),
-            );
+            quality.label(RichText::new("MSAA disables ambient occlusion.").size(15.).color(DIM));
         }
-        rendering.add(egui::Slider::new(&mut video.sharpening, 0.0..=1.0).text("Sharpening"));
-        rendering.add_space(4.);
-        section(rendering, "Lighting & detail");
-        choice(
-            rendering,
+        quality.add(egui::Slider::new(&mut video.sharpening, 0.0..=1.0).text("Sharpening"));
+        video_choice(
+            quality,
+            "textures",
+            "Texture detail",
+            &mut video.texture,
+            &TextureDetail::ALL,
+            TextureDetail::label,
+        );
+        video_choice(
+            quality,
+            "ai_detail",
+            "AI detail",
+            &mut video.ai_detail,
+            &Level::ALL,
+            Level::label,
+        );
+
+        let lighting = &mut columns[column_count - 1];
+        if column_count == 1 {
+            lighting.add_space(8.);
+        }
+        section(lighting, "Shadows & lighting");
+        video_choice(
+            lighting,
             "shadow_res",
             "Shadow resolution",
             &mut video.shadow_resolution,
@@ -1248,85 +1273,97 @@ fn graphics_panel(ui: &mut egui::Ui, frontend: &mut Frontend, session: &mut Sess
                 _ => "8192",
             },
         );
-        rendering.add(egui::Slider::new(&mut video.shadow_cascades, 1..=4).text("Shadow cascades"));
-        rendering.add(
+        lighting.add(egui::Slider::new(&mut video.shadow_cascades, 1..=4).text("Shadow cascades"));
+        lighting.add(
             egui::Slider::new(&mut video.shadow_distance, 30.0..=300.0)
                 .text("Shadow distance")
                 .suffix(" m"),
         );
-        choice(
-            rendering,
+        video_choice(
+            lighting,
             "shadow_filter",
             "Shadow filtering",
             &mut video.shadow_filter,
             &ShadowFilter::ALL,
             ShadowFilter::label,
         );
-        choice(
-            rendering,
+        video_choice(
+            lighting,
             "ao",
             "Ambient occlusion",
             &mut video.ambient_occlusion,
             &Level::ALL,
             Level::label,
         );
-        rendering.add_enabled(
+        lighting.add_enabled(
             video.ambient_occlusion != Level::Off,
             egui::Checkbox::new(&mut video.contact_shadows, "Contact shadows"),
         );
-        choice(
-            rendering,
+        video_choice(
+            lighting,
             "sky",
             "Sky lighting",
             &mut video.sky,
             &Level::ALL[1..],
             Level::label,
         );
-        rendering.add(egui::Slider::new(&mut video.haze, 0.0..=1.0).text("Haze"));
-        choice(
-            rendering,
-            "textures",
-            "Texture detail",
-            &mut video.texture,
-            &TextureDetail::ALL,
-            TextureDetail::label,
-        );
-        choice(
-            rendering,
-            "ai_detail",
-            "AI detail",
-            &mut video.ai_detail,
-            &Level::ALL,
-            Level::label,
-        );
+        lighting.add(egui::Slider::new(&mut video.haze, 0.0..=1.0).text("Haze"));
+    });
+    if let Some(preset) = frontend.video.preset() {
+        frontend.graphics = preset;
+    }
+}
 
-        let image = &mut columns[1];
-        section(image, "Image effects");
-        choice(
-            image,
+fn effects_panel(ui: &mut egui::Ui, frontend: &mut Frontend) {
+    use crate::graphics::ToneMap;
+    let reset = ui
+        .horizontal_wrapped(|ui| {
+            ui.label("Changes apply immediately.");
+            ui.button("Reset image effects").clicked()
+        })
+        .inner;
+    let video = &mut frontend.video;
+    if reset {
+        reset_image_effects(video);
+    }
+    let column_count = if ui.available_width() >= 640. { 2 } else { 1 };
+    ui.columns(column_count, |columns| {
+        for column in columns.iter_mut() {
+            column.spacing_mut().slider_width = (column.available_width() - 240.).clamp(50., 220.);
+        }
+        let color = &mut columns[0];
+        section(color, "Color & tone");
+        video_choice(
+            color,
             "tonemap",
             "Tonemapping",
             &mut video.tonemapping,
             &ToneMap::ALL,
             ToneMap::label,
         );
-        image.add(
+        color.add(
             egui::Slider::new(&mut video.exposure, -3.0..=3.0)
                 .text("Exposure")
                 .suffix(" EV"),
         );
-        image.add(egui::Slider::new(&mut video.saturation, 0.0..=2.0).text("Saturation"));
-        image.add(egui::Slider::new(&mut video.contrast, 0.5..=1.5).text("Contrast"));
-        image.add(egui::Slider::new(&mut video.temperature, -1.0..=1.0).text("Temperature"));
-        image.add(egui::Slider::new(&mut video.bloom, 0.0..=1.0).text("Bloom"));
-        image.add(egui::Slider::new(&mut video.vignette, 0.0..=1.0).text("Vignette"));
-        image.add(
+        color.add(egui::Slider::new(&mut video.saturation, 0.0..=2.0).text("Saturation"));
+        color.add(egui::Slider::new(&mut video.contrast, 0.5..=1.5).text("Contrast"));
+        color.add(egui::Slider::new(&mut video.temperature, -1.0..=1.0).text("Temperature"));
+
+        let lens = &mut columns[column_count - 1];
+        if column_count == 1 {
+            lens.add_space(8.);
+        }
+        section(lens, "Lens & motion");
+        lens.add(egui::Slider::new(&mut video.bloom, 0.0..=1.0).text("Bloom"));
+        lens.add(egui::Slider::new(&mut video.vignette, 0.0..=1.0).text("Vignette"));
+        lens.add(
             egui::Slider::new(&mut video.chromatic_aberration, 0.0..=1.0)
                 .text("Chromatic aberration"),
         );
-        image.add(egui::Slider::new(&mut video.motion_blur, 0.0..=1.0).text("Motion blur"));
-        image.checkbox(&mut video.depth_of_field, "Depth of field");
-        image.add_enabled_ui(video.depth_of_field, |ui| {
+        lens.add(egui::Slider::new(&mut video.motion_blur, 0.0..=1.0).text("Motion blur"));
+        lens.checkbox(&mut video.depth_of_field, "Depth of field");
+        lens.add_enabled_ui(video.depth_of_field, |ui| {
             ui.checkbox(&mut video.bokeh, "Bokeh (slower)");
             ui.add(
                 egui::Slider::new(&mut video.focus_distance, 1.0..=200.0)
@@ -1335,32 +1372,32 @@ fn graphics_panel(ui: &mut egui::Ui, frontend: &mut Frontend, session: &mut Sess
                     .suffix(" m"),
             );
         });
-        if image.button("Reset image effects").clicked() {
-            let base = crate::graphics::Video::default();
-            video.tonemapping = base.tonemapping;
-            video.exposure = base.exposure;
-            video.saturation = base.saturation;
-            video.contrast = base.contrast;
-            video.temperature = base.temperature;
-            video.bloom = base.bloom;
-            video.vignette = base.vignette;
-            video.chromatic_aberration = base.chromatic_aberration;
-            video.motion_blur = base.motion_blur;
-            video.depth_of_field = base.depth_of_field;
-            video.bokeh = base.bokeh;
-            video.focus_distance = base.focus_distance;
-            video.haze = base.haze;
-        }
     });
     if let Some(preset) = frontend.video.preset() {
         frontend.graphics = preset;
     }
 }
 
+fn reset_image_effects(video: &mut crate::graphics::Video) {
+    let base = crate::graphics::Video::default();
+    video.tonemapping = base.tonemapping;
+    video.exposure = base.exposure;
+    video.saturation = base.saturation;
+    video.contrast = base.contrast;
+    video.temperature = base.temperature;
+    video.bloom = base.bloom;
+    video.vignette = base.vignette;
+    video.chromatic_aberration = base.chromatic_aberration;
+    video.motion_blur = base.motion_blur;
+    video.depth_of_field = base.depth_of_field;
+    video.bokeh = base.bokeh;
+    video.focus_distance = base.focus_distance;
+    video.haze = base.haze;
+}
 fn audio_panel(ui: &mut egui::Ui, frontend: &mut Frontend) {
     ui.label("Changes apply immediately and are saved for your next race.");
     ui.add_space(12.);
-    let column_count = if ui.available_width() >= 720. { 2 } else { 1 };
+    let column_count = if ui.available_width() >= 560. { 2 } else { 1 };
     ui.columns(column_count, |columns| {
         let ui = &mut columns[0];
         section(ui, "Engine sound");
@@ -1369,8 +1406,13 @@ fn audio_panel(ui: &mut egui::Ui, frontend: &mut Frontend) {
             let _response = ui.radio_value(&mut frontend.audio.engine, choice, choice.label());
             #[cfg(test)]
             frontend.widgets.insert(choice.label(), _response.rect);
-            ui.label(RichText::new(choice.description()).size(15.).color(DIM));
-            ui.add_space(8.);
+            _response.on_hover_text(choice.description());
+        }
+        if let Some(selected) = crate::audio::EngineChoice::ALL
+            .into_iter()
+            .find(|choice| *choice == frontend.audio.engine)
+        {
+            ui.label(RichText::new(selected.description()).size(15.).color(DIM));
         }
         let ui = &mut columns[column_count - 1];
         if column_count == 1 {
@@ -1398,56 +1440,57 @@ fn audio_panel(ui: &mut egui::Ui, frontend: &mut Frontend) {
 
 fn display_panel(ui: &mut egui::Ui, frontend: &mut Frontend) {
     ui.label("Changes apply immediately and are saved for your next race.");
-    ui.add_space(12.);
-    let column_count = if ui.available_width() >= 720. { 2 } else { 1 };
+    ui.add_space(8.);
+    let column_count = if ui.available_width() >= 560. { 2 } else { 1 };
     ui.columns(column_count, |columns| {
-    let ui = &mut columns[0];
-    section(ui, "In-race instruments");
-    ui.add_space(6.);
-    for (layout, label, description, _key) in [
-        (
-            hud::Layout::Segments,
+        let instruments = &mut columns[0];
+        section(instruments, "In-race instruments");
+        for (layout, label, description, _key) in [
+            (
+                hud::Layout::Segments,
                 "Digital cockpit",
-                "Illuminated segment readouts in a race dash, with separate tyre and aero instruments.",
-            "hud-segments",
-        ),
-        (
-            hud::Layout::Gauges,
+                "Segment readouts with tyre and aero instruments.",
+                "hud-segments",
+            ),
+            (
+                hud::Layout::Gauges,
                 "Analog telemetry",
-                "A rev counter with speed, gear and pedal arcs, plus a twin-needle tyre instrument.",
-            "hud-gauges",
-        ),
-    ] {
-        let _response = ui.radio_value(&mut frontend.display.layout, layout, label);
-        #[cfg(test)]
-        frontend.widgets.insert(_key, _response.rect);
-        ui.label(RichText::new(description).size(15.).color(DIM));
-        ui.add_space(8.);
-    }
-    let ui = &mut columns[column_count - 1];
-    if column_count == 1 { ui.add_space(16.); }
-    section(ui, "Minimap");
-    ui.add_space(6.);
-    for (mode, label, description, _key) in [
-        (
-            hud::MapMode::FullCircuit,
-            "Full circuit",
-            "The complete track and the whole field.",
-            "map-full",
-        ),
-        (
-            hud::MapMode::Nearby,
-            "Nearby track",
-            "Zooms around your car while keeping the whole circuit visible. Your car points up.",
-            "map-nearby",
-        ),
-    ] {
-        let _response = ui.radio_value(&mut frontend.display.map, mode, label);
-        #[cfg(test)]
-        frontend.widgets.insert(_key, _response.rect);
-        ui.label(RichText::new(description).size(15.).color(DIM));
-        ui.add_space(8.);
-    }
+                "Needle gauges for revs, speed, pedals and tyre temperatures.",
+                "hud-gauges",
+            ),
+        ] {
+            let _response = instruments.radio_value(&mut frontend.display.layout, layout, label);
+            #[cfg(test)]
+            frontend.widgets.insert(_key, _response.rect);
+            instruments.label(RichText::new(description).size(15.).color(DIM));
+            instruments.add_space(6.);
+        }
+
+        let minimap = &mut columns[column_count - 1];
+        if column_count == 1 {
+            minimap.add_space(8.);
+        }
+        section(minimap, "Minimap");
+        for (mode, label, description, _key) in [
+            (
+                hud::MapMode::FullCircuit,
+                "Full circuit",
+                "Full circuit and the whole field.",
+                "map-full",
+            ),
+            (
+                hud::MapMode::Nearby,
+                "Nearby track",
+                "Zoomed to nearby track, with your car pointing up.",
+                "map-nearby",
+            ),
+        ] {
+            let _response = minimap.radio_value(&mut frontend.display.map, mode, label);
+            #[cfg(test)]
+            frontend.widgets.insert(_key, _response.rect);
+            minimap.label(RichText::new(description).size(15.).color(DIM));
+            minimap.add_space(6.);
+        }
     });
 }
 
@@ -1457,11 +1500,11 @@ fn camera_panel(ui: &mut egui::Ui, selected: &mut Mode, session: &mut Session) {
     );
     ui.add_space(14.);
     let descriptions = [
-        "Inside the cockpit, close to the wheel and instruments.",
-        "A broadcast-style view above the driver.",
-        "A wider view behind the car.",
+        "Wheel and instruments view.",
+        "Broadcast camera above the track.",
+        "Wide view behind the car.",
     ];
-    let columns = if ui.available_width() >= 660. { 3 } else { 1 };
+    let columns = if ui.available_width() >= 520. { 3 } else { 1 };
     ui.columns(columns, |columns_ui| {
         for (index, mode) in Mode::ALL.into_iter().enumerate() {
             let column_index = if columns == 1 { 0 } else { index };
@@ -1488,13 +1531,17 @@ fn camera_panel(ui: &mut egui::Ui, selected: &mut Mode, session: &mut Session) {
     ui.add_space(20.);
     section(ui, "Live adjustment");
     ui.add_space(6.);
-    ui.label(
-        RichText::new("Change height, position, pitch, field of view and camera movement.")
-            .color(DIM),
-    );
+    ui.label(RichText::new("Tune framing and camera movement in the live scene.").color(DIM));
     ui.add_space(8.);
     if ui
-        .add_enabled(session.ready, egui::Button::new("Adjust camera in scene  ·  F4"))
+        .add_enabled(
+            session.ready,
+            egui::Button::new(if session.ready {
+                "Adjust camera in scene  ·  F4"
+            } else {
+                "Available after starting a race"
+            }),
+        )
         .clicked()
     {
         session.screen = Screen::CameraEditor;
@@ -1504,13 +1551,11 @@ fn camera_panel(ui: &mut egui::Ui, selected: &mut Mode, session: &mut Session) {
 
 fn controls_panel(ui: &mut egui::Ui) {
     ui.label("Keyboard and gamepad shortcuts available while driving.");
-    ui.add_space(14.);
-    section(ui, "Driving shortcuts");
-    ui.add_space(8.);
+    ui.add_space(4.);
     let cell_width = ((ui.available_width() - 32.) / 3.).max(50.);
     egui::Grid::new("controls-grid")
         .num_columns(3)
-        .spacing([16., 12.])
+        .spacing([12., 6.])
         .max_col_width(cell_width)
         .show(ui, |ui| {
             for (index, row) in [
