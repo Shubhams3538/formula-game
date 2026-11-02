@@ -483,7 +483,6 @@ pub fn ui(
     mut frontend: ResMut<Frontend>,
     mut session: ResMut<Session>,
     mut options: ResMut<Options>,
-    mut exit: MessageWriter<AppExit>,
     mut styled: Local<bool>,
     mut warmed: Local<u8>,
 ) -> Result {
@@ -580,166 +579,228 @@ pub fn ui(
         return Ok(());
     }
     let size = context.content_rect().size();
-    let margin = (size.x * 0.025).clamp(12., 32.);
+    let margin = (size.x * 0.018).clamp(10., 24.);
+    let content_max_width = (size.x * 0.94).clamp(720., 1600.);
+    let compact_footer = size.x < 720. || size.y < 640.;
+    let footer_height = if size.y < 520. {
+        56.
+    } else if compact_footer {
+        66.
+    } else {
+        82.
+    };
+    let available = frontend.catalog.circuits.iter().any(|track| {
+        track.id == frontend.draft.track && track.unavailable.is_none()
+    }) && frontend.catalog.car_available(&frontend.draft);
+    let status = if !available {
+        "Choose an available circuit and car before starting a race."
+    } else if session.screen == Screen::Paused {
+        "Start new race replaces this session. Driving settings apply immediately."
+    } else {
+        "Settings apply immediately. Presets are under Driving assists."
+    };
+
+    egui::TopBottomPanel::bottom("settings-actions")
+        .exact_height(footer_height)
+        .frame(
+            egui::Frame::new()
+                .fill(BACKDROP)
+                .inner_margin(egui::Margin::symmetric(margin as i8, 6)),
+        )
+        .show_inside(&mut viewport, |ui| {
+            let width = ui.available_width().min(content_max_width);
+            ui.vertical_centered(|ui| {
+                ui.allocate_ui_with_layout(
+                    egui::vec2(width, ui.available_height()),
+                    egui::Layout::left_to_right(egui::Align::Center),
+                    |ui| {
+                        ui.spacing_mut().item_spacing.x = 12.;
+                        if frontend.race_started && session.ready {
+                            let resume_button = ui.add_enabled(
+                                frontend.benchmark.child.is_none(),
+                                egui::Button::new(RichText::new("Resume race").strong())
+                                    .fill(RED)
+                                    .min_size(egui::vec2(160., 44.)),
+                            );
+                            if resume_button.clicked() {
+                                resume(&mut session);
+                            }
+                        }
+                        let start = ui.add_enabled(
+                            available
+                                && !frontend.pending
+                                && frontend.benchmark.child.is_none(),
+                            egui::Button::new(
+                                RichText::new(if frontend.race_started {
+                                    "Start new race"
+                                } else {
+                                    "Start race"
+                                })
+                                .strong(),
+                            )
+                            .fill(if frontend.race_started { HOUSING } else { RED })
+                            .min_size(egui::vec2(200., 44.)),
+                        );
+                        #[cfg(test)]
+                        frontend.widgets.insert("start", start.rect);
+                        if start.clicked() {
+                            frontend.pending = true;
+                        }
+                        if !compact_footer {
+                            ui.add_space(4.);
+                            ui.label(RichText::new(status).color(DIM));
+                        }
+                    },
+                );
+            });
+        });
+
     egui::CentralPanel::default()
         .frame(egui::Frame::new().fill(BACKDROP).inner_margin(margin as i8))
         .show(&mut viewport, |ui| {
-            let width = ui.available_width().min(1320.);
+            let width = ui.available_width().min(content_max_width);
             ui.vertical_centered(|ui| {
                 ui.allocate_ui_with_layout(
                     egui::vec2(width, ui.available_height()),
                     egui::Layout::top_down(egui::Align::Min),
                     |ui| {
-                        ui.horizontal_wrapped(|ui| {
-                            ui.label(RichText::new(if session.screen == Screen::Paused {
-                                "RACE PAUSED"
-                            } else { "F1 RACECRAFT" })
-                                .size(if size.x < 700. { 28. } else { 36. }).strong());
-                            if ui.button("Quit game").clicked() { exit.write(AppExit::Success); }
-                        });
                         ui.label(
-                            RichText::new("SETTINGS  ·  Tune your race experience.").color(DIM),
+                            RichText::new(if session.screen == Screen::Paused {
+                                "RACE PAUSED"
+                            } else {
+                                "F1 RACECRAFT"
+                            })
+                            .size(if size.x < 700. { 28. } else { 36. })
+                            .strong(),
                         );
-                        ui.add_space(12.);
                         if let Some(error) = &frontend.error {
                             ui.colored_label(Color32::from_rgb(255, 150, 150), error);
                         }
-                        let footer_height = if size.x < 800. { 180. } else { 160. };
-                        let body_height = (ui.available_height() - footer_height).max(48.);
+                        ui.add_space(8.);
+                        let pane_height = (ui.available_height() - 22.).max(100.);
                         let body = housing().inner_margin(10).show(ui, |ui| {
-                            let pane_height = (body_height - 28.).max(24.);
-                            let nav_width = if size.x < 760. { 180. } else { 194. };
-                            let nav_button_height = ((pane_height - 190.) / 9.).clamp(18., 38.);
-                            ui.horizontal_top(|ui| {
-                                ui.allocate_ui_with_layout(
-                                    egui::vec2(nav_width, pane_height),
-                                    egui::Layout::top_down(egui::Align::Min),
-                                    |ui| {
-                                        ui.spacing_mut().item_spacing.y = 3.;
-                                        let mut group = "";
+                            let compact_navigation = ui.available_width() < 980. || pane_height < 560.;
+                            if compact_navigation {
+                                egui::ComboBox::from_id_salt("settings-page")
+                                    .width(ui.available_width())
+                                    .selected_text(format!(
+                                        "{}  ·  {}",
+                                        frontend.tab.group(),
+                                        frontend.tab.label()
+                                    ))
+                                    .show_ui(ui, |ui| {
                                         for tab in Tab::ALL {
-                                            if tab.group() != group {
-                                                if !group.is_empty() {
-                                                    ui.add_space(8.);
-                                                }
-                                                group = tab.group();
-                                                section(ui, group);
-                                                ui.add_space(3.);
-                                            }
-                                            let selected = frontend.tab == tab;
-                                            let label = tab.label();
-                                            let response = ui.add_sized(
-                                                egui::vec2(nav_width, nav_button_height),
-                                                egui::Button::new(
-                                                    RichText::new(label)
-                                                        .strong()
-                                                        .color(if selected {
-                                                            Color32::WHITE
-                                                        } else {
-                                                            DIM
-                                                        }),
-                                                )
-                                                .fill(if selected {
-                                                    RED
-                                                } else {
-                                                    Color32::TRANSPARENT
-                                                }),
+                                            ui.selectable_value(
+                                                &mut frontend.tab,
+                                                tab,
+                                                format!("{}  ·  {}", tab.group(), tab.label()),
                                             );
-                                            if response.clicked() {
-                                                frontend.tab = tab;
-                                            }
-                                            #[cfg(test)]
-                                            frontend.widgets.insert(label, response.rect);
                                         }
-                                    },
-                                );
+                                    });
                                 ui.separator();
-                                ui.add_space(6.);
-                                ui.vertical(|ui| {
-                                    ui.spacing_mut().item_spacing.y = 4.;
-                                    section(ui, frontend.tab.group());
-                                    ui.heading(
-                                        RichText::new(frontend.tab.label())
-                                            .size(if size.x < 700. { 22. } else { 28. })
-                                            .strong(),
-                                    );
+                                if ui.available_height() >= 500. {
                                     ui.label(
                                         RichText::new(frontend.tab.description()).color(DIM),
                                     );
-                                    ui.add_space(5.);
-                                    ui.separator();
-                                    let page_height = (ui.available_height() - 4.).max(20.);
+                                    ui.add_space(4.);
+                                }
+                                let page_height = (ui.available_height() - 4.).max(20.);
+                                ui.allocate_ui_with_layout(
+                                    egui::vec2(ui.available_width(), page_height),
+                                    egui::Layout::top_down(egui::Align::Min),
+                                    |ui| {
+                                        render_settings_page(
+                                            ui,
+                                            &mut frontend,
+                                            &mut session,
+                                            size,
+                                            context.pixels_per_point(),
+                                        );
+                                    },
+                                );
+                            } else {
+                                let nav_width = (ui.available_width() * 0.15).clamp(176., 206.);
+                                let nav_button_height = ((pane_height - 180.) / 9.).clamp(24., 38.);
+                                ui.horizontal_top(|ui| {
                                     ui.allocate_ui_with_layout(
-                                        egui::vec2(ui.available_width(), page_height),
+                                        egui::vec2(nav_width, pane_height),
                                         egui::Layout::top_down(egui::Align::Min),
-                                        |ui| match frontend.tab {
-                                            Tab::Race => race_setup(ui, &mut frontend),
-                                            Tab::Aids => {
-                                                let presets = aids_panel(ui, &mut frontend);
-                                                #[cfg(test)]
-                                                for (name, rect) in
-                                                    ["beginner", "balanced", "unassisted"]
-                                                    .into_iter()
-                                                    .zip(presets)
-                                                {
-                                                    frontend.widgets.insert(name, rect);
+                                        |ui| {
+                                            ui.spacing_mut().item_spacing.y = 3.;
+                                            let mut group = "";
+                                            for tab in Tab::ALL {
+                                                if tab.group() != group {
+                                                    if !group.is_empty() {
+                                                        ui.add_space(8.);
+                                                    }
+                                                    group = tab.group();
+                                                    section(ui, group);
+                                                    ui.add_space(3.);
                                                 }
-                                                #[cfg(not(test))]
-                                                let _ = presets;
+                                                let selected = frontend.tab == tab;
+                                                let label = tab.label();
+                                                let response = ui.add_sized(
+                                                    egui::vec2(nav_width, nav_button_height),
+                                                    egui::Button::new(
+                                                        RichText::new(label)
+                                                            .strong()
+                                                            .color(if selected {
+                                                                Color32::WHITE
+                                                            } else {
+                                                                DIM
+                                                            }),
+                                                    )
+                                                    .fill(if selected {
+                                                        RED
+                                                    } else {
+                                                        Color32::TRANSPARENT
+                                                    }),
+                                                );
+                                                if response.clicked() {
+                                                    frontend.tab = tab;
+                                                }
+                                                #[cfg(test)]
+                                                frontend.widgets.insert(label, response.rect);
                                             }
-                                            Tab::Camera => camera_panel(
-                                                ui,
-                                                &mut frontend.draft.camera,
-                                                &mut session,
-                                            ),
-                                            Tab::Controls => controls_panel(ui),
-                                            Tab::Graphics => {
-                                                graphics_panel(ui, &mut frontend, &mut session)
-                                            }
-                                            Tab::Effects => effects_panel(ui, &mut frontend),
-                                            Tab::Audio => audio_panel(ui, &mut frontend),
-                                            Tab::Hud => display_panel(ui, &mut frontend),
-                                            Tab::Benchmark => benchmark::panel(
-                                                ui,
-                                                &mut frontend,
-                                                size * context.pixels_per_point(),
-                                            ),
                                         },
                                     );
+                                    ui.separator();
+                                    ui.add_space(6.);
+                                    ui.vertical(|ui| {
+                                        ui.spacing_mut().item_spacing.y = 4.;
+                                        section(ui, frontend.tab.group());
+                                        ui.heading(
+                                            RichText::new(frontend.tab.label())
+                                                .size(if size.x < 700. { 22. } else { 28. })
+                                                .strong(),
+                                        );
+                                        ui.label(
+                                            RichText::new(frontend.tab.description()).color(DIM),
+                                        );
+                                        ui.add_space(5.);
+                                        ui.separator();
+                                        let page_height = (ui.available_height() - 4.).max(20.);
+                                        ui.allocate_ui_with_layout(
+                                            egui::vec2(ui.available_width(), page_height),
+                                            egui::Layout::top_down(egui::Align::Min),
+                                            |ui| {
+                                                render_settings_page(
+                                                    ui,
+                                                    &mut frontend,
+                                                    &mut session,
+                                                    size,
+                                                    context.pixels_per_point(),
+                                                );
+                                            },
+                                        );
+                                    });
                                 });
-                            });
+                            }
                         });
                         #[cfg(test)]
                         frontend.widgets.insert("settings-body", body.response.rect);
                         #[cfg(not(test))]
                         let _ = body;
-                        ui.add_space(14.);
-                        let available = frontend.catalog.circuits.iter().any(|track| {
-                            track.id == frontend.draft.track && track.unavailable.is_none()
-                        }) && frontend.catalog.car_available(&frontend.draft);
-                        ui.horizontal_wrapped(|ui| {
-                            if frontend.race_started && session.ready && ui.add_enabled(frontend.benchmark.child.is_none(),
-                                egui::Button::new(RichText::new("Resume race").strong()).fill(RED)
-                                    .min_size(egui::vec2(160., 44.))).clicked() {
-                                resume(&mut session);
-                            }
-                            let start = ui.add_enabled(available && !frontend.pending && frontend.benchmark.child.is_none(),
-                                egui::Button::new(RichText::new(if frontend.race_started {
-                                    "Start new race"
-                                } else { "Start race" }).strong())
-                                    .fill(if frontend.race_started { HOUSING } else { RED })
-                                    .min_size(egui::vec2(200., 44.)));
-                            #[cfg(test)]
-                            frontend.widgets.insert("start", start.rect);
-                            if start.clicked() { frontend.pending = true; }
-                        });
-                        ui.label(RichText::new(if !available {
-                            "Choose an available circuit and car before starting a race."
-                        } else if session.screen == Screen::Paused {
-                            "Start new race replaces this session. Driving settings apply immediately."
-                        } else {
-                            "Settings apply immediately. Presets are under Driving assists."
-                        }).color(DIM));
                     },
                 );
             });
@@ -756,8 +817,39 @@ pub fn ui(
     Ok(())
 }
 
+fn render_settings_page(
+    ui: &mut egui::Ui,
+    frontend: &mut Frontend,
+    session: &mut Session,
+    size: egui::Vec2,
+    pixels_per_point: f32,
+) {
+    match frontend.tab {
+        Tab::Race => race_setup(ui, frontend),
+        Tab::Aids => {
+            let presets = aids_panel(ui, frontend);
+            #[cfg(test)]
+            for (name, rect) in ["beginner", "balanced", "unassisted"]
+                .into_iter()
+                .zip(presets)
+            {
+                frontend.widgets.insert(name, rect);
+            }
+            #[cfg(not(test))]
+            let _ = presets;
+        }
+        Tab::Camera => camera_panel(ui, &mut frontend.draft.camera, session),
+        Tab::Controls => controls_panel(ui),
+        Tab::Graphics => graphics_panel(ui, frontend, session),
+        Tab::Effects => effects_panel(ui, frontend),
+        Tab::Audio => audio_panel(ui, frontend),
+        Tab::Hud => display_panel(ui, frontend),
+        Tab::Benchmark => benchmark::panel(ui, frontend, size * pixels_per_point),
+    }
+}
+
 fn race_setup(ui: &mut egui::Ui, frontend: &mut Frontend) {
-    if ui.available_width() > 850. {
+    if ui.available_width() > 980. {
         ui.columns(2, |columns| {
             selection(
                 &mut columns[0],
@@ -765,12 +857,12 @@ fn race_setup(ui: &mut egui::Ui, frontend: &mut Frontend) {
                 &frontend.teams,
                 &mut frontend.draft,
             );
-            preview(&mut columns[1], &frontend.catalog, &frontend.draft);
+            preview(&mut columns[1], &frontend.catalog, &frontend.draft, false);
         });
     } else {
         selection(ui, &frontend.catalog, &frontend.teams, &mut frontend.draft);
         ui.separator();
-        preview(ui, &frontend.catalog, &frontend.draft);
+        preview(ui, &frontend.catalog, &frontend.draft, true);
     }
 }
 
@@ -913,7 +1005,7 @@ fn selection(
     });
 }
 
-fn preview(ui: &mut egui::Ui, catalog: &Catalog, draft: &Options) {
+fn preview(ui: &mut egui::Ui, catalog: &Catalog, draft: &Options, compact: bool) {
     let Some(track) = catalog
         .circuits
         .iter()
@@ -932,13 +1024,13 @@ fn preview(ui: &mut egui::Ui, catalog: &Catalog, draft: &Options) {
         ))
         .color(DIM),
     );
-    let (rect, _) = ui.allocate_exact_size(
-        egui::vec2(
-            ui.available_width(),
-            (ui.available_width() * 0.5).clamp(160., 340.),
-        ),
-        egui::Sense::hover(),
-    );
+    let width = ui.available_width();
+    let height = if compact {
+        (width * 0.24).clamp(100., 180.)
+    } else {
+        (width * 0.5).clamp(160., 340.)
+    };
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(width, height), egui::Sense::hover());
     ui.painter().rect_filled(rect, 6., WELL);
     ui.painter().rect_stroke(
         rect,
@@ -1045,52 +1137,67 @@ fn aids_panel(ui: &mut egui::Ui, frontend: &mut Frontend) -> [egui::Rect; 3] {
             );
     });
     ui.add_space(6.);
-    ui.columns(2, |columns| {
-        for column in columns.iter_mut() {
-            column.spacing_mut().slider_width = (column.available_width() - 240.).clamp(50., 220.);
-        }
-        section(&mut columns[0], "Driving guidance");
-        columns[0]
-            .add(
-                egui::Slider::new(&mut frontend.corner_braking, 0.0..=1.0)
-                    .text("Corner braking")
-                    .custom_formatter(|value, _| format!("{:.0}%", value * 100.)),
-            )
-            .on_hover_text("Brakes for bends and reduces a held accelerator.");
-        section(&mut columns[1], "Car control");
-        for (value, label, help) in [
-            (
-                &mut aids.steering,
-                "Steering assistance",
-                "Guides towards the racing line. Strong manual steering takes priority.",
-            ),
-            (
-                &mut aids.braking,
-                "Anti-lock braking",
-                "Helps prevent wheel lock-ups while braking.",
-            ),
-            (
-                &mut aids.traction,
-                "Traction control",
-                "Reduces wheelspin when applying power.",
-            ),
-            (
-                &mut aids.stability,
-                "Stability assistance",
-                "Helps recover a developing slide.",
-            ),
-        ] {
-            columns[1]
-                .add(
-                    egui::Slider::new(value, 0.0..=1.0)
-                        .step_by(0.05)
-                        .text(label)
-                        .custom_formatter(|value, _| format!("{:.0}%", value * 100.)),
-                )
-                .on_hover_text(help);
-        }
-    });
+    if ui.available_width() >= 760. {
+        ui.columns(2, |columns| {
+            for column in columns.iter_mut() {
+                column.spacing_mut().slider_width =
+                    (column.available_width() - 240.).clamp(50., 220.);
+            }
+            section(&mut columns[0], "Driving guidance");
+            corner_braking_slider(&mut columns[0], &mut frontend.corner_braking);
+            car_control_sliders(&mut columns[1], aids);
+        });
+    } else {
+        ui.spacing_mut().slider_width = (ui.available_width() - 180.).clamp(80., 300.);
+        section(ui, "Driving guidance");
+        corner_braking_slider(ui, &mut frontend.corner_braking);
+        ui.add_space(8.);
+        car_control_sliders(ui, aids);
+    }
     presets
+}
+
+fn corner_braking_slider(ui: &mut egui::Ui, value: &mut f32) {
+    ui.add(
+        egui::Slider::new(value, 0.0..=1.0)
+            .text("Corner braking")
+            .custom_formatter(|value, _| format!("{:.0}%", value * 100.)),
+    )
+    .on_hover_text("Brakes for bends and reduces a held accelerator.");
+}
+
+fn car_control_sliders(ui: &mut egui::Ui, aids: &mut Assists) {
+    section(ui, "Car control");
+    for (value, label, help) in [
+        (
+            &mut aids.steering,
+            "Steering assistance",
+            "Guides towards the racing line. Strong manual steering takes priority.",
+        ),
+        (
+            &mut aids.braking,
+            "Anti-lock braking",
+            "Helps prevent wheel lock-ups while braking.",
+        ),
+        (
+            &mut aids.traction,
+            "Traction control",
+            "Reduces wheelspin when applying power.",
+        ),
+        (
+            &mut aids.stability,
+            "Stability assistance",
+            "Helps recover a developing slide.",
+        ),
+    ] {
+        ui.add(
+            egui::Slider::new(value, 0.0..=1.0)
+                .step_by(0.05)
+                .text(label)
+                .custom_formatter(|value, _| format!("{:.0}%", value * 100.)),
+        )
+        .on_hover_text(help);
+    }
 }
 
 fn camera_editor(viewport: &egui::Ui, session: &mut Session, car: &str) {
@@ -1552,36 +1659,54 @@ fn camera_panel(ui: &mut egui::Ui, selected: &mut Mode, session: &mut Session) {
 fn controls_panel(ui: &mut egui::Ui) {
     ui.label("Keyboard and gamepad shortcuts available while driving.");
     ui.add_space(4.);
-    let cell_width = ((ui.available_width() - 32.) / 3.).max(50.);
-    egui::Grid::new("controls-grid")
-        .num_columns(3)
-        .spacing([12., 6.])
-        .max_col_width(cell_width)
-        .show(ui, |ui| {
-            for (index, row) in [
-                ["Action", "Keyboard", "Gamepad"],
-                ["Throttle / brake", "W / S or arrows", "RT / LT"],
-                ["Steer", "A / D or arrows", "Left stick"],
-                ["Shift up / down", "E / Q", "RB / LB"],
-                ["Cycle camera", "C (or 1 / 2 / 3)", "Y"],
-                ["Adjust camera", "F4", "-"],
-                ["Pause / resume", "Esc or P", "Start"],
-                ["Recover car", "R", "Back / Select"],
-                ["Mute / unmute", "M", "-"],
-            ]
-            .into_iter()
-            .enumerate()
-            {
-                for cell in row {
-                    if index == 0 {
-                        section(ui, cell);
-                    } else {
-                        ui.label(cell);
-                    }
-                }
+    let bindings = [
+        ["Action", "Keyboard", "Gamepad"],
+        ["Throttle / brake", "W / S or arrows", "RT / LT"],
+        ["Steer", "A / D or arrows", "Left stick"],
+        ["Shift up / down", "E / Q", "RB / LB"],
+        ["Cycle camera", "C (or 1 / 2 / 3)", "Y"],
+        ["Adjust camera", "F4", "-"],
+        ["Pause / resume", "Esc or P", "Start"],
+        ["Recover car", "R", "Back / Select"],
+        ["Mute / unmute", "M", "-"],
+    ];
+    if ui.available_width() < 720. {
+        egui::Grid::new("controls-grid-compact")
+            .num_columns(2)
+            .spacing([12., 6.])
+            .max_col_width((ui.available_width() * 0.48).max(90.))
+            .show(ui, |ui| {
+                ui.label(RichText::new("Action").strong().color(LABEL));
+                ui.label(RichText::new("Bindings").strong().color(LABEL));
                 ui.end_row();
-            }
-        });
+                for row in bindings.into_iter().skip(1) {
+                    ui.label(row[0]);
+                    ui.vertical(|ui| {
+                        ui.label(format!("Keyboard  {}", row[1]));
+                        ui.label(format!("Gamepad  {}", row[2]));
+                    });
+                    ui.end_row();
+                }
+            });
+    } else {
+        let cell_width = ((ui.available_width() - 32.) / 3.).max(50.);
+        egui::Grid::new("controls-grid")
+            .num_columns(3)
+            .spacing([12., 6.])
+            .max_col_width(cell_width)
+            .show(ui, |ui| {
+                for (index, row) in bindings.into_iter().enumerate() {
+                    for cell in row {
+                        if index == 0 {
+                            section(ui, cell);
+                        } else {
+                            ui.label(cell);
+                        }
+                    }
+                    ui.end_row();
+                }
+            });
+    }
 }
 
 #[cfg(test)]
