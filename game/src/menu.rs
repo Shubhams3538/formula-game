@@ -600,14 +600,14 @@ pub fn ui(
         "Settings apply immediately. Presets are under Driving assists."
     };
 
-    egui::TopBottomPanel::bottom("settings-actions")
-        .exact_height(footer_height)
+    egui::Panel::bottom("settings-actions")
+        .exact_size(footer_height)
         .frame(
             egui::Frame::new()
                 .fill(BACKDROP)
                 .inner_margin(egui::Margin::symmetric(margin as i8, 6)),
         )
-        .show_inside(&mut viewport, |ui| {
+        .show(&mut viewport, |ui| {
             let width = ui.available_width().min(content_max_width);
             ui.vertical_centered(|ui| {
                 ui.allocate_ui_with_layout(
@@ -1157,7 +1157,7 @@ fn aids_panel(ui: &mut egui::Ui, frontend: &mut Frontend) -> [egui::Rect; 3] {
     presets
 }
 
-fn corner_braking_slider(ui: &mut egui::Ui, value: &mut f32) {
+fn corner_braking_slider(ui: &mut egui::Ui, value: &mut f64) {
     ui.add(
         egui::Slider::new(value, 0.0..=1.0)
             .text("Corner braking")
