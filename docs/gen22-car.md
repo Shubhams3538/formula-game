@@ -1,9 +1,10 @@
 # Ground-effect car asset contract
 
-GEN22 uses the FP04RB source model's original per-part UVs and supplied Audi
-artwork. Entrants without installed per-team part textures use that embedded livery. `tools/car/teams.json` supplies only
-team names, drivers and HUD/menu colours. Team selection chooses optional original-UV body artwork; suits and helmets keep
-their embedded artwork.
+GEN22 uses one shared FP04RB car with neutral stock body paint.
+`tools/car/teams.json` supplies team names, drivers and HUD/menu colours.
+Suits, helmets and cockpit instruments retain their source detail. Custom team
+livery tooling and runtime texture binding live in a separate branch stacked
+on 2.0; they are excluded from this core build.
 
 ## Safe source preparation
 
@@ -42,9 +43,9 @@ runs this build alongside the legacy RB6 converter. Conversion scripts live in
 ## Generated assets
 
 `assets/cars/gen22/` contains `car.glb`, `car_lod1.glb`, `car_lod2.glb`, `car.json`, and
-`teams.json`. Colour, AO and normal images are embedded in the GLBs. External
-team texture directories are optional. Legacy `paint.png`, suit and driver
-textures are ignored. See [installation](livery-mapping.md#installation).
+`teams.json`. AO, normal and cockpit colour images are embedded in the GLBs. Body materials
+use a neutral base-colour factor without embedded artwork. External custom team
+texture directories are ignored and excluded from AppImage packages.
 
 The player ceiling is 3 million triangles, including the full evaluated source
 steering wheel with no decimation. Main body and wheel-body bakes use up to
@@ -65,8 +66,7 @@ with matching 35–45 m Bevy `VisibilityRange` crossfades on each opponent mesh.
 are intentional and retained. `DetailUV` is a separate metre-scaled UV1 for
 carbon twill normals/roughness, without moving the artwork UVs. Only the live
 screen, rev strip and separate DRS cap have purpose-built instrument UVs.
-The old procedural team generator and runtime atlas are removed. The new
-Monoposto 2026 converter targets these original UVs.
+The core build has no template authoring or per-team artwork dependency.
 
 ## Materials and future artwork
 
@@ -103,13 +103,6 @@ library is the per-part source of truth. Colour images use sRGB; `shadow_maps`
 are non-colour data exported as glTF `occlusionTexture`. AO remains separate
 from colour. Source region-ID masks are retained locally for later material
 finish authoring and are not mistaken for PBR channels.
-
-The clean hook for future team artwork is the existing per-part material's
-`base_color_texture`, on UV0. Replace only that texture with artwork for the
-same original part layout. Keep AO, normal, roughness, metallic, UV channels
-and geometry intact. The loader uses AssetServer sRGB PNGs, clones materials per team and source
-material, and accepts player names plus `_lod`/numeric suffixes. Missing part
-files retain embedded artwork. Neither suits nor helmets participate.
 
 Opponent body-panel normals are baked from the detailed player mesh with
 Cycles selected-to-active projection on the original UVs. They supplement the
@@ -151,7 +144,7 @@ near plane preserves forearms at full lock.
 
 The current export must pass the player, LOD1 and LOD2 contracts independently.
 The checker requires a full-resolution player wheel, no opponent wheel/control
-nodes or morph targets, separate livery/AO/normal materials, texture limits and
+nodes or morph targets, separate paint/AO/normal materials, texture limits and
 clean re-import. Source/export visual comparisons and Bevy captures are separate
 checks; a successful build alone does not prove the material match.
 
@@ -182,7 +175,7 @@ F1_TEST_ASSETS="$PWD/assets" F1_TEST_OUTPUT=raw/gen22/game-review \
 
 The preview renderer writes `source-full.png` and `source-steering.png` from
 the evaluated source blend, preserving source shaders on the wheel and using
-the supplied original-UV artwork on the body. `export-full.png`,
+neutral stock paint on the body. `export-full.png`,
 `export-steering.png`, `export-rear.png`, and `export-side.png` come from a clean
 GLB import with the same cameras and lights. `--lod` and `--lod2` write the
 exterior opponent views. `--path-traced` uses the same Cycles engine for source/export
@@ -197,11 +190,15 @@ for the isolated Weston harness and other renderer limitations.
 | Player and opponent GLBs | Triangles, materials, UV channels, AO and projection normals |
 | Motion contract | Pivots, tyre silhouette, morphs and cap/glove contact |
 | Race/menu identities | Roster parsing and existing selection checks |
-| Package preflight | Four required files, embedded artwork |
+| Package preflight | Required geometry, roster and compound textures |
 | Bevy rendering | Real renderer screenshots and control checks |
 | Network and archived engine | Not applicable to local car assets |
 
-## Current review results
+## Earlier geometry and cockpit review
+
+These measurements describe the earlier source-artwork build. Re-run the
+contracts and renderer captures above for the neutral stock build; the table
+is historical evidence for shared geometry and cockpit detail.
 
 | Asset | Triangles | Bytes | MiB |
 | --- | ---: | ---: | ---: |

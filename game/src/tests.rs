@@ -1104,7 +1104,6 @@ fn rendered_car_review() {
 fn car_review_contract(
     session: Res<Session>,
     options: Res<Options>,
-    server: Res<AssetServer>,
     materials: Res<Assets<StandardMaterial>>,
     surfaces: Query<(
         &materials::CarSurface,
@@ -1128,67 +1127,14 @@ fn car_review_contract(
     if !session.ready || *checked {
         return;
     }
-    // Check installed artwork at the actual GLB/material boundary, in both LODs.
-    let team = &session.identities[session.player].as_ref().unwrap().team;
-    let direct = options
-        .assets
-        .join(format!("cars/gen22/liveries/{team}/template.png"))
-        .is_file()
-        && session.rig.livery_template == Some(2025);
-    let installed = direct
-        || options
-            .assets
-            .join(format!("cars/gen22/liveries/{team}/main_body.png"))
-            .is_file();
-    let mut paint = std::collections::HashSet::new();
-    let mut levels = std::collections::HashSet::new();
-    for (surface, name, handle, mesh) in &surfaces {
-        if surface.0.as_ref() != Some(team) || !installed {
+    // Assert the material seen by the renderer, including legacy asset packages.
+    for (_, name, handle, _) in &surfaces {
+        if !name.0.starts_with("source_paint_") {
             continue;
         }
-        let Some(part) = materials::paint_part(&name.0) else {
-            continue;
-        };
         let material = materials.get(&handle.0).unwrap();
-        let texture = material.base_color_texture.as_ref().unwrap();
-        let path = server.get_path(texture.id()).unwrap();
-        if direct {
-            assert_eq!(material.base_color_channel, bevy::mesh::UvChannel::Uv1);
-            assert_eq!(material.occlusion_channel, bevy::mesh::UvChannel::Uv0);
-            assert_eq!(material.normal_map_channel, bevy::mesh::UvChannel::Uv0);
-            assert_eq!(path.path().file_name().unwrap(), "template.png");
-            let mesh = meshes.get(&mesh.0).unwrap();
-            assert!(mesh.attribute(Mesh::ATTRIBUTE_UV_0).is_some());
-            assert!(mesh.attribute(Mesh::ATTRIBUTE_UV_1).is_some());
-        } else {
-            assert_eq!(material.base_color_channel, bevy::mesh::UvChannel::Uv0);
-            assert_eq!(material.occlusion_channel, bevy::mesh::UvChannel::Uv0);
-            assert_eq!(material.normal_map_channel, bevy::mesh::UvChannel::Uv0);
-            assert_eq!(
-                path.path().file_name().unwrap().to_str().unwrap(),
-                format!("{part}.png")
-            );
-        }
-        levels.insert(surface.1);
-        assert!(
-            path.path()
-                .starts_with(format!("cars/gen22/liveries/{team}")),
-            "{path:?}"
-        );
-        paint.insert(handle.0.id());
-    }
-    assert!(
-        !installed || paint.len() >= 2,
-        "player/opponent team materials must retain distinct LOD maps"
-    );
-    if installed {
-        let mut expected = [None, Some("lod1")]
-            .into_iter()
-            .collect::<std::collections::HashSet<_>>();
-        if options.assets.join("cars/gen22/car_lod2.glb").is_file() {
-            expected.insert(Some("lod2"));
-        }
-        assert_eq!(levels, expected);
+        assert!(material.base_color_texture.is_none());
+        assert_eq!(material.base_color, Color::linear_rgb(0.32, 0.34, 0.36));
     }
     for part in &rig_parts {
         if matches!(part.kind, assets::RigKind::Steering) {
@@ -1243,6 +1189,8 @@ fn car_review(
         &materials::CarSurface,
         &bevy::gltf::GltfMaterialName,
     )>,
+    parents: Query<&ChildOf>,
+    cars: Query<&assets::CarVisual>,
     mut frame: Local<u32>,
     mut captured: Local<usize>,
     mut exit: MessageWriter<AppExit>,
@@ -1309,10 +1257,14 @@ fn car_review(
     if *frame % 60 == 50 && stage < 13 {
         if stage == 5 || stage == 7 {
             let view = cameras.iter().next().unwrap().0;
-            let team = &session.identities[session.player].as_ref().unwrap().team;
             let mut checked = 0;
-            for (entity, range, surface, name) in &ranged {
-                if surface.0.as_ref() != Some(team)
+            let team = &session.identities[session.player].as_ref().unwrap().team;
+            for (entity, range, _, name) in &ranged {
+                let identity = parents
+                    .iter_ancestors(entity)
+                    .find_map(|ancestor| cars.get(ancestor).ok())
+                    .and_then(|car| session.identities[car.0].as_ref());
+                if identity.is_none_or(|identity| &identity.team != team)
                     || !name.0.starts_with("source_paint_main_body_stickers")
                 {
                     continue;
@@ -1339,18 +1291,18 @@ fn car_review(
         std::fs::create_dir_all(&output).unwrap();
         let names = [
             "cockpit-fixed",
-            "livery-player-front",
-            "livery-player-left",
-            "livery-player-right",
-            "livery-player-rear",
-            "livery-opponent-front",
-            "livery-opponent-side",
-            "livery-opponent-distant",
-            "livery-player-front-direct",
-            "livery-player-front-right",
-            "livery-player-top",
-            "livery-player-front-wing",
-            "livery-player-rear-wing",
+            "stock-player-front",
+            "stock-player-left",
+            "stock-player-right",
+            "stock-player-rear",
+            "stock-opponent-front",
+            "stock-opponent-side",
+            "stock-opponent-distant",
+            "stock-player-front-direct",
+            "stock-player-front-right",
+            "stock-player-top",
+            "stock-player-front-wing",
+            "stock-player-rear-wing",
         ];
         let path = output.join(format!("{}.png", names[stage as usize]));
         commands.spawn(Screenshot::primary_window()).observe(

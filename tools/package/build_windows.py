@@ -88,8 +88,11 @@ def main():
     version = tomllib.loads((ROOT / "Cargo.toml").read_text())["workspace"]["package"]["version"]
     assets = Path(os.environ.get("F1_PACKAGE_ASSETS", ROOT / "assets")).resolve()
     required = [
-        *(Path("cars") / car / name for car in ("rb6", "rb22")
+        *(Path("cars") / car / name for car in ("rb6", "gen22")
           for name in ("car.json", "car.glb")),
+        *(Path("cars/gen22") / name for name in ("car_lod1.glb", "car_lod2.glb", "teams.json")),
+        *(Path("cars/gen22/tyres") / lod / (compound + ".png")
+          for lod in ("", "lod1", "lod2") for compound in ("soft", "medium", "hard")),
         *(Path("tracks/spa") / name for name in ("track.json", "collision.bin", "visual.glb")),
     ]
     for name in required:
