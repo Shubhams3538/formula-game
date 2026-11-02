@@ -7,31 +7,34 @@ with the 2022 ground-effect GEN22 or legacy RB6, configurable driving aids, AI o
 
 ## Download and play
 
-Get the Linux x86-64 AppImages from the [latest release](https://github.com/jR4dh3y/formula-game/releases/latest).
-Both are self-contained: game assets, both cars, audio, fonts, and runtime libraries
-are included. You do not need Rust or a separate assets download to play.
+Download the [latest release](https://github.com/jR4dh3y/formula-game/releases/latest).
+Each release includes three self-contained x86-64 builds: a portable Windows
+`.exe`, a recommended Linux AppImage with Spa, and an experimental Linux
+AppImage that also enables Silverstone, Bahrain, and COTA. Game assets, both
+cars, audio, fonts, and required runtime files are baked into the downloads;
+players do not need Rust or a separate assets folder. `SHA256SUMS` contains the
+checksums for all three builds.
 
-- **[Normal build](https://github.com/jR4dh3y/formula-game/releases/download/v0.1.0/F1-Racecraft-0.1.0-linux-x86_64.AppImage)** — the recommended build. Spa is the only supported circuit; unfinished circuits are disabled.
-- **[Experimental build](https://github.com/jR4dh3y/formula-game/releases/download/v0.1.0/F1-Racecraft-0.1.0-exp-linux-x86_64.AppImage)** — adds Silverstone, Bahrain, and COTA. These circuits still need work. This build is compiled with `--features exp`.
+Linux builds require a desktop on kernel 6.1 or newer and a Vulkan-capable GPU
+with a working system driver. The Windows build requires 64-bit Windows 10/11,
+a Vulkan-capable GPU with its current driver, and 500 MB of temporary space.
+See [the Windows build guide](tools/package/WINDOWS.md) for launcher details.
 
-Requires an x86-64 Linux desktop, kernel 6.1 or newer, and a Vulkan-capable GPU
-with a working system driver. Windows and macOS binaries are not provided.
+Pushing a version tag such as `v0.1.1` after updating the workspace version in
+`Cargo.toml` automatically builds these packages and publishes them to a GitHub
+Release. The build workflow can also be run manually to produce downloadable
+workflow artifacts without publishing a release.
 
-A community Windows packaging workflow is available in
-[the Windows build guide](tools/package/WINDOWS.md). It produces a single
-portable `.exe` containing Spa, both cars and the game assets. The native
-launcher extracts to a temporary directory, runs the game and cleans up
-after exit; no separate asset download is required by players. This does
-not change the platform coverage of the official release linked above.
+Replace `VERSION` below with the version in the downloaded filename. Use
+`-exp-linux` for the experimental build.
 
 ```sh
-chmod +x F1-Racecraft-0.1.0-linux-x86_64.AppImage
-./F1-Racecraft-0.1.0-linux-x86_64.AppImage
+chmod +x F1-Racecraft-VERSION-linux-x86_64.AppImage
+./F1-Racecraft-VERSION-linux-x86_64.AppImage
 ```
 
-Use the `-exp` filename in those commands for the experimental build. The AppImages
-fall back to extraction if FUSE mounting is unavailable. Release assets include
-`SHA256SUMS`; download it alongside an AppImage and run `sha256sum --check --ignore-missing SHA256SUMS`.
+The AppImages fall back to extraction if FUSE mounting is unavailable. Verify a
+download with `sha256sum --check --ignore-missing SHA256SUMS`.
 
 ## What you can do
 

@@ -13,6 +13,7 @@ from pathlib import Path
 import re
 import shutil
 import subprocess
+import tomllib
 import urllib.request
 import urllib.parse
 
@@ -24,6 +25,7 @@ DIST = ROOT / "dist"
 RUNTIME_URL = "https://github.com/VHSgunzo/uruntime/releases/download/v0.8.1/uruntime-appimage-squashfs-lite-x86_64"
 RUNTIME_SHA = "32c6024a14ff375749ee3bed3330c1586a6dd2bfeddbbd7ceacc053aec2b27a3"
 PACKAGES = {}
+VERSION = tomllib.loads((ROOT / "Cargo.toml").read_text())["workspace"]["package"]["version"]
 
 
 def run(*args, **kwargs):
@@ -230,7 +232,7 @@ def main():
     squash = WORK / "payload.squashfs"
     subprocess.run(["mksquashfs", str(APP), str(squash), "-noappend", "-comp", "zstd", "-Xcompression-level", "15", "-processors", "3", "-all-root"], check=True)
     suffix = "-exp" if args.exp else ""
-    output = DIST / f"F1-Racecraft-0.1.0{suffix}-linux-x86_64.AppImage"
+    output = DIST / f"F1-Racecraft-{VERSION}{suffix}-linux-x86_64.AppImage"
     # Automatic no-FUSE fallback, even when this game grows beyond 350 MiB.
     data = runtime.read_bytes().replace(b"URUNTIME_EXTRACT=3", b"URUNTIME_EXTRACT=2")
     with output.open("wb") as target:
