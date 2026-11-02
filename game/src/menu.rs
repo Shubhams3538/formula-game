@@ -478,6 +478,23 @@ fn section(ui: &mut egui::Ui, text: &str) {
     );
 }
 
+/// Form rows keep labels, dropdowns, sliders, and value boxes on shared axes.
+fn setting_row(ui: &mut egui::Ui, label: &str, add_control: impl FnOnce(&mut egui::Ui)) {
+    let width = ui.available_width();
+    let label_width = (width * 0.38).clamp(96., 190.);
+    let row_height = if width < 440. { 40. } else { 32. };
+    ui.horizontal(|row| {
+        row.spacing_mut().item_spacing.x = 8.;
+        row.add_sized(
+            egui::vec2(label_width, row_height),
+            egui::Label::new(RichText::new(label).color(DIM)).wrap(),
+        );
+        row.spacing_mut().slider_width = row.available_width();
+        add_control(row);
+    });
+    ui.add_space(3.);
+}
+
 pub fn ui(
     mut contexts: EguiContexts,
     mut frontend: ResMut<Frontend>,
@@ -968,41 +985,83 @@ fn selection(
     }
     ui.separator();
     section(ui, "Race distance & grid");
-    ui.columns(2, |columns| {
-        for column in columns.iter_mut() {
-            column.spacing_mut().slider_width = (column.available_width() - 190.).clamp(50., 80.);
-        }
-        columns[0].add(egui::Slider::new(&mut draft.laps, 1..=30).text("Laps"));
-        columns[1].add(egui::Slider::new(&mut draft.opponents, 0..=15).text("AI opponents"));
-    });
+    if ui.available_width() >= 720. {
+        ui.columns(2, |columns| {
+            setting_row(&mut columns[0], "Laps", |ui| {
+                ui.add_sized(
+                    egui::vec2(ui.available_width(), 28.),
+                    egui::Slider::new(&mut draft.laps, 1..=30),
+                );
+            });
+            setting_row(&mut columns[1], "AI opponents", |ui| {
+                ui.add_sized(
+                    egui::vec2(ui.available_width(), 28.),
+                    egui::Slider::new(&mut draft.opponents, 0..=15),
+                );
+            });
+        });
+    } else {
+        setting_row(ui, "Laps", |ui| {
+            ui.add_sized(
+                egui::vec2(ui.available_width(), 28.),
+                egui::Slider::new(&mut draft.laps, 1..=30),
+            );
+        });
+        setting_row(ui, "AI opponents", |ui| {
+            ui.add_sized(
+                egui::vec2(ui.available_width(), 28.),
+                egui::Slider::new(&mut draft.opponents, 0..=15),
+            );
+        });
+    }
     draft.grid_slot = draft.grid_slot.clamp(1, draft.opponents + 1);
-    ui.add(egui::Slider::new(&mut draft.grid_slot, 1..=draft.opponents + 1).text("Grid position"));
+    setting_row(ui, "Grid position", |ui| {
+        ui.add_sized(
+            egui::vec2(ui.available_width(), 28.),
+            egui::Slider::new(&mut draft.grid_slot, 1..=draft.opponents + 1),
+        );
+    });
     section(ui, "Tyres & aero");
-    ui.horizontal_wrapped(|ui| {
-        ui.label("Tyres");
-        for (compound, label) in [
-            (Compound::Soft, "Soft"),
-            (Compound::Medium, "Medium"),
-            (Compound::Hard, "Hard"),
-        ] {
-            ui.selectable_value(&mut draft.setup.compound, compound, label);
-        }
+    setting_row(ui, "Tyre compound", |ui| {
+        ui.horizontal_wrapped(|ui| {
+            for (compound, label) in [
+                (Compound::Soft, "Soft"),
+                (Compound::Medium, "Medium"),
+                (Compound::Hard, "Hard"),
+            ] {
+                ui.selectable_value(&mut draft.setup.compound, compound, label);
+            }
+        });
     });
-    ui.columns(2, |columns| {
-        for column in columns.iter_mut() {
-            column.spacing_mut().slider_width = (column.available_width() - 190.).clamp(50., 80.);
-        }
-        columns[0].add(
-            egui::Slider::new(&mut draft.setup.front_wing, 0.0..=10.0)
-                .step_by(1.)
-                .text("Front wing"),
-        );
-        columns[1].add(
-            egui::Slider::new(&mut draft.setup.rear_wing, 0.0..=10.0)
-                .step_by(1.)
-                .text("Rear wing"),
-        );
-    });
+    if ui.available_width() >= 720. {
+        ui.columns(2, |columns| {
+            setting_row(&mut columns[0], "Front wing", |ui| {
+                ui.add_sized(
+                    egui::vec2(ui.available_width(), 28.),
+                    egui::Slider::new(&mut draft.setup.front_wing, 0.0..=10.0).step_by(1.),
+                );
+            });
+            setting_row(&mut columns[1], "Rear wing", |ui| {
+                ui.add_sized(
+                    egui::vec2(ui.available_width(), 28.),
+                    egui::Slider::new(&mut draft.setup.rear_wing, 0.0..=10.0).step_by(1.),
+                );
+            });
+        });
+    } else {
+        setting_row(ui, "Front wing", |ui| {
+            ui.add_sized(
+                egui::vec2(ui.available_width(), 28.),
+                egui::Slider::new(&mut draft.setup.front_wing, 0.0..=10.0).step_by(1.),
+            );
+        });
+        setting_row(ui, "Rear wing", |ui| {
+            ui.add_sized(
+                egui::vec2(ui.available_width(), 28.),
+                egui::Slider::new(&mut draft.setup.rear_wing, 0.0..=10.0).step_by(1.),
+            );
+        });
+    }
 }
 
 fn preview(ui: &mut egui::Ui, catalog: &Catalog, draft: &Options, compact: bool) {
@@ -1126,11 +1185,16 @@ fn aids_panel(ui: &mut egui::Ui, frontend: &mut Frontend) -> [egui::Rect; 3] {
         })
         .inner;
     ui.separator();
-    ui.horizontal_wrapped(|ui| {
-        ui.checkbox(&mut aids.automatic_gears, "Automatic gears")
+    section(ui, "Driving options");
+    setting_row(ui, "Automatic gears", |ui| {
+        ui.checkbox(&mut aids.automatic_gears, "Enabled")
             .on_hover_text("Manual shifts: E / Shift up, Q / Ctrl down.");
-        ui.checkbox(&mut frontend.show_racing_line, "Racing line");
-        ui.checkbox(&mut aids.drs_anywhere, "DRS anywhere")
+    });
+    setting_row(ui, "Racing line", |ui| {
+        ui.checkbox(&mut frontend.show_racing_line, "Enabled");
+    });
+    setting_row(ui, "DRS anywhere", |ui| {
+        ui.checkbox(&mut aids.drs_anywhere, "Enabled")
             .on_hover_text(
                 "Open DRS with F (gamepad B) anywhere on track. Braking still closes it. \
              AI cars keep to the race rules.",
@@ -1158,12 +1222,14 @@ fn aids_panel(ui: &mut egui::Ui, frontend: &mut Frontend) -> [egui::Rect; 3] {
 }
 
 fn corner_braking_slider(ui: &mut egui::Ui, value: &mut f64) {
-    ui.add(
-        egui::Slider::new(value, 0.0..=1.0)
-            .text("Corner braking")
-            .custom_formatter(|value, _| format!("{:.0}%", value * 100.)),
-    )
-    .on_hover_text("Brakes for bends and reduces a held accelerator.");
+    setting_row(ui, "Corner braking", |ui| {
+        ui.add_sized(
+            egui::vec2(ui.available_width(), 28.),
+            egui::Slider::new(value, 0.0..=1.0)
+                .custom_formatter(|value, _| format!("{:.0}%", value * 100.)),
+        )
+        .on_hover_text("Brakes for bends and reduces a held accelerator.");
+    });
 }
 
 fn car_control_sliders(ui: &mut egui::Ui, aids: &mut Assists) {
@@ -1190,13 +1256,15 @@ fn car_control_sliders(ui: &mut egui::Ui, aids: &mut Assists) {
             "Helps recover a developing slide.",
         ),
     ] {
-        ui.add(
-            egui::Slider::new(value, 0.0..=1.0)
-                .step_by(0.05)
-                .text(label)
-                .custom_formatter(|value, _| format!("{:.0}%", value * 100.)),
-        )
-        .on_hover_text(help);
+        setting_row(ui, label, |ui| {
+            ui.add_sized(
+                egui::vec2(ui.available_width(), 28.),
+                egui::Slider::new(value, 0.0..=1.0)
+                    .step_by(0.05)
+                    .custom_formatter(|value, _| format!("{:.0}%", value * 100.)),
+            )
+            .on_hover_text(help);
+        });
     }
 }
 
@@ -1220,18 +1288,48 @@ fn camera_editor(viewport: &egui::Ui, session: &mut Session, car: &str) {
                 });
                 let mut tuning = session.camera.tuning.clone();
                 let view = tuning.view_mut(session.camera.mode);
-                ui.add(egui::Slider::new(&mut view.height, 0.65..=4.).text("Height"));
+                setting_row(ui, "Height", |ui| {
+                    ui.add_sized(
+                        egui::vec2(ui.available_width(), 28.),
+                        egui::Slider::new(&mut view.height, 0.65..=4.),
+                    );
+                });
                 let range = if session.camera.mode == Mode::Chase {
                     -10.0..=-3.5
                 } else {
                     -1.5..=0.7
                 };
-                ui.add(egui::Slider::new(&mut view.fore_aft, range).text("Forward / back"));
-                ui.add(egui::Slider::new(&mut view.pitch, -10.0..=20.).text("Look down"));
-                ui.add(egui::Slider::new(&mut view.fov, 40.0..=95.).text("Field of view"));
+                setting_row(ui, "Forward / back", |ui| {
+                    ui.add_sized(
+                        egui::vec2(ui.available_width(), 28.),
+                        egui::Slider::new(&mut view.fore_aft, range),
+                    );
+                });
+                setting_row(ui, "Look down", |ui| {
+                    ui.add_sized(
+                        egui::vec2(ui.available_width(), 28.),
+                        egui::Slider::new(&mut view.pitch, -10.0..=20.),
+                    );
+                });
+                setting_row(ui, "Field of view", |ui| {
+                    ui.add_sized(
+                        egui::vec2(ui.available_width(), 28.),
+                        egui::Slider::new(&mut view.fov, 40.0..=95.),
+                    );
+                });
                 ui.separator();
-                ui.add(egui::Slider::new(&mut tuning.shake, 0.0..=1.).text("Vibration"));
-                ui.add(egui::Slider::new(&mut tuning.horizon, 0.0..=1.).text("Stable horizon"));
+                setting_row(ui, "Vibration", |ui| {
+                    ui.add_sized(
+                        egui::vec2(ui.available_width(), 28.),
+                        egui::Slider::new(&mut tuning.shake, 0.0..=1.),
+                    );
+                });
+                setting_row(ui, "Stable horizon", |ui| {
+                    ui.add_sized(
+                        egui::vec2(ui.available_width(), 28.),
+                        egui::Slider::new(&mut tuning.horizon, 0.0..=1.),
+                    );
+                });
                 if ui.button("Reset this view").clicked() {
                     *tuning.view_mut(session.camera.mode) =
                         crate::camera::Tuning::for_car(car).view(session.camera.mode);
@@ -1288,9 +1386,9 @@ fn video_choice<T: Copy + PartialEq>(
     all: &[T],
     name: fn(T) -> &'static str,
 ) {
-    ui.horizontal(|ui| {
-        ui.label(label);
+    setting_row(ui, label, |ui| {
         egui::ComboBox::from_id_salt(id)
+            .width(ui.available_width().min(240.))
             .selected_text(name(*value))
             .show_ui(ui, |ui| {
                 for &option in all {
@@ -1318,19 +1416,18 @@ fn graphics_panel(ui: &mut egui::Ui, frontend: &mut Frontend, session: &mut Sess
         let custom = frontend.video.preset().is_none();
         ui.add_enabled(false, egui::Button::new("Custom").selected(custom));
     });
-    ui.horizontal_wrapped(|ui| {
-        ui.checkbox(&mut frontend.vsync, "Vertical sync")
+    setting_row(ui, "Vertical sync", |ui| {
+        ui.checkbox(&mut frontend.vsync, "Enabled")
             .on_hover_text("Off renders as fast as the GPU allows, with possible tearing.");
-        ui.checkbox(&mut session.show_performance, "Show frame rate  F3");
+    });
+    setting_row(ui, "Frame rate counter", |ui| {
+        ui.checkbox(&mut session.show_performance, "Show  ·  F3");
     });
     ui.add_space(6.);
 
     let video = &mut frontend.video;
     let column_count = if ui.available_width() >= 640. { 2 } else { 1 };
     ui.columns(column_count, |columns| {
-        for column in columns.iter_mut() {
-            column.spacing_mut().slider_width = (column.available_width() - 240.).clamp(50., 220.);
-        }
         let quality = &mut columns[0];
         section(quality, "Image quality");
         video_choice(
@@ -1344,7 +1441,12 @@ fn graphics_panel(ui: &mut egui::Ui, frontend: &mut Frontend, session: &mut Sess
         if video.anti_alias == AntiAlias::Msaa4 {
             quality.label(RichText::new("MSAA disables ambient occlusion.").size(15.).color(DIM));
         }
-        quality.add(egui::Slider::new(&mut video.sharpening, 0.0..=1.0).text("Sharpening"));
+        setting_row(quality, "Sharpening", |ui| {
+            ui.add_sized(
+                egui::vec2(ui.available_width(), 28.),
+                egui::Slider::new(&mut video.sharpening, 0.0..=1.0),
+            );
+        });
         video_choice(
             quality,
             "textures",
@@ -1380,12 +1482,18 @@ fn graphics_panel(ui: &mut egui::Ui, frontend: &mut Frontend, session: &mut Sess
                 _ => "8192",
             },
         );
-        lighting.add(egui::Slider::new(&mut video.shadow_cascades, 1..=4).text("Shadow cascades"));
-        lighting.add(
-            egui::Slider::new(&mut video.shadow_distance, 30.0..=300.0)
-                .text("Shadow distance")
-                .suffix(" m"),
-        );
+        setting_row(lighting, "Shadow cascades", |ui| {
+            ui.add_sized(
+                egui::vec2(ui.available_width(), 28.),
+                egui::Slider::new(&mut video.shadow_cascades, 1..=4),
+            );
+        });
+        setting_row(lighting, "Shadow distance", |ui| {
+            ui.add_sized(
+                egui::vec2(ui.available_width(), 28.),
+                egui::Slider::new(&mut video.shadow_distance, 30.0..=300.0).suffix(" m"),
+            );
+        });
         video_choice(
             lighting,
             "shadow_filter",
@@ -1402,10 +1510,12 @@ fn graphics_panel(ui: &mut egui::Ui, frontend: &mut Frontend, session: &mut Sess
             &Level::ALL,
             Level::label,
         );
-        lighting.add_enabled(
-            video.ambient_occlusion != Level::Off,
-            egui::Checkbox::new(&mut video.contact_shadows, "Contact shadows"),
-        );
+        setting_row(lighting, "Contact shadows", |ui| {
+            ui.add_enabled(
+                video.ambient_occlusion != Level::Off,
+                egui::Checkbox::new(&mut video.contact_shadows, "Enabled"),
+            );
+        });
         video_choice(
             lighting,
             "sky",
@@ -1414,7 +1524,12 @@ fn graphics_panel(ui: &mut egui::Ui, frontend: &mut Frontend, session: &mut Sess
             &Level::ALL[1..],
             Level::label,
         );
-        lighting.add(egui::Slider::new(&mut video.haze, 0.0..=1.0).text("Haze"));
+        setting_row(lighting, "Haze", |ui| {
+            ui.add_sized(
+                egui::vec2(ui.available_width(), 28.),
+                egui::Slider::new(&mut video.haze, 0.0..=1.0),
+            );
+        });
     });
     if let Some(preset) = frontend.video.preset() {
         frontend.graphics = preset;
@@ -1435,9 +1550,6 @@ fn effects_panel(ui: &mut egui::Ui, frontend: &mut Frontend) {
     }
     let column_count = if ui.available_width() >= 640. { 2 } else { 1 };
     ui.columns(column_count, |columns| {
-        for column in columns.iter_mut() {
-            column.spacing_mut().slider_width = (column.available_width() - 240.).clamp(50., 220.);
-        }
         let color = &mut columns[0];
         section(color, "Color & tone");
         video_choice(
@@ -1448,36 +1560,77 @@ fn effects_panel(ui: &mut egui::Ui, frontend: &mut Frontend) {
             &ToneMap::ALL,
             ToneMap::label,
         );
-        color.add(
-            egui::Slider::new(&mut video.exposure, -3.0..=3.0)
-                .text("Exposure")
-                .suffix(" EV"),
-        );
-        color.add(egui::Slider::new(&mut video.saturation, 0.0..=2.0).text("Saturation"));
-        color.add(egui::Slider::new(&mut video.contrast, 0.5..=1.5).text("Contrast"));
-        color.add(egui::Slider::new(&mut video.temperature, -1.0..=1.0).text("Temperature"));
+        setting_row(color, "Exposure", |ui| {
+            ui.add_sized(
+                egui::vec2(ui.available_width(), 28.),
+                egui::Slider::new(&mut video.exposure, -3.0..=3.0).suffix(" EV"),
+            );
+        });
+        setting_row(color, "Saturation", |ui| {
+            ui.add_sized(
+                egui::vec2(ui.available_width(), 28.),
+                egui::Slider::new(&mut video.saturation, 0.0..=2.0),
+            );
+        });
+        setting_row(color, "Contrast", |ui| {
+            ui.add_sized(
+                egui::vec2(ui.available_width(), 28.),
+                egui::Slider::new(&mut video.contrast, 0.5..=1.5),
+            );
+        });
+        setting_row(color, "Temperature", |ui| {
+            ui.add_sized(
+                egui::vec2(ui.available_width(), 28.),
+                egui::Slider::new(&mut video.temperature, -1.0..=1.0),
+            );
+        });
 
         let lens = &mut columns[column_count - 1];
         if column_count == 1 {
             lens.add_space(8.);
         }
         section(lens, "Lens & motion");
-        lens.add(egui::Slider::new(&mut video.bloom, 0.0..=1.0).text("Bloom"));
-        lens.add(egui::Slider::new(&mut video.vignette, 0.0..=1.0).text("Vignette"));
-        lens.add(
-            egui::Slider::new(&mut video.chromatic_aberration, 0.0..=1.0)
-                .text("Chromatic aberration"),
-        );
-        lens.add(egui::Slider::new(&mut video.motion_blur, 0.0..=1.0).text("Motion blur"));
-        lens.checkbox(&mut video.depth_of_field, "Depth of field");
-        lens.add_enabled_ui(video.depth_of_field, |ui| {
-            ui.checkbox(&mut video.bokeh, "Bokeh (slower)");
-            ui.add(
-                egui::Slider::new(&mut video.focus_distance, 1.0..=200.0)
-                    .logarithmic(true)
-                    .text("Focus distance")
-                    .suffix(" m"),
+        setting_row(lens, "Bloom", |ui| {
+            ui.add_sized(
+                egui::vec2(ui.available_width(), 28.),
+                egui::Slider::new(&mut video.bloom, 0.0..=1.0),
             );
+        });
+        setting_row(lens, "Vignette", |ui| {
+            ui.add_sized(
+                egui::vec2(ui.available_width(), 28.),
+                egui::Slider::new(&mut video.vignette, 0.0..=1.0),
+            );
+        });
+        setting_row(lens, "Chromatic aberration", |ui| {
+            ui.add_sized(
+                egui::vec2(ui.available_width(), 28.),
+                egui::Slider::new(&mut video.chromatic_aberration, 0.0..=1.0),
+            );
+        });
+        setting_row(lens, "Motion blur", |ui| {
+            ui.add_sized(
+                egui::vec2(ui.available_width(), 28.),
+                egui::Slider::new(&mut video.motion_blur, 0.0..=1.0),
+            );
+        });
+        setting_row(lens, "Depth of field", |ui| {
+            ui.checkbox(&mut video.depth_of_field, "Enabled");
+        });
+        setting_row(lens, "Bokeh", |ui| {
+            ui.add_enabled_ui(video.depth_of_field, |ui| {
+                ui.checkbox(&mut video.bokeh, "Enabled  ·  slower");
+            });
+        });
+        setting_row(lens, "Focus distance", |ui| {
+            ui.add_enabled_ui(video.depth_of_field, |ui| {
+                ui.add_sized(
+                    egui::vec2(ui.available_width(), 28.),
+                    egui::Slider::new(&mut video.focus_distance, 1.0..=200.0)
+                        .logarithmic(true)
+                        .suffix(" m"),
+                );
+            });
         });
     });
     if let Some(preset) = frontend.video.preset() {
@@ -1534,14 +1687,17 @@ fn audio_panel(ui: &mut egui::Ui, frontend: &mut Frontend) {
             (&mut audio.opponents, "Other cars"),
             (&mut audio.effects, "Tyres, wind & kerbs"),
         ] {
-            ui.add(
-                egui::Slider::new(value, 0.0..=1.0)
-                    .text(label)
-                    .show_value(false),
-            );
+            setting_row(ui, label, |ui| {
+                ui.add_sized(
+                    egui::vec2(ui.available_width(), 28.),
+                    egui::Slider::new(value, 0.0..=1.0)
+                        .custom_formatter(|value, _| format!("{:.0}%", value * 100.)),
+                );
+            });
         }
-        ui.add_space(8.);
-        ui.checkbox(&mut frontend.muted, "Mute  M");
+        setting_row(ui, "Audio", |ui| {
+            ui.checkbox(&mut frontend.muted, "Mute  ·  M");
+        });
     });
 }
 
