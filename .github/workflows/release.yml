@@ -23,7 +23,6 @@ jobs:
         shell: bash
     env:
       CARGO_BUILD_JOBS: "3"
-      F1_PACKAGE_ASSETS: ${{ github.workspace }}/assets
     steps:
       - name: Install Linux build dependencies
         run: |
@@ -62,6 +61,7 @@ jobs:
 
       - name: Build normal and experimental AppImages
         run: |
+          export F1_PACKAGE_ASSETS="$GITHUB_WORKSPACE/assets"
           python tools/package/build_appimage.py
           python tools/package/build_appimage.py --exp
 
