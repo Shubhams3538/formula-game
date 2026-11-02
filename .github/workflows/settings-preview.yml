@@ -1,6 +1,9 @@
 name: Settings UI preview
 
 on:
+  push:
+    branches:
+      - codex/release-packaging-test
   workflow_dispatch:
 
 permissions:
