@@ -57,9 +57,10 @@ impl Tab {
 
     fn group(self) -> &'static str {
         match self {
-            Self::Race | Self::Aids => "RACE",
-            Self::Camera | Self::Controls => "PLAYER",
-            Self::Graphics | Self::Audio | Self::Hud => "SYSTEM",
+            Self::Race | Self::Aids => "GAMEPLAY",
+            Self::Camera | Self::Controls => "DRIVING",
+            Self::Graphics | Self::Hud => "VISUALS",
+            Self::Audio => "SOUND",
             Self::Benchmark => "TOOLS",
         }
     }
@@ -67,7 +68,7 @@ impl Tab {
     fn label(self) -> &'static str {
         match self {
             Self::Race => "Race setup",
-            Self::Aids => "Driving",
+            Self::Aids => "Driving assists",
             Self::Camera => "Camera",
             Self::Controls => "Controls",
             Self::Graphics => "Video",
@@ -80,7 +81,7 @@ impl Tab {
     fn description(self) -> &'static str {
         match self {
             Self::Race => "Choose a circuit, car, race length and grid.",
-            Self::Aids => "Set the driving assists and shift options you want.",
+            Self::Aids => "Choose an assist preset or tune braking, steering and car control.",
             Self::Camera => "Choose your driving view and adjust its framing.",
             Self::Controls => "See the keyboard and gamepad bindings.",
             Self::Graphics => "Balance image quality and performance.",
@@ -604,62 +605,59 @@ pub fn ui(
                         let body = housing().inner_margin(10).show(ui, |ui| {
                             let pane_height = (body_height - 28.).max(24.);
                             let nav_width = if size.x < 760. { 142. } else { 194. };
+                            let nav_button_height = ((pane_height - 170.) / 8.).clamp(18., 38.);
                             ui.horizontal_top(|ui| {
                                 ui.allocate_ui_with_layout(
                                     egui::vec2(nav_width, pane_height),
                                     egui::Layout::top_down(egui::Align::Min),
                                     |ui| {
-                                        egui::ScrollArea::vertical()
-                                            .id_salt("settings-navigation")
-                                            .max_height(pane_height)
-                                            .auto_shrink([false, false])
-                                            .show(ui, |ui| {
-                                                let mut group = "";
-                                                for tab in Tab::ALL {
-                                                    if tab.group() != group {
-                                                        if !group.is_empty() {
-                                                            ui.add_space(10.);
-                                                        }
-                                                        group = tab.group();
-                                                        section(ui, group);
-                                                        ui.add_space(4.);
-                                                    }
-                                                    let selected = frontend.tab == tab;
-                                                    let label = tab.label();
-                                                    let text = if selected {
-                                                        format!("{label}   ›")
-                                                    } else {
-                                                        label.to_owned()
-                                                    };
-                                                    let response = ui.add_sized(
-                                                        egui::vec2(nav_width, 38.),
-                                                        egui::Button::new(
-                                                            RichText::new(text)
-                                                                .strong()
-                                                                .color(if selected {
-                                                                    Color32::WHITE
-                                                                } else {
-                                                                    DIM
-                                                                }),
-                                                        )
-                                                        .fill(if selected {
-                                                            RED
-                                                        } else {
-                                                            Color32::TRANSPARENT
-                                                        }),
-                                                    );
-                                                    if response.clicked() {
-                                                        frontend.tab = tab;
-                                                    }
-                                                    #[cfg(test)]
-                                                    frontend.widgets.insert(label, response.rect);
+                                        ui.spacing_mut().item_spacing.y = 3.;
+                                        let mut group = "";
+                                        for tab in Tab::ALL {
+                                            if tab.group() != group {
+                                                if !group.is_empty() {
+                                                    ui.add_space(8.);
                                                 }
-                                            });
+                                                group = tab.group();
+                                                section(ui, group);
+                                                ui.add_space(3.);
+                                            }
+                                            let selected = frontend.tab == tab;
+                                            let label = tab.label();
+                                            let text = if selected {
+                                                format!("{label}   ›")
+                                            } else {
+                                                label.to_owned()
+                                            };
+                                            let response = ui.add_sized(
+                                                egui::vec2(nav_width, nav_button_height),
+                                                egui::Button::new(
+                                                    RichText::new(text)
+                                                        .strong()
+                                                        .color(if selected {
+                                                            Color32::WHITE
+                                                        } else {
+                                                            DIM
+                                                        }),
+                                                )
+                                                .fill(if selected {
+                                                    RED
+                                                } else {
+                                                    Color32::TRANSPARENT
+                                                }),
+                                            );
+                                            if response.clicked() {
+                                                frontend.tab = tab;
+                                            }
+                                            #[cfg(test)]
+                                            frontend.widgets.insert(label, response.rect);
+                                        }
                                     },
                                 );
                                 ui.separator();
                                 ui.add_space(6.);
                                 ui.vertical(|ui| {
+                                    ui.spacing_mut().item_spacing.y = 4.;
                                     section(ui, frontend.tab.group());
                                     ui.heading(
                                         RichText::new(frontend.tab.label())
@@ -669,13 +667,13 @@ pub fn ui(
                                     ui.label(
                                         RichText::new(frontend.tab.description()).color(DIM),
                                     );
-                                    ui.add_space(8.);
+                                    ui.add_space(5.);
                                     ui.separator();
-                                    egui::ScrollArea::vertical()
-                                        .id_salt(frontend.tab)
-                                        .max_height((pane_height - 104.).max(20.))
-                                        .auto_shrink([false, false])
-                                        .show(ui, |ui| match frontend.tab {
+                                    let page_height = (pane_height - 104.).max(20.);
+                                    ui.allocate_ui_with_layout(
+                                        egui::vec2(ui.available_width(), page_height),
+                                        egui::Layout::top_down(egui::Align::Min),
+                                        |ui| match frontend.tab {
                                             Tab::Race => race_setup(ui, &mut frontend),
                                             Tab::Aids => {
                                                 let presets = aids_panel(ui, &mut frontend);
@@ -706,7 +704,8 @@ pub fn ui(
                                                 &mut frontend,
                                                 size * context.pixels_per_point(),
                                             ),
-                                        });
+                                        },
+                                    );
                                 });
                             });
                         });
@@ -799,12 +798,20 @@ fn selection(
         });
     ui.add_space(4.);
     section(ui, "Car");
-    if catalog.cars.iter().any(|car| car.id == "gen22") {
-        ui.radio_value(&mut draft.car, "gen22".into(), "2022 ground effect");
-        ui.add_enabled_ui(draft.car == "gen22", |ui| {
-            let selected = teams.teams.iter().find(|t| t.id == draft.team);
+    ui.horizontal_wrapped(|ui| {
+        if catalog.cars.iter().any(|car| car.id == "gen22") {
+            ui.radio_value(&mut draft.car, "gen22".into(), "2022 car");
+        }
+        for car in catalog.cars.iter().filter(|car| car.id != "gen22") {
+            ui.radio_value(&mut draft.car, car.id.clone(), car.name)
+                .on_hover_text(car.description);
+        }
+    });
+    if draft.car == "gen22" {
+        let selected = teams.teams.iter().find(|t| t.id == draft.team);
+        ui.horizontal(|ui| {
             egui::ComboBox::from_id_salt("team")
-                .width(ui.available_width().min(340.))
+                .width((ui.available_width() * 0.48).max(120.))
                 .selected_text(selected.map_or("Choose team", |t| t.short.as_str()))
                 .show_ui(ui, |ui| {
                     for team in &teams.teams {
@@ -857,24 +864,20 @@ fn selection(
                         }
                     });
             }
-            ui.add_enabled(false, egui::Label::new("Livery: Source model"));
         });
     }
-    egui::CollapsingHeader::new("Legacy cars")
-        .default_open(draft.car != "gen22")
-        .show(ui, |ui| {
-            for car in catalog.cars.iter().filter(|car| car.id != "gen22") {
-                ui.radio_value(&mut draft.car, car.id.clone(), car.name);
-                if draft.car == car.id {
-                    ui.label(RichText::new(car.description).color(DIM));
-                }
-            }
-        });
     ui.separator();
-    ui.add(egui::Slider::new(&mut draft.laps, 1..=30).text("Laps"));
-    ui.add(egui::Slider::new(&mut draft.opponents, 0..=15).text("AI opponents"));
+    section(ui, "Race distance & grid");
+    ui.columns(2, |columns| {
+        for column in columns.iter_mut() {
+            column.spacing_mut().slider_width = (column.available_width() - 110.).clamp(60., 160.);
+        }
+        columns[0].add(egui::Slider::new(&mut draft.laps, 1..=30).text("Laps"));
+        columns[1].add(egui::Slider::new(&mut draft.opponents, 0..=15).text("AI opponents"));
+    });
     draft.grid_slot = draft.grid_slot.clamp(1, draft.opponents + 1);
     ui.add(egui::Slider::new(&mut draft.grid_slot, 1..=draft.opponents + 1).text("Grid position"));
+    section(ui, "Tyres & aero");
     ui.horizontal(|ui| {
         ui.label("Tyres");
         for (compound, label) in [
@@ -885,16 +888,21 @@ fn selection(
             ui.selectable_value(&mut draft.setup.compound, compound, label);
         }
     });
-    ui.add(
-        egui::Slider::new(&mut draft.setup.front_wing, 0.0..=10.0)
-            .step_by(1.)
-            .text("Front wing"),
-    );
-    ui.add(
-        egui::Slider::new(&mut draft.setup.rear_wing, 0.0..=10.0)
-            .step_by(1.)
-            .text("Rear wing"),
-    );
+    ui.columns(2, |columns| {
+        for column in columns.iter_mut() {
+            column.spacing_mut().slider_width = (column.available_width() - 110.).clamp(60., 160.);
+        }
+        columns[0].add(
+            egui::Slider::new(&mut draft.setup.front_wing, 0.0..=10.0)
+                .step_by(1.)
+                .text("Front wing"),
+        );
+        columns[1].add(
+            egui::Slider::new(&mut draft.setup.rear_wing, 0.0..=10.0)
+                .step_by(1.)
+                .text("Rear wing"),
+        );
+    });
 }
 
 fn preview(ui: &mut egui::Ui, catalog: &Catalog, draft: &Options) {
@@ -964,18 +972,11 @@ fn preview(ui: &mut egui::Ui, catalog: &Catalog, draft: &Options) {
             egui::Stroke::new(3., Color32::from_rgb(217, 225, 238)),
         ));
     }
-    ui.add_space(12.);
-    section(ui, "Drive your way");
-    ui.label("Choose a preset or adjust each assist below. Changes apply immediately and can be made during a race.");
-    ui.label(
-        RichText::new("C cycles cameras / 1 cockpit / 2 TV / 3 third person / F DRS / Esc menu")
-            .color(DIM),
-    );
 }
 
 fn aids_panel(ui: &mut egui::Ui, frontend: &mut Frontend) -> [egui::Rect; 3] {
     section(ui, "Assists");
-    ui.label("Hold the accelerator; guidance helps steer and brake for corners. Manual steering overrides it.");
+    ui.label("Presets are a starting point. Fine-tune each assist below.");
     let aids = &mut frontend.aids;
     let presets = ui
         .horizontal_wrapped(|ui| {
@@ -1035,24 +1036,20 @@ fn aids_panel(ui: &mut egui::Ui, frontend: &mut Frontend) -> [egui::Rect; 3] {
              AI cars keep to the race rules.",
             );
     });
-    ui.add_space(8.);
-    let count = if ui.available_width() >= 1000. { 2 } else { 1 };
-    ui.columns(count, |columns| {
+    ui.add_space(6.);
+    ui.columns(2, |columns| {
         for column in columns.iter_mut() {
-            column.spacing_mut().slider_width = (column.available_width() - 100.).clamp(80., 500.);
+            column.spacing_mut().slider_width = (column.available_width() - 210.).clamp(80., 260.);
         }
-        section(&mut columns[0], "Guidance");
-        columns[0].label("Corner braking");
-        columns[0].add(
-            egui::Slider::new(&mut frontend.corner_braking, 0.0..=1.0)
-                .custom_formatter(|value, _| format!("{:.0}%", value * 100.)),
-        );
-        columns[0].label(
-            RichText::new("Brakes for bends and reduces a held accelerator.")
-                .size(15.)
-                .color(DIM),
-        );
-        section(&mut columns[count - 1], "Car control");
+        section(&mut columns[0], "Driving guidance");
+        columns[0]
+            .add(
+                egui::Slider::new(&mut frontend.corner_braking, 0.0..=1.0)
+                    .text("Corner braking")
+                    .custom_formatter(|value, _| format!("{:.0}%", value * 100.)),
+            )
+            .on_hover_text("Brakes for bends and reduces a held accelerator.");
+        section(&mut columns[1], "Car control");
         for (value, label, help) in [
             (
                 &mut aids.steering,
@@ -1075,18 +1072,14 @@ fn aids_panel(ui: &mut egui::Ui, frontend: &mut Frontend) -> [egui::Rect; 3] {
                 "Helps recover a developing slide.",
             ),
         ] {
-            let ui = if label == "Steering assistance" {
-                &mut columns[0]
-            } else {
-                &mut columns[count - 1]
-            };
-            ui.label(label);
-            ui.add(
-                egui::Slider::new(value, 0.0..=1.0)
-                    .step_by(0.05)
-                    .custom_formatter(|value, _| format!("{:.0}%", value * 100.)),
-            );
-            ui.label(RichText::new(help).size(15.).color(DIM));
+            columns[1]
+                .add(
+                    egui::Slider::new(value, 0.0..=1.0)
+                        .step_by(0.05)
+                        .text(label)
+                        .custom_formatter(|value, _| format!("{:.0}%", value * 100.)),
+                )
+                .on_hover_text(help);
         }
     });
     presets
@@ -1098,43 +1091,37 @@ fn camera_editor(viewport: &egui::Ui, session: &mut Session, car: &str) {
         .show(viewport, |ui| {
             housing().fill(HOUSING.gamma_multiply(0.96)).show(ui, |ui| {
                 ui.set_width((viewport.max_rect().width() - 76.).clamp(180., 330.));
-                egui::ScrollArea::vertical()
-                    .max_height((viewport.max_rect().height() - 150.).max(80.))
-                    .show(ui, |ui| {
-                        section(ui, "Camera position");
-                        ui.label(RichText::new("Live preview / saved for this car").color(DIM));
-                        ui.horizontal(|ui| {
-                            for mode in Mode::ALL {
-                                if ui
-                                    .selectable_label(session.camera.mode == mode, mode.label())
-                                    .clicked()
-                                {
-                                    session.camera.select(mode);
-                                }
-                            }
-                        });
-                        let mut tuning = session.camera.tuning.clone();
-                        let view = tuning.view_mut(session.camera.mode);
-                        ui.add(egui::Slider::new(&mut view.height, 0.65..=4.).text("Height"));
-                        let range = if session.camera.mode == Mode::Chase {
-                            -10.0..=-3.5
-                        } else {
-                            -1.5..=0.7
-                        };
-                        ui.add(egui::Slider::new(&mut view.fore_aft, range).text("Forward / back"));
-                        ui.add(egui::Slider::new(&mut view.pitch, -10.0..=20.).text("Look down"));
-                        ui.add(egui::Slider::new(&mut view.fov, 40.0..=95.).text("Field of view"));
-                        ui.separator();
-                        ui.add(egui::Slider::new(&mut tuning.shake, 0.0..=1.).text("Vibration"));
-                        ui.add(
-                            egui::Slider::new(&mut tuning.horizon, 0.0..=1.).text("Stable horizon"),
-                        );
-                        if ui.button("Reset this view").clicked() {
-                            *tuning.view_mut(session.camera.mode) =
-                                crate::camera::Tuning::for_car(car).view(session.camera.mode);
+                section(ui, "Camera position");
+                ui.label(RichText::new("Live preview / saved for this car").color(DIM));
+                ui.horizontal(|ui| {
+                    for mode in Mode::ALL {
+                        if ui
+                            .selectable_label(session.camera.mode == mode, mode.label())
+                            .clicked()
+                        {
+                            session.camera.select(mode);
                         }
-                        session.camera.configure(tuning);
-                    });
+                    }
+                });
+                let mut tuning = session.camera.tuning.clone();
+                let view = tuning.view_mut(session.camera.mode);
+                ui.add(egui::Slider::new(&mut view.height, 0.65..=4.).text("Height"));
+                let range = if session.camera.mode == Mode::Chase {
+                    -10.0..=-3.5
+                } else {
+                    -1.5..=0.7
+                };
+                ui.add(egui::Slider::new(&mut view.fore_aft, range).text("Forward / back"));
+                ui.add(egui::Slider::new(&mut view.pitch, -10.0..=20.).text("Look down"));
+                ui.add(egui::Slider::new(&mut view.fov, 40.0..=95.).text("Field of view"));
+                ui.separator();
+                ui.add(egui::Slider::new(&mut tuning.shake, 0.0..=1.).text("Vibration"));
+                ui.add(egui::Slider::new(&mut tuning.horizon, 0.0..=1.).text("Stable horizon"));
+                if ui.button("Reset this view").clicked() {
+                    *tuning.view_mut(session.camera.mode) =
+                        crate::camera::Tuning::for_car(car).view(session.camera.mode);
+                }
+                session.camera.configure(tuning);
                 ui.separator();
                 if ui
                     .add(
@@ -1180,9 +1167,7 @@ fn warm_fonts(context: &egui::Context) {
 
 fn graphics_panel(ui: &mut egui::Ui, frontend: &mut Frontend, session: &mut Session) {
     use crate::graphics::{AntiAlias, Level, ShadowFilter, TextureDetail, ToneMap};
-    section(ui, "Graphics preset");
-    ui.label("Changes apply immediately. Texture detail applies from the next race.");
-    ui.add_space(6.);
+    section(ui, "Quality preset");
     ui.horizontal(|ui| {
         for quality in crate::graphics::Quality::ALL {
             let active = frontend.video.preset() == Some(quality);
@@ -1198,11 +1183,13 @@ fn graphics_panel(ui: &mut egui::Ui, frontend: &mut Frontend, session: &mut Sess
         let custom = frontend.video.preset().is_none();
         ui.add_enabled(false, egui::Button::new("Custom").selected(custom));
     });
-    ui.add_space(8.);
-    ui.checkbox(&mut frontend.vsync, "Vertical sync")
-        .on_hover_text("Off renders as fast as the GPU allows, with possible tearing.");
-    ui.checkbox(&mut session.show_performance, "Show frame rate  F3");
-    ui.add_space(12.);
+    ui.horizontal(|ui| {
+        ui.checkbox(&mut frontend.vsync, "Vertical sync")
+            .on_hover_text("Off renders as fast as the GPU allows, with possible tearing.");
+        ui.checkbox(&mut session.show_performance, "Show frame rate  F3");
+        ui.label(RichText::new("Changes apply immediately.").color(DIM));
+    });
+    ui.add_space(6.);
 
     let video = &mut frontend.video;
     fn choice<T: Copy + PartialEq>(
@@ -1224,12 +1211,14 @@ fn graphics_panel(ui: &mut egui::Ui, frontend: &mut Frontend, session: &mut Sess
                 });
         });
     }
-    let column_count = if ui.available_width() >= 720. { 2 } else { 1 };
-    ui.columns(column_count, |columns| {
-        let ui = &mut columns[0];
-        section(ui, "Anti-aliasing and sharpness");
+    ui.columns(2, |columns| {
+        for column in columns.iter_mut() {
+            column.spacing_mut().slider_width = (column.available_width() - 210.).clamp(80., 260.);
+        }
+        let rendering = &mut columns[0];
+        section(rendering, "Rendering");
         choice(
-            ui,
+            rendering,
             "aa",
             "Anti-aliasing",
             &mut video.anti_alias,
@@ -1237,33 +1226,36 @@ fn graphics_panel(ui: &mut egui::Ui, frontend: &mut Frontend, session: &mut Sess
             AntiAlias::label,
         );
         if video.anti_alias == AntiAlias::Msaa4 {
-            ui.label(
+            rendering.label(
                 RichText::new("MSAA disables ambient occlusion.")
                     .size(15.)
                     .color(DIM),
             );
         }
-        ui.add(egui::Slider::new(&mut video.sharpening, 0.0..=1.0).text("Sharpening"));
-        ui.add_space(10.);
-        section(ui, "Shadows and lighting");
-        ui.horizontal(|ui| {
-            ui.label("Shadow resolution");
-            egui::ComboBox::from_id_salt("shadow_res")
-                .selected_text(video.shadow_resolution.to_string())
-                .show_ui(ui, |ui| {
-                    for size in [1024, 2048, 4096, 8192] {
-                        ui.selectable_value(&mut video.shadow_resolution, size, size.to_string());
-                    }
-                });
-        });
-        ui.add(egui::Slider::new(&mut video.shadow_cascades, 1..=4).text("Shadow cascades"));
-        ui.add(
+        rendering.add(egui::Slider::new(&mut video.sharpening, 0.0..=1.0).text("Sharpening"));
+        rendering.add_space(4.);
+        section(rendering, "Lighting & detail");
+        choice(
+            rendering,
+            "shadow_res",
+            "Shadow resolution",
+            &mut video.shadow_resolution,
+            &[1024, 2048, 4096, 8192],
+            |size| match size {
+                1024 => "1024",
+                2048 => "2048",
+                4096 => "4096",
+                _ => "8192",
+            },
+        );
+        rendering.add(egui::Slider::new(&mut video.shadow_cascades, 1..=4).text("Shadow cascades"));
+        rendering.add(
             egui::Slider::new(&mut video.shadow_distance, 30.0..=300.0)
                 .text("Shadow distance")
                 .suffix(" m"),
         );
         choice(
-            ui,
+            rendering,
             "shadow_filter",
             "Shadow filtering",
             &mut video.shadow_filter,
@@ -1271,30 +1263,28 @@ fn graphics_panel(ui: &mut egui::Ui, frontend: &mut Frontend, session: &mut Sess
             ShadowFilter::label,
         );
         choice(
-            ui,
+            rendering,
             "ao",
             "Ambient occlusion",
             &mut video.ambient_occlusion,
             &Level::ALL,
             Level::label,
         );
-        ui.add_enabled(
+        rendering.add_enabled(
             video.ambient_occlusion != Level::Off,
             egui::Checkbox::new(&mut video.contact_shadows, "Contact shadows"),
         );
         choice(
-            ui,
+            rendering,
             "sky",
             "Sky lighting",
             &mut video.sky,
             &Level::ALL[1..],
             Level::label,
         );
-        ui.add(egui::Slider::new(&mut video.haze, 0.0..=1.0).text("Haze"));
-        ui.add_space(10.);
-        section(ui, "Textures");
+        rendering.add(egui::Slider::new(&mut video.haze, 0.0..=1.0).text("Haze"));
         choice(
-            ui,
+            rendering,
             "textures",
             "Texture detail",
             &mut video.texture,
@@ -1302,7 +1292,7 @@ fn graphics_panel(ui: &mut egui::Ui, frontend: &mut Frontend, session: &mut Sess
             TextureDetail::label,
         );
         choice(
-            ui,
+            rendering,
             "ai_detail",
             "AI detail",
             &mut video.ai_detail,
@@ -1310,33 +1300,33 @@ fn graphics_panel(ui: &mut egui::Ui, frontend: &mut Frontend, session: &mut Sess
             Level::label,
         );
 
-        let ui = &mut columns[column_count - 1];
-        section(ui, "Post-processing");
+        let image = &mut columns[1];
+        section(image, "Image effects");
         choice(
-            ui,
+            image,
             "tonemap",
             "Tonemapping",
             &mut video.tonemapping,
             &ToneMap::ALL,
             ToneMap::label,
         );
-        ui.add(
+        image.add(
             egui::Slider::new(&mut video.exposure, -3.0..=3.0)
                 .text("Exposure")
                 .suffix(" EV"),
         );
-        ui.add(egui::Slider::new(&mut video.saturation, 0.0..=2.0).text("Saturation"));
-        ui.add(egui::Slider::new(&mut video.contrast, 0.5..=1.5).text("Contrast"));
-        ui.add(egui::Slider::new(&mut video.temperature, -1.0..=1.0).text("Temperature"));
-        ui.add(egui::Slider::new(&mut video.bloom, 0.0..=1.0).text("Bloom"));
-        ui.add(egui::Slider::new(&mut video.vignette, 0.0..=1.0).text("Vignette"));
-        ui.add(
+        image.add(egui::Slider::new(&mut video.saturation, 0.0..=2.0).text("Saturation"));
+        image.add(egui::Slider::new(&mut video.contrast, 0.5..=1.5).text("Contrast"));
+        image.add(egui::Slider::new(&mut video.temperature, -1.0..=1.0).text("Temperature"));
+        image.add(egui::Slider::new(&mut video.bloom, 0.0..=1.0).text("Bloom"));
+        image.add(egui::Slider::new(&mut video.vignette, 0.0..=1.0).text("Vignette"));
+        image.add(
             egui::Slider::new(&mut video.chromatic_aberration, 0.0..=1.0)
                 .text("Chromatic aberration"),
         );
-        ui.add(egui::Slider::new(&mut video.motion_blur, 0.0..=1.0).text("Motion blur"));
-        ui.checkbox(&mut video.depth_of_field, "Depth of field");
-        ui.add_enabled_ui(video.depth_of_field, |ui| {
+        image.add(egui::Slider::new(&mut video.motion_blur, 0.0..=1.0).text("Motion blur"));
+        image.checkbox(&mut video.depth_of_field, "Depth of field");
+        image.add_enabled_ui(video.depth_of_field, |ui| {
             ui.checkbox(&mut video.bokeh, "Bokeh (slower)");
             ui.add(
                 egui::Slider::new(&mut video.focus_distance, 1.0..=200.0)
@@ -1345,7 +1335,7 @@ fn graphics_panel(ui: &mut egui::Ui, frontend: &mut Frontend, session: &mut Sess
                     .suffix(" m"),
             );
         });
-        if ui.button("Reset post-processing").clicked() {
+        if image.button("Reset image effects").clicked() {
             let base = crate::graphics::Video::default();
             video.tonemapping = base.tonemapping;
             video.exposure = base.exposure;
