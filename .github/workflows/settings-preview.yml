@@ -14,38 +14,20 @@ jobs:
     name: Windows game executable
     runs-on: windows-latest
     env:
-      CARGO_BUILD_JOBS: "2"
+      CARGO_BUILD_JOBS: "4"
+      CARGO_PROFILE_RELEASE_DEBUG: "0"
     steps:
       - uses: actions/checkout@v7
 
-      - name: Install MinGW-w64
-        uses: msys2/setup-msys2@v2
-        id: msys2
-        with:
-          msystem: MINGW64
-          suppress-deprecation-warnings: msystem-mingw64
-          update: true
-          install: >-
-            mingw-w64-x86_64-binutils
-            mingw-w64-x86_64-cmake
-            mingw-w64-x86_64-gcc
-
-      - name: Install stable Rust and Windows GNU target
+      - name: Install stable Rust
         uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: x86_64-pc-windows-gnu
 
       - name: Build game executable
-        shell: pwsh
-        env:
-          MSYS2_LOCATION: ${{ steps.msys2.outputs.msys2-location }}
-        run: |
-          $env:PATH = "$env:MSYS2_LOCATION\mingw64\bin;$env:PATH"
-          cargo build --release --locked -p f1-the-game --target x86_64-pc-windows-gnu
+        run: cargo build --release --locked -p f1-the-game
 
       - uses: actions/upload-artifact@v7
         with:
           name: settings-ui-preview-windows-x86_64
-          path: target/x86_64-pc-windows-gnu/release/f1-the-game.exe
+          path: target/release/f1-the-game.exe
           compression-level: 0
           if-no-files-found: error
