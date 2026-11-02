@@ -184,7 +184,7 @@ pub(super) fn panel(ui: &mut egui::Ui, frontend: &mut Frontend, size: egui::Vec2
             }
         });
     ui.add_space(12.);
-    ui.label("Choose the circuit and car in Race setup, the view in Cameras & controls, and the preset in Graphics. VSync is disabled for the test.");
+    ui.label("Choose the circuit and car in Race setup, the view in Camera, and the preset in Video. VSync is disabled for the test.");
     ui.label("Six seeded screenshot times cover the drive. Images are rendered after timing so capture does not distort the frame times.");
     ui.add_space(16.);
     if let Some(message) = &frontend.benchmark.message {

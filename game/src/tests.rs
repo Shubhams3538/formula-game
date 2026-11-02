@@ -625,14 +625,14 @@ fn menu_probe(
                     .any(|c| c.id == track && c.unavailable.is_none()));
             }
             menu_snapshot(&mut commands, &mut probe, "main-menu");
-            menu_click(&mut probe, &mut inputs, &frontend, "Driving aids");
+            menu_click(&mut probe, &mut inputs, &frontend, "Driving");
             probe.stage = 1;
             probe.ticks = 0;
         }
         1 if probe.ticks > 12 => {
             assert!(
                 frontend.tab == menu::Tab::Aids,
-                "Driving aids tab did not respond to pointer input"
+                "Driving page did not respond to pointer input"
             );
             menu_click(&mut probe, &mut inputs, &frontend, "beginner");
             probe.stage = 2;
@@ -650,7 +650,7 @@ fn menu_probe(
         3 if probe.ticks > 12 => {
             assert!(frontend.tab == menu::Tab::Race);
             choose_menu_case(&mut frontend, probe.case);
-            menu_click(&mut probe, &mut inputs, &frontend, "HUD & map");
+            menu_click(&mut probe, &mut inputs, &frontend, "Interface");
             probe.stage = 14;
             probe.ticks = 0;
         }
@@ -749,7 +749,7 @@ fn menu_probe(
         7 if probe.ticks > 12 => {
             assert_eq!(session.screen, menu::Screen::Paused);
             assert!(session.paused);
-            menu_click(&mut probe, &mut inputs, &frontend, "Driving aids");
+            menu_click(&mut probe, &mut inputs, &frontend, "Driving");
             probe.stage = 8;
             probe.ticks = 0;
         }

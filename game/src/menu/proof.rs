@@ -50,13 +50,14 @@ struct Proof {
     began: Option<std::time::Instant>,
     initial_time: Option<f64>,
 }
-const TABS: [(&str, Tab); 7] = [
+const TABS: [(&str, Tab); 8] = [
     ("Race setup", Tab::Race),
-    ("Driving aids", Tab::Aids),
-    ("Cameras & controls", Tab::Controls),
-    ("Graphics", Tab::Graphics),
+    ("Driving", Tab::Aids),
+    ("Camera", Tab::Camera),
+    ("Controls", Tab::Controls),
+    ("Video", Tab::Graphics),
     ("Audio", Tab::Audio),
-    ("HUD & map", Tab::Hud),
+    ("Interface", Tab::Hud),
     ("Benchmark", Tab::Benchmark),
 ];
 fn snapshot(commands: &mut Commands, proof: &mut Proof, name: &str) {

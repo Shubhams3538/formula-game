@@ -35,11 +35,60 @@ pub enum Screen {
 pub(crate) enum Tab {
     Race,
     Aids,
+    Camera,
     Controls,
     Graphics,
     Audio,
     Hud,
     Benchmark,
+}
+
+impl Tab {
+    const ALL: [Self; 8] = [
+        Self::Race,
+        Self::Aids,
+        Self::Camera,
+        Self::Controls,
+        Self::Graphics,
+        Self::Audio,
+        Self::Hud,
+        Self::Benchmark,
+    ];
+
+    fn group(self) -> &'static str {
+        match self {
+            Self::Race | Self::Aids => "RACE",
+            Self::Camera | Self::Controls => "PLAYER",
+            Self::Graphics | Self::Audio | Self::Hud => "SYSTEM",
+            Self::Benchmark => "TOOLS",
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::Race => "Race setup",
+            Self::Aids => "Driving",
+            Self::Camera => "Camera",
+            Self::Controls => "Controls",
+            Self::Graphics => "Video",
+            Self::Audio => "Audio",
+            Self::Hud => "Interface",
+            Self::Benchmark => "Benchmark",
+        }
+    }
+
+    fn description(self) -> &'static str {
+        match self {
+            Self::Race => "Choose a circuit, car, race length and grid.",
+            Self::Aids => "Set the driving assists and shift options you want.",
+            Self::Camera => "Choose your driving view and adjust its framing.",
+            Self::Controls => "See the keyboard and gamepad bindings.",
+            Self::Graphics => "Balance image quality and performance.",
+            Self::Audio => "Set engine sound and the overall mix.",
+            Self::Hud => "Customize dashboard and track map readouts.",
+            Self::Benchmark => "Measure performance with your current setup.",
+        }
+    }
 }
 
 pub struct Circuit {
@@ -543,58 +592,123 @@ pub fn ui(
                                 .size(if size.x < 700. { 28. } else { 36. }).strong());
                             if ui.button("Quit game").clicked() { exit.write(AppExit::Success); }
                         });
-                        ui.label(RichText::new("Choose your circuit, car and driving aids.").color(DIM));
-                        ui.add_space(12.);
-                        housing().inner_margin(6).corner_radius(10).show(ui, |ui| {
-                            ui.horizontal_wrapped(|ui| {
-                                for (tab, label) in [
-                                    (Tab::Race, "Race setup"),
-                                    (Tab::Aids, "Driving aids"),
-                                    (Tab::Controls, "Cameras & controls"),
-                                    (Tab::Graphics, "Graphics"),
-                                    (Tab::Audio, "Audio"),
-                                    (Tab::Hud, "HUD & map"),
-                                    (Tab::Benchmark, "Benchmark"),
-                                ] {
-                                    let selected = frontend.tab == tab;
-                                    let response = ui.add(egui::Button::new(
-                                        RichText::new(label.to_uppercase()).strong()
-                                            .color(if selected { Color32::WHITE } else { DIM }))
-                                        .fill(if selected { RED } else { WELL })
-                                        .min_size(egui::vec2(0., 34.)));
-                                    if response.clicked() { frontend.tab = tab; }
-                                    #[cfg(test)]
-                                    frontend.widgets.insert(label, response.rect);
-                                }
-                            });
-                        });
+                        ui.label(
+                            RichText::new("SETTINGS  ·  Tune your race experience.").color(DIM),
+                        );
                         ui.add_space(12.);
                         if let Some(error) = &frontend.error {
                             ui.colored_label(Color32::from_rgb(255, 150, 150), error);
                         }
                         let footer_height = if size.x < 800. { 132. } else { 96. };
                         let body_height = (ui.available_height() - footer_height).max(48.);
-                        let body = housing().show(ui, |ui| {
-                            egui::ScrollArea::vertical().id_salt(frontend.tab)
-                                .max_height((body_height - 36.).max(12.))
-                                .auto_shrink([false, false])
-                                .show(ui, |ui| match frontend.tab {
-                                    Tab::Race => race_setup(ui, &mut frontend),
-                                    Tab::Aids => {
-                                        let presets = aids_panel(ui, &mut frontend);
-                                        #[cfg(test)]
-                                        for (name, rect) in ["beginner", "balanced", "unassisted"].into_iter().zip(presets) {
-                                            frontend.widgets.insert(name, rect);
-                                        }
-                                        #[cfg(not(test))]
-                                        let _ = presets;
-                                    }
-                                    Tab::Controls => controls_panel(ui, &mut frontend.draft.camera, &mut session),
-                                    Tab::Graphics => graphics_panel(ui, &mut frontend, &mut session),
-                                    Tab::Audio => audio_panel(ui, &mut frontend),
-                                    Tab::Hud => display_panel(ui, &mut frontend),
-                                    Tab::Benchmark => benchmark::panel(ui, &mut frontend, size * context.pixels_per_point()),
+                        let body = housing().inner_margin(10).show(ui, |ui| {
+                            let pane_height = (body_height - 28.).max(24.);
+                            let nav_width = if size.x < 760. { 142. } else { 194. };
+                            ui.horizontal_top(|ui| {
+                                ui.allocate_ui_with_layout(
+                                    egui::vec2(nav_width, pane_height),
+                                    egui::Layout::top_down(egui::Align::Min),
+                                    |ui| {
+                                        egui::ScrollArea::vertical()
+                                            .id_salt("settings-navigation")
+                                            .max_height(pane_height)
+                                            .auto_shrink([false, false])
+                                            .show(ui, |ui| {
+                                                let mut group = "";
+                                                for tab in Tab::ALL {
+                                                    if tab.group() != group {
+                                                        if !group.is_empty() {
+                                                            ui.add_space(10.);
+                                                        }
+                                                        group = tab.group();
+                                                        section(ui, group);
+                                                        ui.add_space(4.);
+                                                    }
+                                                    let selected = frontend.tab == tab;
+                                                    let label = tab.label();
+                                                    let text = if selected {
+                                                        format!("{label}   ›")
+                                                    } else {
+                                                        label.to_owned()
+                                                    };
+                                                    let response = ui.add_sized(
+                                                        egui::vec2(nav_width, 38.),
+                                                        egui::Button::new(
+                                                            RichText::new(text)
+                                                                .strong()
+                                                                .color(if selected {
+                                                                    Color32::WHITE
+                                                                } else {
+                                                                    DIM
+                                                                }),
+                                                        )
+                                                        .fill(if selected {
+                                                            RED
+                                                        } else {
+                                                            Color32::TRANSPARENT
+                                                        }),
+                                                    );
+                                                    if response.clicked() {
+                                                        frontend.tab = tab;
+                                                    }
+                                                    #[cfg(test)]
+                                                    frontend.widgets.insert(label, response.rect);
+                                                }
+                                            });
+                                    },
+                                );
+                                ui.separator();
+                                ui.add_space(6.);
+                                ui.vertical(|ui| {
+                                    section(ui, frontend.tab.group());
+                                    ui.heading(
+                                        RichText::new(frontend.tab.label())
+                                            .size(if size.x < 700. { 22. } else { 28. })
+                                            .strong(),
+                                    );
+                                    ui.label(
+                                        RichText::new(frontend.tab.description()).color(DIM),
+                                    );
+                                    ui.add_space(8.);
+                                    ui.separator();
+                                    egui::ScrollArea::vertical()
+                                        .id_salt(frontend.tab)
+                                        .max_height((pane_height - 104.).max(20.))
+                                        .auto_shrink([false, false])
+                                        .show(ui, |ui| match frontend.tab {
+                                            Tab::Race => race_setup(ui, &mut frontend),
+                                            Tab::Aids => {
+                                                let presets = aids_panel(ui, &mut frontend);
+                                                #[cfg(test)]
+                                                for (name, rect) in
+                                                    ["beginner", "balanced", "unassisted"]
+                                                    .into_iter()
+                                                    .zip(presets)
+                                                {
+                                                    frontend.widgets.insert(name, rect);
+                                                }
+                                                #[cfg(not(test))]
+                                                let _ = presets;
+                                            }
+                                            Tab::Camera => camera_panel(
+                                                ui,
+                                                &mut frontend.draft.camera,
+                                                &mut session,
+                                            ),
+                                            Tab::Controls => controls_panel(ui),
+                                            Tab::Graphics => {
+                                                graphics_panel(ui, &mut frontend, &mut session)
+                                            }
+                                            Tab::Audio => audio_panel(ui, &mut frontend),
+                                            Tab::Hud => display_panel(ui, &mut frontend),
+                                            Tab::Benchmark => benchmark::panel(
+                                                ui,
+                                                &mut frontend,
+                                                size * context.pixels_per_point(),
+                                            ),
+                                        });
                                 });
+                            });
                         });
                         #[cfg(test)]
                         frontend.widgets.insert("settings-body", body.response.rect);
@@ -621,7 +735,7 @@ pub fn ui(
                             if start.clicked() { frontend.pending = true; }
                         });
                         ui.label(RichText::new(if session.screen == Screen::Paused {
-                            "A new race replaces this session. Driving aids apply immediately."
+                            "A new race replaces this session. Driving settings apply immediately."
                         } else { "Beginner aids include corner braking, steering guidance and automatic gears." }).color(DIM));
                     },
                 );
@@ -852,7 +966,7 @@ fn preview(ui: &mut egui::Ui, catalog: &Catalog, draft: &Options) {
     }
     ui.add_space(12.);
     section(ui, "Drive your way");
-    ui.label("Choose individual driving aids or a preset in Driving aids. You can adjust them from the pause menu without restarting.");
+    ui.label("Choose a preset or adjust each assist below. Changes apply immediately and can be made during a race.");
     ui.label(
         RichText::new("C cycles cameras / 1 cockpit / 2 TV / 3 third person / F DRS / Esc menu")
             .color(DIM),
@@ -860,7 +974,7 @@ fn preview(ui: &mut egui::Ui, catalog: &Catalog, draft: &Options) {
 }
 
 fn aids_panel(ui: &mut egui::Ui, frontend: &mut Frontend) -> [egui::Rect; 3] {
-    section(ui, "Driving aids");
+    section(ui, "Assists");
     ui.label("Hold the accelerator; guidance helps steer and brake for corners. Manual steering overrides it.");
     let aids = &mut frontend.aids;
     let presets = ui
@@ -1347,18 +1461,62 @@ fn display_panel(ui: &mut egui::Ui, frontend: &mut Frontend) {
     });
 }
 
-fn controls_panel(ui: &mut egui::Ui, selected: &mut Mode, session: &mut Session) {
-    section(ui, "Camera");
-    for mode in Mode::ALL {
-        if ui.radio_value(selected, mode, mode.label()).changed() {
-            session.camera.select(mode);
+fn camera_panel(ui: &mut egui::Ui, selected: &mut Mode, session: &mut Session) {
+    ui.label(
+        "Pick the view you want to drive from. You can fine-tune its position in the live scene.",
+    );
+    ui.add_space(14.);
+    let descriptions = [
+        "Inside the cockpit, close to the wheel and instruments.",
+        "A broadcast-style view above the driver.",
+        "A wider view behind the car.",
+    ];
+    let columns = if ui.available_width() >= 660. { 3 } else { 1 };
+    ui.columns(columns, |columns_ui| {
+        for (index, mode) in Mode::ALL.into_iter().enumerate() {
+            let column_index = if columns == 1 { 0 } else { index };
+            let column = &mut columns_ui[column_index];
+            let active = *selected == mode;
+            let response = column.add_sized(
+                egui::vec2(column.available_width(), 48.),
+                egui::Button::new(
+                    RichText::new(mode.label())
+                        .size(17.)
+                        .strong()
+                        .color(Color32::WHITE),
+                )
+                .fill(if active { RED } else { WELL }),
+            );
+            if response.clicked() && *selected != mode {
+                *selected = mode;
+                session.camera.select(mode);
+            }
+            column.add_space(8.);
+            column.label(RichText::new(descriptions[index]).color(DIM));
         }
-    }
-    if session.ready && ui.button("Adjust camera in scene  F4").clicked() {
+    });
+    ui.add_space(20.);
+    section(ui, "Live adjustment");
+    ui.add_space(6.);
+    ui.label(
+        RichText::new("Change height, position, pitch, field of view and camera movement.")
+            .color(DIM),
+    );
+    ui.add_space(8.);
+    if ui
+        .add_enabled(session.ready, egui::Button::new("Adjust camera in scene  ·  F4"))
+        .clicked()
+    {
         session.screen = Screen::CameraEditor;
         session.paused = true;
     }
-    ui.separator();
+}
+
+fn controls_panel(ui: &mut egui::Ui) {
+    ui.label("Keyboard and gamepad shortcuts available while driving.");
+    ui.add_space(14.);
+    section(ui, "Driving shortcuts");
+    ui.add_space(8.);
     let cell_width = ((ui.available_width() - 32.) / 3.).max(50.);
     egui::Grid::new("controls-grid")
         .num_columns(3)
