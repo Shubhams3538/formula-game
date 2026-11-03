@@ -284,6 +284,12 @@ pub fn update(
 }
 
 /// Track outline scaled into a unit box, for the minimap.
+/// Metres at which the nearby map's magnification halves.
+const NEARBY_ZOOM: f64 = 100.;
+/// Where the car sits in the nearby map, as a fraction of its height: low,
+/// so more of the road ahead is in view.
+const NEARBY_CAR_Y: f64 = 0.62;
+
 pub struct Minimap {
     points: Vec<(f32, f32)>,
     origin: (f64, f64),
@@ -334,11 +340,21 @@ impl Minimap {
         let left = dx * yaw.cos() - dz * yaw.sin();
         let ahead = dx * yaw.sin() + dz * yaw.cos();
         let radius = left.hypot(ahead);
-        let magnification = 0.44 / (radius + 400.);
+        // ~300 m around the car fills most of the view; the rest of the lap
+        // is compressed toward the rim instead of being cut off.
+        // The car sits low, so the road ahead gets more of the view than the
+        // road behind; every direction still stays inside the panel.
+        let reach = 0.48 + 0.1 * ahead / radius.max(1e-9);
+        let magnification = reach / (radius + NEARBY_ZOOM);
         (
             (0.5 - left * magnification) as f32,
-            (0.54 - ahead * magnification) as f32,
+            (NEARBY_CAR_Y - ahead * magnification) as f32,
         )
+    }
+
+    /// Distance from the car in metres, for fading the compressed far road.
+    fn distance(&self, point: (f32, f32), player: (f32, f32)) -> f64 {
+        ((point.0 - player.0) as f64).hypot((point.1 - player.1) as f64) * self.span
     }
 }
 
@@ -366,12 +382,42 @@ fn draw_map(hud: &Hud, _style: &HudStyle, session: &Session, mode: MapMode, scal
             rect.top() + point.1 * rect.height(),
         )
     };
+    if mode == MapMode::Nearby {
+        // A smoked backdrop keeps the magnified road legible over scenery.
+        hud.fill_round(
+            mx,
+            my,
+            size,
+            size,
+            18. * scale,
+            Color::from_black_alpha(120),
+        );
+    }
     let points = &session.minimap.points;
+    let ink = hud.finish.colors().ink;
     for index in 0..points.len() {
         let a = map(points[index]);
         let b = map(points[(index + 1) % points.len()]);
-        hud.line(a, b, 6. * scale, Color::from_black_alpha(150));
-        hud.line(a, b, 3. * scale, hud.finish.colors().ink);
+        // Nearby: the compressed far road recedes so the road ahead reads first.
+        let near = match mode {
+            MapMode::FullCircuit => 1.,
+            MapMode::Nearby => {
+                let distance = session.minimap.distance(points[index], player);
+                (1. - ((distance - 250.) / 700.).clamp(0., 1.) * 0.75) as f32
+            }
+        };
+        hud.line(
+            a,
+            b,
+            (3. + 3. * near) * scale,
+            Color::from_black_alpha((150. * near) as u8),
+        );
+        hud.line(
+            a,
+            b,
+            (1.5 + 1.5 * near) * scale,
+            ink.gamma_multiply(0.4 + 0.6 * near),
+        );
     }
 
     let start = map(points[0]);
@@ -1027,7 +1073,7 @@ mod tests {
             -std::f64::consts::FRAC_PI_2,
         ] {
             let center = map.nearby(player, player, yaw);
-            assert!((center.0 - 0.5).abs() < 1e-5 && (center.1 - 0.54).abs() < 1e-5);
+            assert!((center.0 - 0.5).abs() < 1e-5 && (center.1 as f64 - NEARBY_CAR_Y).abs() < 1e-5);
             let ahead = map.project(x + yaw.sin() * 300., z + yaw.cos() * 300.);
             let ahead = map.nearby(ahead, player, yaw);
             assert!((ahead.0 - center.0).abs() < 1e-4 && ahead.1 < center.1);
