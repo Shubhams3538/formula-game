@@ -107,15 +107,6 @@ impl TyreBand {
             Self::Cooked => ACCENT,
         }
     }
-
-    fn label(self) -> &'static str {
-        match self {
-            Self::Cold => "COLD",
-            Self::Optimal => "OPTIMAL",
-            Self::LiftAndCoast => "LIFT & COAST",
-            Self::Cooked => "COOKED",
-        }
-    }
 }
 
 /// HUD units per pixel. Designed at 1080p; narrow or tiled windows shrink by
@@ -1073,15 +1064,6 @@ mod tests {
 
     #[test]
     fn tyre_colors_follow_each_compounds_thermal_window() {
-        let labels: Vec<_> = [
-            TyreBand::Cold,
-            TyreBand::Optimal,
-            TyreBand::LiftAndCoast,
-            TyreBand::Cooked,
-        ]
-        .map(TyreBand::label)
-        .into();
-        assert_eq!(labels, ["COLD", "OPTIMAL", "LIFT & COAST", "COOKED"]);
         for compound in Compound::ALL {
             let properties = compound.properties();
             let optimal = properties.optimal_temperature;

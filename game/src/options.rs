@@ -4,6 +4,9 @@ use crate::camera::Mode;
 use racecraft_sim::{Assists, Compound, Setup};
 use std::path::PathBuf;
 
+/// A full 2026 grid: 11 teams of two, less the player.
+pub const MAX_OPPONENTS: usize = 21;
+
 #[derive(Clone, bevy::prelude::Resource)]
 pub struct Options {
     pub assets: PathBuf,
@@ -132,7 +135,7 @@ impl Options {
                     options.opponents = value()?
                         .parse::<usize>()
                         .map_err(|_| "opponents must be an integer")?
-                        .min(15)
+                        .min(MAX_OPPONENTS)
                 }
                 "--grid" => {
                     options.grid_slot = value()?

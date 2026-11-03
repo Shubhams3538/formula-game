@@ -1041,7 +1041,7 @@ fn selection(ui: &mut egui::Ui, catalog: &Catalog, draft: &mut Options) {
             setting_row(&mut columns[1], "AI opponents", |ui| {
                 ui.add_sized(
                     egui::vec2(ui.available_width(), 28.),
-                    egui::Slider::new(&mut draft.opponents, 0..=15),
+                    egui::Slider::new(&mut draft.opponents, 0..=crate::options::MAX_OPPONENTS),
                 );
             });
         });
@@ -1055,7 +1055,7 @@ fn selection(ui: &mut egui::Ui, catalog: &Catalog, draft: &mut Options) {
         setting_row(ui, "AI opponents", |ui| {
             ui.add_sized(
                 egui::vec2(ui.available_width(), 28.),
-                egui::Slider::new(&mut draft.opponents, 0..=15),
+                egui::Slider::new(&mut draft.opponents, 0..=crate::options::MAX_OPPONENTS),
             );
         });
     }
