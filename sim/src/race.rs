@@ -211,8 +211,10 @@ impl Race {
         self.time += dt;
         let held = self.advance_phase(dt);
 
-        let influences =
-            aero::influences(&self.entrants.iter().map(|e| &e.car).collect::<Vec<_>>());
+        let influences = aero::influences(
+            &self.entrants.iter().map(|e| &e.car).collect::<Vec<_>>(),
+            self.track.length,
+        );
         let rivals: Vec<Vec<Rival>> = (0..self.entrants.len())
             .map(|index| self.rivals_of(index))
             .collect();
@@ -904,5 +906,60 @@ mod tests {
             .events
             .iter()
             .any(|event| matches!(event, RaceEvent::Contact { .. })));
+    }
+}
+
+/// Needs converted assets: `F1_ASSETS=assets cargo test -p racecraft-sim -- --ignored overtak`.
+#[cfg(test)]
+mod spa_overtaking {
+    use super::*;
+    use crate::car::spec::test_wheels;
+
+    #[test]
+    #[ignore]
+    fn a_faster_ai_overtakes_at_spa_without_crashing_into_the_leader() {
+        let Ok(root) = std::env::var("F1_ASSETS") else {
+            return;
+        };
+        let track = Arc::new(Track::load(std::path::Path::new(&root).join("tracks/spa")).unwrap());
+        let spec = Arc::new(CarSpec::gen22(test_wheels(), 5.4, 1.9));
+        let driver = |name: &str, pace: f64| EntrantConfig {
+            name: name.into(),
+            spec: spec.clone(),
+            setup: Setup::default(),
+            assists: Assists {
+                automatic_gears: true,
+                ..Assists::default()
+            },
+            ai: Some(DriverProfile {
+                pace,
+                aggression: 0.6,
+                consistency: 1.0,
+            }),
+            human_slot: 0,
+            livery: [1.0; 3],
+        };
+        let (mut wins, mut contacts) = (0, 0);
+        for seed in [1, 3, 5, 7, 9, 11] {
+            // The slower car starts ahead; the faster one must get by.
+            let entrants = vec![driver("Slow", 0.92), driver("Fast", 0.99)];
+            let mut race = Race::new(track.clone(), entrants, 3, seed);
+            let mut ticks = 0;
+            while race.phase != Phase::Finished && ticks < (600.0 * PHYSICS_RATE) as usize {
+                race.step(&[]);
+                contacts += race
+                    .events
+                    .iter()
+                    .filter(|event| matches!(event, RaceEvent::Contact { b: Some(_), .. }))
+                    .count();
+                race.events.clear();
+                ticks += 1;
+            }
+            if race.entrants[race.order()[0]].name == "Fast" {
+                wins += 1;
+            }
+        }
+        assert!(wins >= 5, "the faster car won only {wins} of 6");
+        assert!(contacts <= 4, "{contacts} car contacts in 6 races");
     }
 }

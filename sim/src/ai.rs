@@ -164,9 +164,11 @@ impl AiDriver {
                 match target {
                     Some(target) => {
                         let closing = speed - target.speed;
+                        // Pull out once the tow has brought us close and we are
+                        // still gaining, or as the braking zone nears.
                         let pull_out = to_brake < 60.0 + speed * 1.2
-                            || target.gap < car.spec.length * 2.0 && closing > 1.0
-                            || target.gap < car.spec.length * 1.2;
+                            || target.gap < car.spec.length * 3.0 && closing > 0.3
+                            || target.gap < car.spec.length * 1.5;
                         if pull_out {
                             // Alongside, not out on the kerb: one car width
                             // plus margin beside the car being passed.
@@ -310,7 +312,10 @@ impl AiDriver {
                 // speed. React to closing, not absolute speed: a steady tow
                 // must still let a faster car reach a passing opportunity.
                 let room = (rival.gap - car.spec.length - 1.5).max(0.0);
-                let deceleration = 8.0;
+                // A fast car can stop hard: aero braking at 300 km/h is well
+                // over 30 m/s². Assuming a slow car's 8 m/s² everywhere held
+                // followers a full tow's length back, too far to pull out.
+                let deceleration = (12.0 + speed * 0.25).min(32.0);
                 let closing = (speed - rival.speed).max(0.0);
                 let safe_speed =
                     (rival.speed.powi(2) + 2.0 * deceleration * room).sqrt() - closing * 0.7;
@@ -409,7 +414,13 @@ impl AiDriver {
                     // Committed once the noses overlap; otherwise give up at
                     // the braking point rather than dive into the back.
                     // Decide early enough to tuck back in before braking.
-                    let no_overlap = target.gap > car.spec.length * 1.1;
+                    // Project the gap to the braking point at the current
+                    // closing speed: give up only if the nose will not be
+                    // alongside by then.
+                    let closing = car.speed() - target.speed;
+                    let time_to_brake = to_brake / car.speed().max(1.0);
+                    let projected = target.gap - closing.max(0.0) * time_to_brake;
+                    let no_overlap = projected > car.spec.length * 0.9;
                     let decision = 25.0 + car.speed() * 0.6;
                     if no_overlap && to_brake < decision && to_brake < track.length * 0.5 {
                         self.intent = Intent::Line;
