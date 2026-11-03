@@ -79,6 +79,8 @@ fn fixture(
         entrant.car.velocity = glam::DVec2::Y * 61.1;
         entrant.car.powertrain.rpm = 10820.;
         entrant.car.powertrain.gear = 5;
+        // DRS earned: the digital frame shows the armed lamp.
+        entrant.car.drs.available = true;
         session.telemetry.splits = [
             Some(telemetry::Split {
                 time: 32.123,
@@ -111,6 +113,7 @@ fn fixture(
     }
     if proof.frame == 60 {
         frontend.display.layout = Layout::Gauges;
+        session.race.entrants[player].car.drs.flap = 1.0;
         session.telemetry.pass.as_mut().unwrap().gained = false;
         session.telemetry.pass.as_mut().unwrap().position = 6;
     }

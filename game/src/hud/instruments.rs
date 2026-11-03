@@ -6,7 +6,6 @@ pub(super) fn draw(hud: &Hud, style: &HudStyle, session: &Session, layout: Layou
         Layout::Segments => segments(hud, style, session, scale),
         Layout::Gauges => gauges(hud, style, session, scale),
     }
-    drs_badge(hud, style, session, layout, scale);
 }
 
 /// What the DRS badge shows for the player's car.
@@ -37,39 +36,34 @@ impl DrsLamp {
     }
 }
 
-/// A DRS plate above the right-hand cluster: dark when unavailable, outlined
-/// green when it can be opened, solid green while the flap is open.
-fn drs_badge(hud: &Hud, style: &HudStyle, session: &Session, layout: Layout, scale: f32) {
-    let Some(lamp) = DrsLamp::of(session) else {
-        return;
-    };
-    // Cluster heights match `segments` (240) and `gauges` (2 × 165 + 24).
-    let (right, cluster) = match layout {
-        Layout::Segments => (24. * scale, 240. * scale),
-        Layout::Gauges => (28. * scale, 330. * scale),
-    };
-    let (w, h) = (96. * scale, 34. * scale);
-    let x = hud.width() - right - w;
-    let y = hud.height() - 24. * scale - cluster - 10. * scale - h;
-    let radius = 6. * scale;
-    let dim = Color::from_rgb(20, 22, 23);
+/// DRS tell-tale shared by every cluster: unlit when the car may not open
+/// it, outlined green when it can, solid green while the flap is open.
+fn drs_lamp(hud: &Hud, style: &HudStyle, rect: egui::Rect, text: f32, lamp: Option<DrsLamp>) {
+    let radius = rect.height() * 0.22;
+    let unlit = Color::from_rgb(20, 22, 23);
     let (fill, ink) = match lamp {
-        DrsLamp::Off => (dim, Color::from_gray(80)),
-        DrsLamp::Ready => (dim, GREEN),
-        DrsLamp::Open => (GREEN, Color::from_rgb(8, 9, 10)),
+        None => (unlit, Color::from_gray(55)),
+        Some(DrsLamp::Off) => (unlit, Color::from_gray(85)),
+        Some(DrsLamp::Ready) => (unlit, GREEN),
+        Some(DrsLamp::Open) => (GREEN, Color::from_rgb(8, 9, 10)),
     };
+    let (x, y, w, h) = (rect.left(), rect.top(), rect.width(), rect.height());
     hud.fill_round(x, y, w, h, radius, fill);
-    if lamp == DrsLamp::Ready {
-        hud.stroke_round(x, y, w, h, radius, 2.5 * scale, GREEN);
+    if lamp == Some(DrsLamp::Ready) {
+        hud.stroke_round(x, y, w, h, radius, (h * 0.08).max(1.5), GREEN);
     }
     hud.text_mid(
         &style.bold,
-        20. * scale,
-        (x + w * 0.5, y + h * 0.5),
+        text,
+        (rect.center().x, rect.center().y),
         Align::Center,
         ink,
         "DRS",
     );
+}
+
+fn rect(x: f32, y: f32, w: f32, h: f32) -> egui::Rect {
+    egui::Rect::from_min_size(egui::pos2(x, y), egui::vec2(w, h))
 }
 
 fn segments(hud: &Hud, style: &HudStyle, session: &Session, scale: f32) {
@@ -283,21 +277,19 @@ fn segments(hud: &Hud, style: &HudStyle, session: &Session, scale: f32) {
         ink,
         &lap_clock(race, session.player),
     );
+    // Sector timing lives in the timing strip; this cell is the DRS lamp.
     well(hud, speed_x, lower_y, side_w, lower_h, scale);
-    caption(
+    drs_lamp(
         hud,
         style,
-        14.0 * scale,
-        (speed_x + 10.0 * scale, lower_y + 14.0 * scale),
-        Align::Left,
-        "SECTOR TIME",
-    );
-    hud.segments(
-        lower_size,
-        (speed_x + side_w - 12.0 * scale, lower_value_y),
-        Align::Right,
-        ink,
-        &format!("{:.1}", (race.time - player.timing.sector_start).max(0.)),
+        rect(
+            speed_x + 6. * scale,
+            lower_y + 6. * scale,
+            side_w - 12. * scale,
+            lower_h - 12. * scale,
+        ),
+        22. * scale,
+        DrsLamp::of(session),
     );
     if let Some(text) = refusal {
         let tag_w = hud.text_width(&style.bold, 20.0 * scale, text) + 24.0 * scale;
@@ -687,6 +679,15 @@ fn gauges(hud: &Hud, style: &HudStyle, session: &Session, scale: f32) {
         colors.ink,
         &gear,
     );
+    // DRS sits in the free arc gap beneath the gear window.
+    let (lw, lh) = (0.3 * r, 0.11 * r);
+    drs_lamp(
+        hud,
+        style,
+        rect(c.0 - lw * 0.5, c.1 + 0.59 * r, lw, lh),
+        0.075 * r,
+        DrsLamp::of(session),
+    );
     tach.needle(
         hud,
         session.telemetry.rpm.value(car.powertrain.rpm) as f32 / 1000.,
@@ -858,9 +859,10 @@ fn tyre_display(hud: &Hud, style: &HudStyle, session: &Session, scale: f32) {
     }
 }
 
-/// Twin-needle tyre gauge: front and rear share one compound-banded scale,
-/// front/rear labels key the needles, with wear and wheel-lock warnings below.
-/// Tow and wake are tell-tale lamps rather than more dials.
+/// Tyre gauge: one compound-banded temperature scale with a front pointer
+/// riding outside the band and a rear pointer inside it, so nothing sweeps
+/// across the readouts. The face carries per-axle temperature and wear, and
+/// the arc gap below holds the TOW, WAKE and DRS tell-tales.
 fn tyre_dials(hud: &Hud, style: &HudStyle, session: &Session, scale: f32) {
     let car = &session.race.entrants[session.player].car;
     let colors = hud.finish.colors();
@@ -890,88 +892,58 @@ fn tyre_dials(hud: &Hud, style: &HudStyle, session: &Session, scale: f32) {
     }
     hud.text_mid(
         &style.bold,
-        11. * scale,
-        at(0., -0.4),
+        10. * scale,
+        at(0., -0.38),
         Align::Center,
         colors.muted,
-        &format!("{} °C", compound.label()),
+        compound.label(),
     );
 
-    // Tell-tales glow with the effect's strength.
-    for (x, label, value, color) in [
-        (
-            -0.24,
-            "TOW",
-            session.telemetry.tow.value(car.aero.slipstream()),
-            BLUE,
-        ),
-        (
-            0.24,
-            "WAKE",
-            session.telemetry.wake.value(car.aero.dirty_air()),
-            AMBER,
-        ),
-    ] {
-        let value = value.clamp(0., 1.) as f32;
-        let (w, h) = (0.36 * r, 0.15 * r);
-        let (x, y) = at(x, 0.2);
-        let lit = value > 0.05;
-        hud.fill_round(
-            x - w * 0.5,
-            y - h * 0.5,
-            w,
-            h,
-            3. * scale,
-            if lit {
-                color.gamma_multiply(0.25 + 0.75 * value)
-            } else {
-                Color::from_rgb(20, 22, 23)
-            },
-        );
-        hud.text_mid(
-            &style.bold,
-            10. * scale,
-            (x, y),
-            Align::Center,
-            if lit {
-                Color::from_rgb(8, 9, 10)
-            } else {
-                Color::from_gray(70)
-            },
-            label,
-        );
-    }
-
-    // Axle labels key the two needles; only wear is numeric below the sweep.
-    // Footprints retain thermal colour and per-wheel lock/slide warnings.
-    let needles = [(colors.ink, 0.8), (AMBER, 0.6)];
-    for (axle, y) in [0.60, 0.80].into_iter().enumerate() {
+    // Front reads white, rear amber: the pointer colours key the two rows.
+    let keys = [colors.ink, AMBER];
+    for (axle, y) in [-0.13, 0.15].into_iter().enumerate() {
         let tyre = car.tyres[axle];
+        let temperature = session.telemetry.temperatures[axle].value(tyre.temperature);
         let band = TyreBand::of(tyre.temperature, compound);
-        let (cx, cy) = at(0., y);
-        let size = 12. * scale;
-        hud.text_mid(
-            &style.bold,
-            10. * scale,
-            (cx - 0.18 * r, cy),
-            Align::Right,
-            needles[axle].0,
-            ["FRONT", "REAR"][axle],
-        );
-        for side in 0..2 {
+        let warning = (0..2).any(|side| {
             let wheel = &car.wheels[axle * 2 + side];
-            let x = cx + (side as f32 * 2. - 1.) * 0.075 * r - 4. * scale;
-            let (y, w, h) = (cy - 7. * scale, 8. * scale, 14. * scale);
-            hud.fill_round(x, y, w, h, 2. * scale, band.color());
-            if wheel.locked || wheel.sliding > 0.3 {
-                hud.stroke_round(x, y, w, h, 2. * scale, 2. * scale, WHITE);
-            }
+            wheel.locked || wheel.sliding > 0.3
+        });
+        let (lx, ly) = at(-0.42, y);
+        let tag = 0.15 * r;
+        hud.fill_round(lx, ly - tag * 0.5, tag, tag, 2. * scale, keys[axle]);
+        if warning {
+            hud.stroke_round(
+                lx - 2. * scale,
+                ly - tag * 0.5 - 2. * scale,
+                tag + 4. * scale,
+                tag + 4. * scale,
+                3. * scale,
+                2. * scale,
+                ACCENT,
+            );
         }
         hud.text_mid(
+            &style.bold,
+            0.11 * r,
+            (lx + tag * 0.5, ly),
+            Align::Center,
+            Color::from_rgb(8, 9, 10),
+            ["F", "R"][axle],
+        );
+        hud.text_mid(
+            &style.bold,
+            0.22 * r,
+            at(0.18, y),
+            Align::Right,
+            band.color(),
+            &format!("{temperature:.0}°"),
+        );
+        hud.text_mid(
             &style.regular,
-            size,
-            (cx + 0.15 * r, cy),
-            Align::Left,
+            0.11 * r,
+            at(0.46, y),
+            Align::Right,
             colors.muted,
             &format!(
                 "{:.0}%",
@@ -979,18 +951,78 @@ fn tyre_dials(hud: &Hud, style: &HudStyle, session: &Session, scale: f32) {
             ),
         );
     }
-    // Chassis spine joining the axles.
-    hud.line(at(0., 0.54), at(0., 0.87), 2. * scale, Color::from_gray(70));
-    // Rear first so the front needle reads on top.
-    for axle in [1, 0] {
-        let (color, length) = needles[axle];
-        dial.pointer(
-            hud,
-            session.telemetry.temperatures[axle].value(car.tyres[axle].temperature) as f32,
-            length,
-            color,
-            scale,
+
+    // Tell-tales in the gap beneath the sweep.
+    let (w, h) = (0.3 * r, 0.14 * r);
+    for (x, label, value, color) in [
+        (
+            -0.17,
+            "TOW",
+            session.telemetry.tow.value(car.aero.slipstream()),
+            BLUE,
+        ),
+        (
+            0.17,
+            "WAKE",
+            session.telemetry.wake.value(car.aero.dirty_air()),
+            AMBER,
+        ),
+    ] {
+        let value = value.clamp(0., 1.) as f32;
+        let (x, y) = at(x, 0.58);
+        let lit = value > 0.05;
+        hud.fill_round(
+            x - w * 0.5,
+            y - h * 0.5,
+            w,
+            h,
+            h * 0.22,
+            if lit {
+                color.gamma_multiply(0.3 + 0.7 * value)
+            } else {
+                Color::from_rgb(20, 22, 23)
+            },
         );
+        hud.text_mid(
+            &style.bold,
+            0.09 * r,
+            (x, y),
+            Align::Center,
+            if lit {
+                Color::from_rgb(8, 9, 10)
+            } else {
+                Color::from_gray(120)
+            },
+            label,
+        );
+    }
+    let (dw, dh) = (0.36 * r, 0.15 * r);
+    let (dx, dy) = at(0., 0.78);
+    drs_lamp(
+        hud,
+        style,
+        rect(dx - dw * 0.5, dy - dh * 0.5, dw, dh),
+        0.1 * r,
+        DrsLamp::of(session),
+    );
+
+    // Rear first so the front pointer reads on top when they meet.
+    for axle in [1, 0] {
+        let value = session.telemetry.temperatures[axle].value(car.tyres[axle].temperature) as f32;
+        let theta = 135. + dial.fraction(value) * 270.;
+        // Front: outside the band pointing in. Rear: inside pointing out.
+        let (base, tip) = if axle == 0 { (0.93, 0.8) } else { (0.66, 0.79) };
+        let spread = 7.;
+        let points = [
+            polar(c, r * base, theta - spread),
+            polar(c, r * tip, theta),
+            polar(c, r * base, theta + spread),
+        ];
+        hud.painter.add(egui::Shape::convex_polygon(
+            points.into_iter().map(|p| egui::pos2(p.0, p.1)).collect(),
+            keys[axle],
+            egui::Stroke::new(1. * scale, Color::from_rgb(8, 9, 10)),
+        ));
     }
 }
 
