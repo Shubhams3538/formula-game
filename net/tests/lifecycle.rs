@@ -213,7 +213,19 @@ fn sixteen_real_udp_clients_race_with_loss_and_ai_takeover() {
         assert!(lag < 180, "stale authority: lag={lag} ticks");
     }
     assert!(server.snapshot_bytes < MAX_MESSAGE);
-    println!("16 scripted clients, oval, 5% loss, duplication 1/31, reorder 3 ticks/7: snapshot={} bytes, tick={}, harness elapsed={:?}",server.snapshot_bytes,server.race.as_ref().unwrap().tick,start.elapsed());
+    let skipped: u64 = clients.iter().map(|c| c.resims_skipped).sum();
+    let replayed: u64 = clients.iter().map(|c| c.resims).sum();
+    println!("16 scripted clients, oval, 5% loss, duplication 1/31, reorder 3 ticks/7: delta snapshot={} bytes, full={} bytes, exact predictions={skipped}, rollbacks={replayed}, tick={}, harness elapsed={:?}",server.snapshot_bytes,server.full_snapshot_bytes,server.race.as_ref().unwrap().tick,start.elapsed());
+    assert!(
+        server.snapshot_bytes < server.full_snapshot_bytes,
+        "clients should receive deltas against acknowledged snapshots"
+    );
+    // Identical scripted inputs on one machine: most snapshots must match the
+    // prediction exactly, which skips the rollback and replay entirely.
+    assert!(
+        skipped > replayed,
+        "exact predictions {skipped} vs rollbacks {replayed}"
+    );
     let departed = clients.iter().position(|c| !c.owner()).unwrap();
     let slot = clients[departed].slot().unwrap();
     clients.remove(departed);
@@ -511,9 +523,12 @@ fn owner_rules_commands_results_return_and_host_loss() {
     pump(&mut server, &mut clients, &mut races, &fixture.0, 50);
     assert_eq!(server.lobby.epoch, epoch + 1);
     assert_eq!(server.lobby.stage, Stage::Grid);
+    // This server has no hosting player, so the room passes to the guest.
+    let guest_id = clients[guest].id;
     drop(clients.remove(owner));
     server.update(Duration::from_millis(3)).unwrap();
-    assert_eq!(server.lobby.stage, Stage::Closed);
+    assert_eq!(server.lobby.stage, Stage::Grid);
+    assert_eq!(server.lobby.owner, guest_id);
 }
 
 #[test]
@@ -658,4 +673,147 @@ fn gen22_assigns_distinct_stock_driver_identities_and_rejects_duplicates() {
         select_identity(&fixture.0, "rb6", Some(second), &players).unwrap(),
         None
     );
+}
+
+fn join(fixture: &Fixture, server: &Server, name: &str, id: Option<u64>) -> Client {
+    Client::connect(
+        &fixture.0,
+        server.address(),
+        name.into(),
+        Assists::default(),
+        id,
+    )
+    .unwrap()
+}
+
+#[test]
+fn hosted_room_closes_when_its_host_leaves() {
+    let fixture = Fixture::new();
+    let host_id = 77;
+    let mut server = Server::bind(
+        &fixture.0,
+        "127.0.0.1:0".parse().unwrap(),
+        RaceSettings::default(),
+        Some(host_id),
+    )
+    .unwrap();
+    let mut clients = vec![
+        join(&fixture, &server, "Host", Some(host_id)),
+        join(&fixture, &server, "Guest", None),
+    ];
+    let mut races = vec![None, None];
+    pump(&mut server, &mut clients, &mut races, &fixture.0, 80);
+    assert_eq!(server.lobby.players.len(), 2);
+    assert_eq!(server.lobby.owner, host_id);
+    drop(clients.remove(0));
+    pump(&mut server, &mut clients, &mut races[..1], &fixture.0, 20);
+    assert_eq!(server.lobby.stage, Stage::Closed);
+    assert!(clients[0].closed);
+}
+
+#[test]
+fn dedicated_room_hands_over_and_resets_when_everyone_leaves() {
+    let fixture = Fixture::new();
+    let mut server = Server::bind(
+        &fixture.0,
+        "127.0.0.1:0".parse().unwrap(),
+        RaceSettings::default(),
+        None,
+    )
+    .unwrap();
+    let mut clients = vec![
+        join(&fixture, &server, "First", None),
+        join(&fixture, &server, "Second", None),
+    ];
+    let mut races = vec![None, None];
+    pump(&mut server, &mut clients, &mut races, &fixture.0, 80);
+    assert_eq!(server.lobby.players.len(), 2);
+    let first = server.lobby.owner;
+    let other = clients.iter().position(|c| c.id != first).unwrap();
+    let other_id = clients[other].id;
+    clients.retain(|c| c.id != first);
+    pump(&mut server, &mut clients, &mut races[..1], &fixture.0, 20);
+    assert_eq!(
+        server.lobby.owner, other_id,
+        "ownership passes to the next driver"
+    );
+    assert_eq!(server.lobby.stage, Stage::Lobby);
+    clients.clear();
+    pump(&mut server, &mut clients, &mut [], &fixture.0, 20);
+    assert!(server.lobby.players.is_empty());
+    assert_eq!(server.lobby.owner, 0);
+    // The server keeps running; the next driver owns a fresh room.
+    let mut clients = vec![join(&fixture, &server, "Later", None)];
+    let mut races = vec![None];
+    pump(&mut server, &mut clients, &mut races, &fixture.0, 80);
+    assert_eq!(server.lobby.owner, clients[0].id);
+}
+
+#[test]
+fn rejected_join_learns_why_immediately() {
+    let fixture = Fixture::new();
+    let mut server = Server::bind(
+        &fixture.0,
+        "127.0.0.1:0".parse().unwrap(),
+        RaceSettings::default(),
+        None,
+    )
+    .unwrap();
+    let mut clients = vec![join(&fixture, &server, "Sam", None)];
+    let mut races = vec![None, None];
+    pump(&mut server, &mut clients, &mut races, &fixture.0, 80);
+    clients.push(join(&fixture, &server, " sam ", None));
+    // 80 ticks is about 0.2 s, far below the eight-second admission timeout.
+    pump(&mut server, &mut clients, &mut races, &fixture.0, 80);
+    assert!(clients[1].closed);
+    let error = clients[1].error.clone().unwrap_or_default();
+    assert!(error.contains("already in use"), "{error}");
+    assert_eq!(server.lobby.players.len(), 1);
+}
+
+#[test]
+fn fingerprint_covers_simulation_assets_but_not_visuals() {
+    let fixture = Fixture::new();
+    let settings = RaceSettings::default();
+    std::fs::write(fixture.0.join("tracks/spa/visual.glb"), b"one").unwrap();
+    let before = fingerprint(&fixture.0, &settings).unwrap();
+    std::fs::write(fixture.0.join("tracks/spa/visual.glb"), b"two").unwrap();
+    assert_eq!(fingerprint(&fixture.0, &settings).unwrap(), before);
+    let collision = fixture.0.join("tracks/spa/collision.bin");
+    let mut bytes = std::fs::read(&collision).unwrap();
+    *bytes.last_mut().unwrap() ^= 1;
+    std::fs::write(&collision, bytes).unwrap();
+    assert_ne!(fingerprint(&fixture.0, &settings).unwrap(), before);
+}
+
+#[test]
+fn dual_stack_room_admits_ipv4_and_ipv6_drivers() {
+    let fixture = Fixture::new();
+    let Ok(mut server) = Server::bind(
+        &fixture.0,
+        "[::]:0".parse().unwrap(),
+        RaceSettings::default(),
+        None,
+    ) else {
+        eprintln!("IPv6 unavailable on this machine; skipping");
+        return;
+    };
+    let port = server.address().port();
+    let connect = |address: &str, name: &str| {
+        Client::connect(
+            &fixture.0,
+            address.parse().unwrap(),
+            name.into(),
+            Assists::default(),
+            None,
+        )
+        .unwrap()
+    };
+    let mut clients = vec![
+        connect(&format!("127.0.0.1:{port}"), "Four"),
+        connect(&format!("[::1]:{port}"), "Six"),
+    ];
+    let mut races = vec![None, None];
+    pump(&mut server, &mut clients, &mut races, &fixture.0, 120);
+    assert_eq!(server.lobby.players.len(), 2);
 }

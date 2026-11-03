@@ -97,7 +97,7 @@ impl Serializer {
         Ok(())
     }
 }
-impl<'a> ser::Serializer for &'a mut Serializer {
+impl ser::Serializer for &mut Serializer {
     type Ok = ();
     type Error = Error;
     type SerializeSeq = Self;
@@ -263,7 +263,7 @@ compound!(
     SerializeTupleStruct::serialize_field,
     SerializeTupleVariant::serialize_field
 );
-impl<'a> ser::SerializeMap for &'a mut Serializer {
+impl ser::SerializeMap for &mut Serializer {
     type Ok = ();
     type Error = Error;
     fn serialize_key<T: ?Sized + Serialize>(&mut self, key: &T) -> Result<()> {
@@ -276,7 +276,7 @@ impl<'a> ser::SerializeMap for &'a mut Serializer {
         Ok(())
     }
 }
-impl<'a> ser::SerializeStruct for &'a mut Serializer {
+impl ser::SerializeStruct for &mut Serializer {
     type Ok = ();
     type Error = Error;
     fn serialize_field<T: ?Sized + Serialize>(&mut self, _: &'static str, v: &T) -> Result<()> {
@@ -286,7 +286,7 @@ impl<'a> ser::SerializeStruct for &'a mut Serializer {
         Ok(())
     }
 }
-impl<'a> ser::SerializeStructVariant for &'a mut Serializer {
+impl ser::SerializeStructVariant for &mut Serializer {
     type Ok = ();
     type Error = Error;
     fn serialize_field<T: ?Sized + Serialize>(&mut self, _: &'static str, v: &T) -> Result<()> {
@@ -302,7 +302,7 @@ struct Deserializer<'a> {
     floats: &'a [u8],
     exact: u32,
 }
-impl<'a> Deserializer<'a> {
+impl Deserializer<'_> {
     fn take<const N: usize>(&mut self) -> Result<[u8; N]> {
         if self.bytes.len() < N {
             return Err(Error("truncated snapshot".into()));
@@ -333,9 +333,12 @@ struct Access<'a, 'b> {
     de: &'b mut Deserializer<'a>,
     left: usize,
 }
-impl<'de, 'b> de::SeqAccess<'de> for Access<'de, 'b> {
+impl<'de> de::SeqAccess<'de> for Access<'de, '_> {
     type Error = Error;
-    fn next_element_seed<T: de::DeserializeSeed<'de>>(&mut self, seed: T) -> Result<Option<T::Value>> {
+    fn next_element_seed<T: de::DeserializeSeed<'de>>(
+        &mut self,
+        seed: T,
+    ) -> Result<Option<T::Value>> {
         if self.left == 0 {
             return Ok(None);
         }
@@ -346,7 +349,7 @@ impl<'de, 'b> de::SeqAccess<'de> for Access<'de, 'b> {
         Some(self.left)
     }
 }
-impl<'de, 'b> de::MapAccess<'de> for Access<'de, 'b> {
+impl<'de> de::MapAccess<'de> for Access<'de, '_> {
     type Error = Error;
     fn next_key_seed<K: de::DeserializeSeed<'de>>(&mut self, seed: K) -> Result<Option<K::Value>> {
         if self.left == 0 {
@@ -359,7 +362,7 @@ impl<'de, 'b> de::MapAccess<'de> for Access<'de, 'b> {
         seed.deserialize(&mut *self.de)
     }
 }
-impl<'de, 'b> de::EnumAccess<'de> for &'b mut Deserializer<'de> {
+impl<'de> de::EnumAccess<'de> for &mut Deserializer<'de> {
     type Error = Error;
     type Variant = Self;
     fn variant_seed<V: de::DeserializeSeed<'de>>(self, seed: V) -> Result<(V::Value, Self)> {
@@ -368,7 +371,7 @@ impl<'de, 'b> de::EnumAccess<'de> for &'b mut Deserializer<'de> {
         Ok((value, self))
     }
 }
-impl<'de, 'b> de::VariantAccess<'de> for &'b mut Deserializer<'de> {
+impl<'de> de::VariantAccess<'de> for &mut Deserializer<'de> {
     type Error = Error;
     fn unit_variant(self) -> Result<()> {
         Ok(())
@@ -377,7 +380,10 @@ impl<'de, 'b> de::VariantAccess<'de> for &'b mut Deserializer<'de> {
         seed.deserialize(self)
     }
     fn tuple_variant<V: de::Visitor<'de>>(self, len: usize, visitor: V) -> Result<V::Value> {
-        visitor.visit_seq(Access { de: self, left: len })
+        visitor.visit_seq(Access {
+            de: self,
+            left: len,
+        })
     }
     fn struct_variant<V: de::Visitor<'de>>(
         self,
@@ -397,7 +403,7 @@ macro_rules! number {
         }
     )*};
 }
-impl<'de, 'b> de::Deserializer<'de> for &'b mut Deserializer<'de> {
+impl<'de> de::Deserializer<'de> for &mut Deserializer<'de> {
     type Error = Error;
     fn deserialize_any<V: de::Visitor<'de>>(self, _: V) -> Result<V::Value> {
         Err(Error("snapshot format is not self-describing".into()))
@@ -493,7 +499,10 @@ impl<'de, 'b> de::Deserializer<'de> for &'b mut Deserializer<'de> {
         visitor.visit_seq(Access { de: self, left })
     }
     fn deserialize_tuple<V: de::Visitor<'de>>(self, len: usize, visitor: V) -> Result<V::Value> {
-        visitor.visit_seq(Access { de: self, left: len })
+        visitor.visit_seq(Access {
+            de: self,
+            left: len,
+        })
     }
     fn deserialize_tuple_struct<V: de::Visitor<'de>>(
         self,
@@ -501,7 +510,10 @@ impl<'de, 'b> de::Deserializer<'de> for &'b mut Deserializer<'de> {
         len: usize,
         visitor: V,
     ) -> Result<V::Value> {
-        visitor.visit_seq(Access { de: self, left: len })
+        visitor.visit_seq(Access {
+            de: self,
+            left: len,
+        })
     }
     fn deserialize_map<V: de::Visitor<'de>>(self, visitor: V) -> Result<V::Value> {
         let left = self.len()?;
@@ -560,7 +572,7 @@ mod tests {
         let value = Sample {
             tick: 9,
             speed: 0.1,
-            time: 1234.000_000_1,
+            time: 1_234.000_000_1,
             kinds: vec![Kind::A, Kind::B(2.5), Kind::C { x: 3, y: Some(0.3) }],
             name: "spa".into(),
             pair: (true, -7),
@@ -568,9 +580,18 @@ mod tests {
         let encoded = encode(&value).unwrap();
         let back: Sample = decode(&encoded).unwrap();
         assert_eq!(back.speed, 0.1f32 as f64);
-        assert_eq!(back.time, 1234.000_000_1);
-        assert_eq!(back.kinds[2], Kind::C { x: 3, y: Some(0.3f32 as f64) });
-        assert_eq!((back.tick, back.name.as_str(), back.pair), (9, "spa", (true, -7)));
+        assert_eq!(back.time, 1_234.000_000_1);
+        assert_eq!(
+            back.kinds[2],
+            Kind::C {
+                x: 3,
+                y: Some(0.3f32 as f64)
+            }
+        );
+        assert_eq!(
+            (back.tick, back.name.as_str(), back.pair),
+            (9, "spa", (true, -7))
+        );
         // Rounded values are stable: a second round trip is bit-identical.
         assert_eq!(encode(&back).unwrap(), encoded);
     }

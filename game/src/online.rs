@@ -91,8 +91,11 @@ impl Online {
             let bind = |address: SocketAddr| {
                 Server::bind(&options.assets, address, self.settings.clone(), Some(id))
             };
-            let server = bind(SocketAddr::from((std::net::Ipv6Addr::UNSPECIFIED, self.port)))
-                .or_else(|_| bind(SocketAddr::from(([0, 0, 0, 0], self.port))))?;
+            let server = bind(SocketAddr::from((
+                std::net::Ipv6Addr::UNSPECIFIED,
+                self.port,
+            )))
+            .or_else(|_| bind(SocketAddr::from(([0, 0, 0, 0], self.port))))?;
             self.host = Some(ServerHandle::spawn(server));
             SocketAddr::from(([127, 0, 0, 1], self.port))
         } else {

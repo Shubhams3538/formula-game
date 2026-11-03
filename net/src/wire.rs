@@ -168,7 +168,7 @@ pub fn encode<T: Serialize>(value: &T) -> Result<Vec<u8>, String> {
         return Err("network message exceeds limit".into());
     }
     if bytes.len() > 1000 {
-        let compressed = miniz_oxide::deflate::compress_to_vec_zlib(&bytes, 1);
+        let compressed = miniz_oxide::deflate::compress_to_vec_zlib(&bytes, 6);
         if compressed.len() + 5 < bytes.len() + 1 {
             let mut frame = vec![1];
             frame.extend((compressed.len() as u32).to_le_bytes());

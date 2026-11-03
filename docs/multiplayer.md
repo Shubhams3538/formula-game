@@ -7,8 +7,10 @@ The frozen custom engine and the unfinished livery branch are excluded.
 ## Play with friends
 
 Install the **same multiplayer build and converted assets** on every machine.
-The protocol checks the physics source and selected track/car asset contents before admission.
-Graphics, camera, audio and HUD choices remain local. Windows, macOS and Linux use the
+Before admission the protocol checks a build hash (every `sim` and `net` source file plus
+the locked versions of the crates they compute with) and the selected circuit/car
+simulation assets (`track.json`, `collision.bin`, `car.json`, and `teams.json` for GEN22).
+Visual meshes and textures are not checked; like camera, audio and HUD choices they stay local. Windows, macOS and Linux use the
 same protocol; authoritative snapshots correct floating-point differences between platforms.
 
 Build from the repository root:
@@ -57,7 +59,9 @@ recovery; manual gear shifts and recovery have reliable sequence numbers. Local
 camera keys, M and presentation settings stay local.
 
 A disconnected guest's car becomes AI-controlled. Rejoining that running race is
-not supported. If the owner leaves, everyone receives a terminated-session message.
+not supported. If the hosting player leaves, everyone receives a terminated-session
+message. A join that is refused (name or GEN22 driver already taken, room full,
+different build or assets) is told why straight away rather than timing out.
 At results, the owner can return everyone to the lobby and start another race.
 Leaving a hosted room stops and joins its server worker.
 
@@ -65,7 +69,8 @@ Leaving a hosted room stops and joins its server worker.
 
 Allow incoming **UDP port 7777** on the hosting computer. Manual joining remains
 available without discovery or platform accounts. Both IPv4 and IPv6 numeric
-addresses are accepted; IPv6 join addresses use `[address]:7777`.
+addresses are accepted; IPv6 join addresses use `[address]:7777`. Hosting from the
+menu listens on both IPv6 and IPv4 where the OS allows it, and falls back to IPv4 only.
 
 For friends on separate networks, use a VPN connecting the computers, or forward
 the UDP port on the host's router and share its reachable public address. There is
@@ -80,8 +85,11 @@ A Linux, Windows or macOS machine can also run the headless server:
 ./target/release/racecraft-server --assets ./assets --bind 0.0.0.0:7777
 ```
 
-The first admitted player owns a dedicated-server room. An optional `--settings
-rules.json` reads a serialized `RaceSettings`. The server needs track collision,
+The first admitted player owns a dedicated-server room. When the owner leaves,
+ownership passes to the next connected driver; when everyone has left, the room
+resets to an empty lobby. A room that closes (overload, load timeout) is replaced
+by a fresh one on the same port, so the process keeps serving. Use `--bind [::]:7777`
+to accept IPv6 and IPv4. An optional `--settings rules.json` reads a serialized `RaceSettings`. The server needs track collision,
 centerline and car geometry assets, and hashes the same selected asset directories
 as the clients. It does not link Bevy or require a display, sound device or GPU.
 The same UDP process can run on a reachable VPS. No hosted deployment is included.
@@ -107,12 +115,19 @@ are native executables with a `.command` launcher, not signed/notarized apps.
 
 - The host owns one `Race` at `sim::PHYSICS_RATE` (360 Hz). Hosting players join
   through the same UDP client path as guests. Inputs target explicit server ticks.
-- Clients keep a predicted full race, apply newer authoritative state, then replay
-  pending inputs. The initial lead is 12 ticks (33 ms). Prediction stops at a
-  90-tick lead during packet gaps; it cannot extrapolate indefinitely.
-- Held input batches go at 60 Hz, repeating up to 36 recent physics samples.
-  The server ignores past/duplicate ticks and rejects inputs more than 90 ticks
-  into its future, non-finite controls and out-of-range controls.
+- Clients keep a predicted full race. The lead is 12 ticks (33 ms) plus half the
+  round trip. A surplus lead (after a latency spike) is bled off by holding about one
+  predicted tick in sixteen, so it cannot stay inflated. Prediction stops at a 90-tick
+  lead during packet gaps; it cannot extrapolate indefinitely.
+- Snapshots fall on every 12th tick. On those ticks the server and every client round
+  race state to the wire precision, so both continue from bit-identical state. When a
+  snapshot matches the client's own prediction exactly (same inputs), the client keeps
+  its state and skips the rollback and replay; otherwise it restores and replays.
+- Held input batches go at 60 Hz, repeating up to 36 recent physics samples as packed
+  integers (about 9 bytes each). Clients predict with the same packed values the server
+  simulates. The server ignores past/duplicate ticks and rejects inputs more than 90
+  ticks into its future and malformed controls. Each batch also acknowledges the
+  newest snapshot the client holds.
 - Shifts and recovery use a separate ordered reliable channel, monotonically
   increasing command IDs and authoritative snapshot acknowledgements. A repeated
   command ID cannot shift or recover the car twice. At most one command per car
@@ -120,14 +135,19 @@ are native executables with a `.command` launcher, not signed/notarized apps.
 - Complete mutable snapshots include timing, race order, RNG, DRS, tyres,
   suspension and AI decision state. Immutable specs and large AI track planning
   caches remain local. Remote humans predict their last authoritative controls.
-- Snapshots go at 30 Hz over Renet's unreliable fragmented channel. Snapshots
-  are losslessly compressed; messages have a 64 KiB decoded size limit. Renet
+- Snapshots go at 30 Hz over Renet's unreliable fragmented channel. Floating-point
+  state travels as `f32` in its own stream; race time, lap timing, car setup and aids
+  and AI plan inputs stay exact. Each snapshot is an XOR delta against the newest one the
+  client acknowledged (full when that is unavailable), then compressed. With 16 cars
+  racing that averages about 3 KB instead of about 7.4 KB. Messages have a 64 KiB decoded size limit. Renet
   fragments below its UDP packet limit. Incomplete fragment storage is bounded
   at 8 MiB per channel, enough for three seconds of worst-size snapshots. Newer
   snapshots supersede older ones by server tick. Render corrections blend for
   100 ms without changing the corrected simulation state; recoveries snap.
 - Lobby/load messages, numbered race events and final results use ordered reliable
-  delivery. Events have bounded retention and are deduplicated before the HUD.
+  delivery. Events are batched with each snapshot; repeated contact reports for the
+  same pair within a batch collapse into the hardest one. Events have bounded retention
+  and are deduplicated before the HUD.
 - Admission/load deadlines, bounded queues, per-client message budgets and an
   eight-second silence timeout keep abandoned sessions from living indefinitely.
   Unadmitted clients receive no race state. A 30-second load deadline ends the
@@ -149,9 +169,11 @@ cargo run --release -p racecraft-net --example soak -- ./assets 15
 The network integration suite uses real loopback UDP sockets, 16 **scripted**
 clients, deterministic 5% datagram loss, duplication every 31st datagram and
 three-tick delay/reordering every seventh datagram. It checks fresh authority,
-unique slot assignment, snapshot replay, disconnect takeover and malformed frames.
-Additional lifecycle checks cover owner permissions, reliable command deduplication,
-finish results and returning for another race. The soak uses the real converted
+unique slot assignment, snapshot replay, delta snapshots, exact-prediction skips,
+disconnect takeover and malformed frames. Additional lifecycle checks cover owner
+permissions, reliable command deduplication, finish results, returning for another race,
+hosted-room closure, dedicated-room hand-over and reset, immediate join refusal, the
+asset fingerprint scope and IPv4/IPv6 dual-stack admission. The soak uses the real converted
 Spa/RB6 assets and a separately scheduled server, but has no renderer or human input.
 
 Recorded checks and runtime limitations are reported with the delivery. Scripted

@@ -46,7 +46,6 @@ pub struct Server {
     time: Duration,
     loading_at: Duration,
     accumulator: f64,
-    snapshot_ticks: u64,
     event_id: u64,
     budgets: HashMap<u64, f64>,
     /// Size of the most recent snapshot frame sent as a delta (or full, if none was).
@@ -103,7 +102,6 @@ impl Server {
             time: Duration::ZERO,
             loading_at: Duration::ZERO,
             accumulator: 0.,
-            snapshot_ticks: 0,
             event_id: 0,
             budgets: HashMap::new(),
             snapshot_bytes: 0,
@@ -656,9 +654,7 @@ impl Server {
             self.lobby.stage = stage;
             self.announce();
         }
-        self.snapshot_ticks += 1;
-        if self.snapshot_ticks >= (PHYSICS_RATE as u64 / SNAPSHOT_RATE) || stage == Stage::Results {
-            self.snapshot_ticks = 0;
+        if tick.is_multiple_of(SNAPSHOT_INTERVAL) || stage == Stage::Results {
             self.snapshot()?;
         }
         Ok(())

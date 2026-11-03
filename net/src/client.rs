@@ -319,14 +319,12 @@ impl Client {
         self.inputs = state.inputs;
         if !self.observe && remote_unchanged && own_covered && predicted {
             self.history.retain(|(t, _)| *t >= tick);
-            self.excess = race.tick.saturating_sub(natural + LEAD_SLACK);
+            self.excess = lead_plan(race.tick, tick, natural).1;
             self.last_correction = 0.;
             self.resims_skipped += 1;
             return Ok(false);
         }
-        // Never step the local timeline backwards; a surplus lead is bled off
-        // in `predict` instead, so it cannot ratchet up after a latency spike.
-        let target = race.tick.max(natural).min(tick + MAX_LEAD);
+        let (target, excess) = lead_plan(race.tick, tick, natural);
         let previous = race.entrants[slot].car.position;
         race.restore(&state.race)?;
         if self.observe && tick.is_multiple_of(120) {
@@ -352,12 +350,22 @@ impl Client {
         self.history.clear();
         self.history.push_back((tick, authoritative));
         let remote = state.inputs.map(|p| p.unpack());
+        let predicted_to = self.pending.back().map_or(tick, |s| s.tick);
+        let latest = self.pending.back().map_or(state.inputs[slot], |s| s.input);
         let events = std::mem::take(&mut race.events);
         while race.tick < target && self.stage() != Stage::Results {
             let next = race.tick + 1;
             let mut inputs = remote;
             if let Ok(i) = self.pending.binary_search_by_key(&next, |s| s.tick) {
                 inputs[slot] = self.pending[i].input.unpack();
+            } else if next > predicted_to {
+                // Catching up past anything predicted before: hold the newest
+                // own input and send it, so the server simulates the same.
+                inputs[slot] = latest.unpack();
+                self.pending.push_back(InputSample {
+                    tick: next,
+                    input: latest,
+                });
             }
             for (_, t, cmd) in &self.commands {
                 if *t == next {
@@ -369,17 +377,22 @@ impl Client {
             self.record(race)?;
         }
         race.events = events;
-        self.excess = race.tick.saturating_sub(natural + LEAD_SLACK);
+        self.excess = excess;
         self.last_correction = previous.distance(race.entrants[slot].car.position);
         self.resims += 1;
         Ok(true)
     }
-    fn record(&mut self, race: &Race) -> Result<(), String> {
+    /// On snapshot ticks, round like the server does and keep the result for
+    /// comparing with the authoritative snapshot when it arrives.
+    fn record(&mut self, race: &mut Race) -> Result<(), String> {
+        if !race.tick.is_multiple_of(SNAPSHOT_INTERVAL) {
+            return Ok(());
+        }
         if self.history.len() >= HISTORY {
             self.history.pop_front();
         }
-        self.history
-            .push_back((race.tick, codec::encode(&race.snapshot())?));
+        let encoded = quantize(race)?;
+        self.history.push_back((race.tick, encoded));
         Ok(())
     }
     /// Physics input targets one explicit server tick. Commands travel reliably; held controls are redundant UDP.
@@ -455,13 +468,23 @@ impl Client {
         self.net.rtt() * 1000.
     }
 }
-/// Predicted states kept for exact-match checks; covers the maximum lead.
-const HISTORY: usize = 2 * MAX_LEAD as usize;
+/// Predicted snapshot-tick states kept for exact-match checks; covers twice the maximum lead.
+const HISTORY: usize = (2 * MAX_LEAD / SNAPSHOT_INTERVAL) as usize + 1;
 /// Lead above the latency-based target tolerated before bleeding it off,
 /// so ordinary round-trip jitter does not cause skipped ticks.
 const LEAD_SLACK: u64 = 2;
 /// While ahead, skip one predicted tick in this many (about 22 ticks per second).
 const THROTTLE_EVERY: u64 = 16;
+/// Where to replay a rollback to, and how many surplus ticks to bleed off.
+///
+/// The local timeline never steps backwards (that would re-send inputs for
+/// ticks the server already holds). A lead above the latency-based target is
+/// instead removed gradually by `predict`, so a brief latency spike cannot
+/// leave the prediction permanently further ahead than it needs to be.
+fn lead_plan(local: u64, authoritative: u64, natural: u64) -> (u64, u64) {
+    let target = local.max(natural).min(authoritative + MAX_LEAD);
+    (target, target.saturating_sub(natural + LEAD_SLACK))
+}
 /// Keep enough predicted time for one-way transport delay and the next 60 Hz input send.
 /// The fixed 33 ms baseline remains useful on a local connection.
 fn prediction_lead(rtt_seconds: f64) -> u64 {
@@ -488,6 +511,21 @@ fn apply_command(race: &mut Race, slot: usize, input: &mut CarInput, command: Co
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn surplus_lead_is_bled_off_instead_of_kept() {
+        // A 150 ms spike left the prediction 39 ticks ahead; latency is now ~13 ticks.
+        let natural = 1_000 + prediction_lead(0.005);
+        let (target, excess) = lead_plan(1_039, 1_000, natural);
+        assert_eq!(target, 1_039, "the local timeline never steps backwards");
+        assert_eq!(excess, 1_039 - natural - LEAD_SLACK);
+        // Behind the needed lead: replay forward, nothing to bleed.
+        assert_eq!(lead_plan(1_005, 1_000, natural), (natural, 0));
+        // Within jitter slack: leave it alone.
+        assert_eq!(lead_plan(natural + LEAD_SLACK, 1_000, natural).1, 0);
+        // Never further ahead than the hard prediction limit.
+        assert_eq!(lead_plan(5_000, 1_000, natural).0, 1_000 + MAX_LEAD);
+    }
 
     #[test]
     fn prediction_lead_grows_with_latency_but_stays_bounded() {

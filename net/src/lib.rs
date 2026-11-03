@@ -18,6 +18,20 @@ pub const DEFAULT_PORT: u16 = 7777;
 pub const INPUT_RATE: u64 = 60;
 pub const SNAPSHOT_RATE: u64 = 30;
 pub const PROTOCOL_ID: u64 = 0x4631524143450001;
+/// Physics ticks between snapshots. Snapshots fall on multiples of this tick,
+/// and both server and clients round race state to the wire precision there.
+pub const SNAPSHOT_INTERVAL: u64 = racecraft_sim::PHYSICS_RATE as u64 / SNAPSHOT_RATE;
+
+/// Round the race to exactly what a snapshot carries and continue from that.
+///
+/// The server does this on every snapshot tick; clients do the same on the
+/// same ticks while predicting. Both then step from bit-identical state, so a
+/// prediction with the right inputs matches the next snapshot exactly.
+pub fn quantize(race: &mut Race) -> Result<codec::Encoded, String> {
+    let encoded = codec::encode(&race.snapshot())?;
+    race.restore(&codec::decode(&encoded)?)?;
+    Ok(encoded)
+}
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct RaceSettings {

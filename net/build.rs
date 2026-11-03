@@ -92,10 +92,6 @@ fn main() {
             hash.update(b"\n");
         }
     }
-    let hex: String = hash
-        .finalize()
-        .iter()
-        .map(|b| format!("{b:02x}"))
-        .collect();
+    let hex: String = hash.finalize().iter().map(|b| format!("{b:02x}")).collect();
     println!("cargo:rustc-env=RACECRAFT_BUILD_HASH={hex}");
 }

@@ -1099,7 +1099,10 @@ mod debug_probe {
 /// Complete mutable vehicle state; immutable geometry/specification is never sent.
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct CarState {
+    // Configuration, not dynamics: kept exact so it matches the room rules.
+    #[serde(with = "crate::exact")]
     setup: Setup,
+    #[serde(with = "crate::exact")]
     assists: Assists,
     position: DVec3,
     yaw: f64,
