@@ -58,6 +58,22 @@ impl RacingLine {
                 smooth_curvature(&centers, &lefts, &limits, &mut offsets, stride);
             }
         }
+        Self::from_offsets(stations, offsets)
+    }
+
+    /// The path a fixed lateral offset from the centerline traces, with its
+    /// own curvature, so a car holding a lane plans speeds for that lane.
+    pub fn constant_offset(stations: &[Station], lateral: f64) -> Self {
+        Self::from_offsets(stations, vec![lateral; stations.len()])
+    }
+
+    fn from_offsets(stations: &[Station], offsets: Vec<f64>) -> Self {
+        let count = stations.len();
+        let centers: Vec<DVec2> = stations
+            .iter()
+            .map(|station| DVec2::new(station.position.x, station.position.z))
+            .collect();
+        let lefts: Vec<DVec2> = stations.iter().map(Station::left).collect();
         let points: Vec<DVec2> = (0..count)
             .map(|index| centers[index] + lefts[index] * offsets[index])
             .collect();

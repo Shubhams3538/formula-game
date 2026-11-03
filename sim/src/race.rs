@@ -1003,8 +1003,26 @@ mod spa_opening_lap {
                 .collect();
             let mut race = Race::new(track.clone(), entrants, 2, seed);
             let (mut contacts, mut big) = (0, 0);
+            let mut spread_checked = false;
             for _ in 0..(45.0 * PHYSICS_RATE) as usize {
                 race.step(&[]);
+                if !spread_checked && race.phase == Phase::Racing && race.time > 4.0 {
+                    // Two-wide off the line, not a single file onto it.
+                    spread_checked = true;
+                    let off_line = race
+                        .entrants
+                        .iter()
+                        .filter(|entrant| {
+                            let p = entrant.car.track_position;
+                            (p.lateral - track.racing_line.offsets[track.station_at(p.s)]).abs()
+                                > 1.5
+                        })
+                        .count();
+                    assert!(
+                        off_line >= 8,
+                        "seed {seed}: only {off_line} of 22 cars off the line"
+                    );
+                }
                 for event in &race.events {
                     if let RaceEvent::Contact {
                         b: Some(_),
@@ -1033,8 +1051,8 @@ mod spa_opening_lap {
         }
         println!("TOTAL contacts {total}, heavy {heavy}, stranded {spun}");
         // Light rubbing in a 22-car opening is fine; hard hits and wrecked
-        // cars are not. Before pack-aware following this was 104 contacts.
-        assert!(total <= 40, "{total} contacts in four openings");
+        // cars are not. Single-file starts gave 19-104 contacts; grid lanes ~2.
+        assert!(total <= 12, "{total} contacts in four openings");
         assert!(heavy <= 1, "{heavy} heavy contacts");
         assert_eq!(spun, 0, "{spun} cars stranded at the first corner");
     }
