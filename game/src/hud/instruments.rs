@@ -926,40 +926,133 @@ fn tyre_dials(hud: &Hud, style: &HudStyle, session: &Session, scale: f32) {
             &format!("{value:.0}"),
         );
     }
+    // Compound badge: Pirelli-style ring with the compound initial.
+    let compound_color = match compound {
+        racecraft_sim::Compound::Soft => Color::from_rgb(232, 48, 44),
+        racecraft_sim::Compound::Medium => TYRE_YELLOW,
+        racecraft_sim::Compound::Hard => Color::from_gray(235),
+    };
+    let badge = at(0., -0.56);
+    hud.disc(
+        badge,
+        0.065 * r,
+        Color::from_rgb(14, 15, 16),
+        Color::from_rgb(14, 15, 16),
+    );
+    hud.painter.circle_stroke(
+        egui::pos2(badge.0, badge.1),
+        0.058 * r,
+        egui::Stroke::new(0.022 * r, compound_color),
+    );
     hud.text_mid(
         &style.bold,
-        0.09 * r,
-        at(0., -0.53),
+        0.075 * r,
+        badge,
         Align::Center,
-        colors.muted,
-        &format!("{} °C", compound.label()),
+        ink,
+        &compound.label()[..1],
     );
 
     // Top-down car: wings, body and wishbones in outline. Each tyre fills
     // with its thermal band colour to the tread life left, edged white for
     // the front and amber for the rear to match the pointers.
     let p = |x: f32, y: f32| egui::pos2(c.0 + x * r, c.1 + y * r);
-    let frame = Color::from_gray(120);
-    let line = egui::Stroke::new(1.2 * scale, frame);
-    let body = [
-        (0.0, -0.36),
-        (0.05, -0.16),
-        (0.16, 0.02),
-        (0.16, 0.26),
-        (0.08, 0.4),
-        (-0.08, 0.4),
-        (-0.16, 0.26),
-        (-0.16, 0.02),
-        (-0.05, -0.16),
-    ];
-    hud.painter.add(egui::Shape::convex_polygon(
-        body.iter().map(|&(x, y)| p(x, y)).collect(),
-        Color::from_rgb(24, 26, 27),
-        line,
-    ));
-    hud.circle((c.0, c.1 - 0.02 * r), 0.045 * r, Color::from_gray(60));
-    for (y, half, h) in [(-0.42, 0.26, 0.045), (0.44, 0.19, 0.06)] {
-        hud.fill_rect(c.0 - half * r, c.1 + y * r, 2. * half * r, h * r, frame);
+    let edge = egui::Stroke::new(1. * scale, Color::from_gray(118));
+    let shell = Color::from_rgb(34, 37, 39);
+    let carbon = Color::from_rgb(20, 22, 23);
+    let shape = |points: &[(f32, f32)], fill: Color| {
+        hud.painter.add(egui::Shape::convex_polygon(
+            points.iter().map(|&(x, y)| p(x, y)).collect(),
+            fill,
+            edge,
+        ));
+    };
+    // Wishbones first so the body and tyres sit over their ends.
+    let arm = egui::Stroke::new(1. * scale, Color::from_gray(92));
+    for (axle_y, half_track) in [(-0.22_f32, 0.3_f32), (0.3, 0.31)] {
+        for sign in [-1., 1.] {
+            let hub = p(sign * (half_track - 0.06), axle_y);
+            hud.painter
+                .line_segment([p(sign * 0.07, axle_y - 0.05), hub], arm);
+            hud.painter
+                .line_segment([p(sign * 0.07, axle_y + 0.04), hub], arm);
+        }
+    }
+    // Front wing with endplates, then the nose cone.
+    shape(
+        &[
+            (-0.27, -0.44),
+            (0.27, -0.44),
+            (0.27, -0.4),
+            (0.0, -0.37),
+            (-0.27, -0.4),
+        ],
+        shell,
+    );
+    for sign in [-1., 1.] {
+        shape(
+            &[
+                (sign * 0.27, -0.46),
+                (sign * 0.29, -0.46),
+                (sign * 0.29, -0.38),
+                (sign * 0.27, -0.38),
+            ],
+            carbon,
+        );
+    }
+    shape(
+        &[
+            (-0.028, -0.41),
+            (0.028, -0.41),
+            (0.055, -0.17),
+            (-0.055, -0.17),
+        ],
+        shell,
+    );
+    // Chassis and sidepods narrowing to the gearbox.
+    shape(
+        &[
+            (-0.055, -0.17),
+            (0.055, -0.17),
+            (0.15, -0.05),
+            (0.17, 0.12),
+            (0.13, 0.28),
+            (0.05, 0.4),
+            (-0.05, 0.4),
+            (-0.13, 0.28),
+            (-0.17, 0.12),
+            (-0.15, -0.05),
+        ],
+        shell,
+    );
+    // Cockpit opening and engine-cover spine.
+    hud.fill_round(
+        c.0 - 0.032 * r,
+        c.1 - 0.13 * r,
+        0.064 * r,
+        0.12 * r,
+        0.03 * r,
+        carbon,
+    );
+    hud.painter.line_segment(
+        [p(0., 0.02), p(0., 0.36)],
+        egui::Stroke::new(1. * scale, Color::from_gray(70)),
+    );
+    // Rear wing with endplates.
+    shape(
+        &[(-0.18, 0.43), (0.18, 0.43), (0.18, 0.48), (-0.18, 0.48)],
+        shell,
+    );
+    for sign in [-1., 1.] {
+        shape(
+            &[
+                (sign * 0.18, 0.41),
+                (sign * 0.2, 0.41),
+                (sign * 0.2, 0.5),
+                (sign * 0.18, 0.5),
+            ],
+            carbon,
+        );
     }
     let tyre_w = [0.12 * r, 0.14 * r];
     let tyre_h = [0.22 * r, 0.24 * r];
@@ -972,23 +1065,6 @@ fn tyre_dials(hud: &Hud, style: &HudStyle, session: &Session, scale: f32) {
         let life = (1. - session.telemetry.wear[axle].value(tyre.wear)).clamp(0., 1.) as f32;
         let key = if axle == 0 { ink } else { AMBER };
         let y = c.1 + axle_y[axle] * r;
-        for sign in [-1., 1.] {
-            // Wishbones from the body to the hub.
-            hud.painter.line_segment(
-                [
-                    p(sign * 0.08, axle_y[axle] - 0.04),
-                    p(sign * (half_track[axle] - 0.06), axle_y[axle]),
-                ],
-                line,
-            );
-            hud.painter.line_segment(
-                [
-                    p(sign * 0.08, axle_y[axle] + 0.04),
-                    p(sign * (half_track[axle] - 0.06), axle_y[axle]),
-                ],
-                line,
-            );
-        }
         for side in 0..2 {
             let wheel = &car.wheels[axle * 2 + side];
             let sign = if side == 0 { -1. } else { 1. };
@@ -996,7 +1072,8 @@ fn tyre_dials(hud: &Hud, style: &HudStyle, session: &Session, scale: f32) {
             let left = c.0 + sign * half_track[axle] * r - w * 0.5;
             let top = y - h * 0.5;
             let radius = 3. * scale;
-            hud.fill_round(left, top, w, h, radius, band.gamma_multiply(0.28));
+            hud.fill_round(left, top, w, h, radius, Color::from_rgb(12, 13, 14));
+            hud.fill_round(left, top, w, h, radius, band.gamma_multiply(0.22));
             hud.fill_round(left, top + h * (1. - life), w, h * life, radius, band);
             let warning = wheel.locked || wheel.sliding > 0.3;
             hud.stroke_round(
@@ -1036,7 +1113,7 @@ fn tyre_dials(hud: &Hud, style: &HudStyle, session: &Session, scale: f32) {
             r * 0.8,
             (start, start + direction * span),
             r * 0.06,
-            Color::from_rgb(8, 9, 10),
+            Color::from_rgb(30, 32, 34),
         );
         if value > 0.005 {
             arc(
@@ -1051,7 +1128,7 @@ fn tyre_dials(hud: &Hud, style: &HudStyle, session: &Session, scale: f32) {
         hud.text_mid(
             &style.bold,
             0.085 * r,
-            polar(c, r * 0.68, start + direction * span * 0.25),
+            polar(c, r * 0.67, start + direction * (span - 8.)),
             Align::Center,
             colors.muted,
             label,
@@ -1069,14 +1146,14 @@ fn tyre_dials(hud: &Hud, style: &HudStyle, session: &Session, scale: f32) {
             (0.66, 0.77)
         };
         let points = [
-            polar(c, r * base, theta - 5.),
+            polar(c, r * base, theta - 6.5),
             polar(c, r * tip, theta),
-            polar(c, r * base, theta + 5.),
+            polar(c, r * base, theta + 6.5),
         ];
         hud.painter.add(egui::Shape::convex_polygon(
             points.into_iter().map(|p| egui::pos2(p.0, p.1)).collect(),
             if axle == 0 { ink } else { AMBER },
-            egui::Stroke::new(scale, Color::from_rgb(8, 9, 10)),
+            egui::Stroke::new(1.5 * scale, Color::from_rgb(8, 9, 10)),
         ));
     }
 }
