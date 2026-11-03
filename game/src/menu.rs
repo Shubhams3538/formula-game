@@ -35,10 +35,11 @@ pub enum Screen {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) enum Tab {
     Track,
-    Team,
-    Aids,
+    Car,
+    Driver,
     Camera,
     Controls,
+    Aids,
     Graphics,
     Effects,
     Audio,
@@ -47,34 +48,13 @@ pub(crate) enum Tab {
 }
 
 impl Tab {
-    const GAMEPLAY: [Self; 3] = [Self::Team, Self::Aids, Self::Track];
-
-    fn is_gameplay(self) -> bool {
-        matches!(self, Self::Team | Self::Aids | Self::Track)
-    }
-
-    fn navigation_label(self) -> &'static str {
-        if self.is_gameplay() {
-            "Game play"
-        } else {
-            self.label()
-        }
-    }
-
-    fn navigation_selected(self, current: Self) -> bool {
-        if self.is_gameplay() {
-            current.is_gameplay()
-        } else {
-            current == self
-        }
-    }
-
-    const ALL: [Self; 10] = [
+    const ALL: [Self; 11] = [
         Self::Track,
-        Self::Team,
-        Self::Aids,
+        Self::Car,
+        Self::Driver,
         Self::Camera,
         Self::Controls,
+        Self::Aids,
         Self::Graphics,
         Self::Effects,
         Self::Hud,
@@ -84,8 +64,8 @@ impl Tab {
 
     fn group(self) -> &'static str {
         match self {
-            Self::Track | Self::Team | Self::Aids => "GAMEPLAY",
-            Self::Camera | Self::Controls => "DRIVING",
+            Self::Track | Self::Car | Self::Driver => "GAMEPLAY",
+            Self::Camera | Self::Controls | Self::Aids => "DRIVING",
             Self::Graphics | Self::Effects | Self::Hud => "VISUALS",
             Self::Audio => "AUDIO",
             Self::Benchmark => "TOOLS",
@@ -95,10 +75,11 @@ impl Tab {
     fn label(self) -> &'static str {
         match self {
             Self::Track => "Track",
-            Self::Team => "Car setup",
-            Self::Aids => "Driving assistance",
+            Self::Car => "Car",
+            Self::Driver => "Driver",
             Self::Camera => "Camera",
             Self::Controls => "Controls",
+            Self::Aids => "Driving assistance",
             Self::Graphics => "Graphics",
             Self::Effects => "Effects",
             Self::Audio => "Sound",
@@ -110,10 +91,11 @@ impl Tab {
     fn description(self) -> &'static str {
         match self {
             Self::Track => "Choose a circuit, race length and grid.",
-            Self::Team => "Choose your car, team and driver.",
-            Self::Aids => "Choose an assist preset or tune braking, steering and car control.",
+            Self::Car => "Choose your car, tyres and wing levels.",
+            Self::Driver => "Choose your team and driver.",
             Self::Camera => "Choose your driving view and adjust its framing.",
             Self::Controls => "See the keyboard and gamepad bindings.",
+            Self::Aids => "Choose an assist preset or tune braking, steering and car control.",
             Self::Graphics => "Set image quality, detail and lighting.",
             Self::Effects => "Tune exposure, color, lens and motion effects.",
             Self::Audio => "Choose an engine sound and balance the race mix.",
@@ -651,16 +633,15 @@ pub fn ui(
         .iter()
         .any(|track| track.id == frontend.draft.track && track.unavailable.is_none())
         && frontend.catalog.car_available(&frontend.draft);
-    let status = if !available {
-        "Choose an available circuit and car before starting a race."
-    } else if session.screen == Screen::Paused {
-        "Start new race replaces this session. Driving settings apply immediately."
-    } else {
-        "Settings apply immediately. Assist presets are under Game play → Driving assistance."
-    };
 
+    // Every footer action shares one size.
+    let action = egui::vec2(
+        ((content_max_width.min(size.x) - margin * 2. - 24.) / 3.).clamp(120., 190.),
+        44.,
+    );
     egui::Panel::bottom("settings-actions")
         .exact_size(footer_height)
+        .show_separator_line(false)
         .frame(
             egui::Frame::new()
                 .fill(BACKDROP)
@@ -680,7 +661,7 @@ pub fn ui(
                                     frontend.benchmark.child.is_none(),
                                     egui::Button::new(RichText::new("Resume race").strong())
                                         .fill(RED)
-                                        .min_size(egui::vec2(width.min(160.), 44.)),
+                                        .min_size(action),
                                 );
                                 if resume_button.clicked() {
                                     resume(&mut session);
@@ -699,23 +680,24 @@ pub fn ui(
                                     .strong(),
                                 )
                                 .fill(if frontend.race_started { HOUSING } else { RED })
-                                .min_size(egui::vec2(width.min(200.), 44.)),
+                                .min_size(action),
                             );
                             #[cfg(test)]
                             frontend.widgets.insert("start", start.rect);
                             if start.clicked() {
                                 frontend.pending = true;
                             }
-                            if ui.button("Quit game").clicked() {
+                            let quit = ui.add(
+                                egui::Button::new(RichText::new("Quit game").strong())
+                                    .fill(HOUSING)
+                                    .min_size(action),
+                            );
+                            if quit.clicked() {
                                 if let Some(child) = frontend.benchmark.child.as_mut() {
                                     let _ = child.kill();
                                     let _ = child.wait();
                                 }
                                 exit.write(AppExit::Success);
-                            }
-                            if !compact_footer {
-                                ui.add_space(4.);
-                                ui.label(RichText::new(status).color(DIM));
                             }
                         });
                     },
@@ -762,26 +744,21 @@ pub fn ui(
                                 let navigation = egui::ComboBox::from_id_salt("settings-page")
                                     .width(ui.available_width())
                                     .height(400.)
-                                    .selected_text(frontend.tab.navigation_label())
+                                    .selected_text(frontend.tab.label())
                                     .show_ui(ui, |ui| {
                                         #[cfg(test)]
                                         frontend
                                             .widgets
                                             .insert("settings-navigation-popup", ui.clip_rect());
-                                        for tab in Tab::ALL
-                                            .into_iter()
-                                            .filter(|tab| !tab.is_gameplay() || *tab == Tab::Team)
-                                        {
-                                            let selected = tab.navigation_selected(frontend.tab);
-                                            let response = ui
-                                                .selectable_label(selected, tab.navigation_label());
+                                        for tab in Tab::ALL {
+                                            let selected = tab == frontend.tab;
+                                            let response =
+                                                ui.selectable_label(selected, tab.label());
                                             if response.clicked() && !selected {
                                                 frontend.tab = tab;
                                             }
                                             #[cfg(test)]
-                                            frontend
-                                                .widgets
-                                                .insert(tab.navigation_label(), response.rect);
+                                            frontend.widgets.insert(tab.label(), response.rect);
                                             #[cfg(not(test))]
                                             let _ = response;
                                         }
@@ -793,7 +770,7 @@ pub fn ui(
                                 #[cfg(not(test))]
                                 let _ = navigation;
                                 ui.separator();
-                                if !frontend.tab.is_gameplay() && ui.available_height() >= 500. {
+                                if ui.available_height() >= 500. {
                                     ui.label(RichText::new(frontend.tab.description()).color(DIM));
                                     ui.add_space(4.);
                                 }
@@ -823,22 +800,17 @@ pub fn ui(
                                         |ui| {
                                             ui.spacing_mut().item_spacing.y = 3.;
                                             let mut group = "";
-                                            for tab in Tab::ALL.into_iter().filter(|tab| {
-                                                !tab.is_gameplay() || *tab == Tab::Team
-                                            }) {
+                                            for tab in Tab::ALL {
                                                 if tab.group() != group {
                                                     if !group.is_empty() {
                                                         ui.add_space(8.);
                                                     }
                                                     group = tab.group();
-                                                    if !tab.is_gameplay() {
-                                                        section(ui, group);
-                                                        ui.add_space(3.);
-                                                    }
+                                                    section(ui, group);
+                                                    ui.add_space(3.);
                                                 }
-                                                let selected =
-                                                    tab.navigation_selected(frontend.tab);
-                                                let label = tab.navigation_label();
+                                                let selected = tab == frontend.tab;
+                                                let label = tab.label();
                                                 let response = ui.add_sized(
                                                     egui::vec2(nav_width, nav_button_height),
                                                     egui::Button::new(
@@ -868,9 +840,9 @@ pub fn ui(
                                     ui.add_space(6.);
                                     ui.vertical(|ui| {
                                         ui.spacing_mut().item_spacing.y = 4.;
-                                        if !frontend.tab.is_gameplay() {
+                                        {
                                             ui.heading(
-                                                RichText::new(frontend.tab.navigation_label())
+                                                RichText::new(frontend.tab.label())
                                                     .size(if size.x < 700. { 22. } else { 28. })
                                                     .strong(),
                                             );
@@ -928,31 +900,22 @@ fn render_settings_page(
     pixels_per_point: f32,
     car_preview: &car_preview::CarPreview,
 ) {
-    if frontend.tab.is_gameplay() {
-        ui.horizontal_wrapped(|ui| {
-            for tab in Tab::GAMEPLAY {
-                let response = ui.selectable_value(&mut frontend.tab, tab, tab.label());
-                #[cfg(test)]
-                frontend.widgets.insert(tab.label(), response.rect);
-                #[cfg(not(test))]
-                let _ = response;
-            }
-        });
-        ui.add_space(8.);
-        ui.separator();
-        ui.add_space(4.);
-    }
-    #[cfg(test)]
-    if !frontend.tab.is_gameplay() {
-        for tab in Tab::GAMEPLAY {
-            frontend.widgets.remove(tab.label());
-        }
-    }
     let content = egui::ScrollArea::vertical()
         .id_salt(("settings-content", frontend.tab))
         .auto_shrink([false, false])
         .show(ui, |ui| match frontend.tab {
-            Tab::Track | Tab::Team => race_setup(ui, frontend, car_preview),
+            Tab::Track => page(ui, |ui, part| match part {
+                Part::Settings => selection(ui, &frontend.catalog, &mut frontend.draft),
+                Part::Preview => track_preview(ui, &frontend.catalog, &frontend.draft),
+            }),
+            Tab::Car => page(ui, |ui, part| match part {
+                Part::Settings => car_choice(ui, frontend),
+                Part::Preview => car_preview.show(ui),
+            }),
+            Tab::Driver => page(ui, |ui, part| match part {
+                Part::Settings => driver_choice(ui, frontend),
+                Part::Preview => driver_card(ui, frontend),
+            }),
             Tab::Aids => {
                 let presets = aids_panel(ui, frontend);
                 #[cfg(test)]
@@ -981,30 +944,25 @@ fn render_settings_page(
     let _ = content;
 }
 
-fn race_setup(ui: &mut egui::Ui, frontend: &mut Frontend, car_preview: &car_preview::CarPreview) {
-    if ui.available_width() > 980. {
-        ui.columns(2, |columns| {
-            setup_selection(&mut columns[0], frontend);
-            preview(
-                &mut columns[1],
-                &frontend.catalog,
-                &frontend.draft,
-                false,
-                car_preview,
-            );
-        });
-    } else {
-        setup_selection(ui, frontend);
-        ui.separator();
-        preview(ui, &frontend.catalog, &frontend.draft, true, car_preview);
-    }
+/// Which half of a page is being drawn.
+#[derive(Clone, Copy)]
+enum Part {
+    Settings,
+    Preview,
 }
 
-fn setup_selection(ui: &mut egui::Ui, frontend: &mut Frontend) {
-    if frontend.tab == Tab::Team {
-        team_selection(ui, frontend);
+/// Settings on the left and the page's own preview on the right, stacked when
+/// the window is narrow.
+fn page(ui: &mut egui::Ui, mut draw: impl FnMut(&mut egui::Ui, Part)) {
+    if ui.available_width() > 980. {
+        ui.columns(2, |columns| {
+            draw(&mut columns[0], Part::Settings);
+            draw(&mut columns[1], Part::Preview);
+        });
     } else {
-        selection(ui, &frontend.catalog, &mut frontend.draft);
+        draw(ui, Part::Settings);
+        ui.add_space(12.);
+        draw(ui, Part::Preview);
     }
 }
 
@@ -1066,6 +1024,41 @@ fn selection(ui: &mut egui::Ui, catalog: &Catalog, draft: &mut Options) {
             egui::Slider::new(&mut draft.grid_slot, 1..=draft.opponents + 1),
         );
     });
+}
+
+/// Car model, tyres and wings.
+fn car_choice(ui: &mut egui::Ui, frontend: &mut Frontend) {
+    let draft = &mut frontend.draft;
+    let catalog = &frontend.catalog;
+    section(ui, "Car");
+    ui.horizontal_wrapped(|ui| {
+        for car in &catalog.cars {
+            let response = ui
+                .radio_value(
+                    &mut draft.car,
+                    car.id.clone(),
+                    if car.id == "gen22" {
+                        "2022 car"
+                    } else {
+                        car.name
+                    },
+                )
+                .on_hover_text(car.description);
+            #[cfg(test)]
+            match car.id.as_str() {
+                "gen22" => {
+                    frontend.widgets.insert("car-gen22", response.rect);
+                }
+                "rb6" => {
+                    frontend.widgets.insert("car-rb6", response.rect);
+                }
+                _ => {}
+            }
+            #[cfg(not(test))]
+            let _ = response;
+        }
+    });
+    ui.add_space(12.);
     section(ui, "Tyres & aero");
     setting_row(ui, "Tyre compound", |ui| {
         ui.horizontal_wrapped(|ui| {
@@ -1110,42 +1103,14 @@ fn selection(ui: &mut egui::Ui, catalog: &Catalog, draft: &mut Options) {
 }
 
 /// Team and driver choices use the roster names, without color swatches.
-fn team_selection(ui: &mut egui::Ui, frontend: &mut Frontend) {
+fn driver_choice(ui: &mut egui::Ui, frontend: &mut Frontend) {
     let draft = &mut frontend.draft;
-    let catalog = &frontend.catalog;
     let teams = &frontend.teams;
-    section(ui, "Car");
-    ui.horizontal_wrapped(|ui| {
-        for car in &catalog.cars {
-            let response = ui
-                .radio_value(
-                    &mut draft.car,
-                    car.id.clone(),
-                    if car.id == "gen22" {
-                        "2022 car"
-                    } else {
-                        car.name
-                    },
-                )
-                .on_hover_text(car.description);
-            #[cfg(test)]
-            match car.id.as_str() {
-                "gen22" => {
-                    frontend.widgets.insert("car-gen22", response.rect);
-                }
-                "rb6" => {
-                    frontend.widgets.insert("car-rb6", response.rect);
-                }
-                _ => {}
-            }
-            #[cfg(not(test))]
-            let _ = response;
-        }
-    });
-    ui.add_space(12.);
     if draft.car != "gen22" {
         ui.heading("Red Bull Racing");
-        ui.label("2010 · Red Bull RB6");
+        ui.label(
+            "The 2010 RB6 races in its own livery. Pick the 2022 car under Car to choose a team.",
+        );
         return;
     }
     section(ui, "Team");
@@ -1184,6 +1149,102 @@ fn team_selection(ui: &mut egui::Ui, frontend: &mut Frontend) {
     }
 }
 
+/// The selected driver as a team-coloured card: number, code, name and team.
+fn driver_card(ui: &mut egui::Ui, frontend: &Frontend) {
+    let width = ui.available_width();
+    let height = (width * 0.5).clamp(170., 300.);
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(width, height), egui::Sense::hover());
+    let painter = ui.painter();
+    let selected = (frontend.draft.car == "gen22")
+        .then(|| {
+            frontend
+                .teams
+                .selection(&frontend.draft.team, &frontend.draft.driver)
+                .ok()
+        })
+        .flatten();
+    let Some((team, driver)) = selected else {
+        painter.rect_filled(rect, 10., WELL);
+        painter.text(
+            rect.center(),
+            egui::Align2::CENTER_CENTER,
+            "Red Bull RB6",
+            egui::FontId::proportional(26.),
+            DIM,
+        );
+        return;
+    };
+    let colour =
+        |hex: &str| crate::teams::rgb(hex).map_or(HOUSING, |[r, g, b]| Color32::from_rgb(r, g, b));
+    let (primary, secondary, accent) = (
+        colour(&team.colors.primary),
+        colour(&team.colors.secondary),
+        colour(&team.colors.accent),
+    );
+    painter.rect_filled(rect, 10., WELL);
+    // Team colour panel with a diagonal stripe in the secondary and accent.
+    let panel = rect.shrink(1.);
+    painter.rect_filled(panel, 10., primary.gamma_multiply(0.9));
+    let stripe = |offset: f32, thickness: f32, colour: Color32| {
+        let x = panel.right() - panel.width() * offset;
+        painter.add(egui::Shape::convex_polygon(
+            vec![
+                egui::pos2(x, panel.top()),
+                egui::pos2(x + thickness, panel.top()),
+                egui::pos2(x + thickness - panel.height() * 0.45, panel.bottom()),
+                egui::pos2(x - panel.height() * 0.45, panel.bottom()),
+            ],
+            colour,
+            egui::Stroke::NONE,
+        ));
+    };
+    stripe(0.34, panel.width() * 0.07, secondary);
+    stripe(0.24, panel.width() * 0.025, accent);
+    // Legibility scrim behind the text, only where the team colour is light.
+    let luminance = 0.2126 * f32::from(primary.r())
+        + 0.7152 * f32::from(primary.g())
+        + 0.0722 * f32::from(primary.b());
+    if luminance > 140. {
+        painter.rect_filled(
+            egui::Rect::from_min_max(
+                panel.left_top(),
+                egui::pos2(panel.center().x + 40., panel.bottom()),
+            ),
+            10.,
+            Color32::from_black_alpha(130),
+        );
+    }
+    let pad = 22.;
+    painter.text(
+        panel.left_top() + egui::vec2(pad, pad - 6.),
+        egui::Align2::LEFT_TOP,
+        driver.number.to_string(),
+        egui::FontId::proportional(height * 0.36),
+        Color32::WHITE,
+    );
+    painter.text(
+        panel.left_bottom() + egui::vec2(pad, -pad - 52.),
+        egui::Align2::LEFT_BOTTOM,
+        &driver.abbr,
+        egui::FontId::proportional(20.),
+        accent,
+    );
+    painter.text(
+        panel.left_bottom() + egui::vec2(pad, -pad - 22.),
+        egui::Align2::LEFT_BOTTOM,
+        &driver.name,
+        egui::FontId::proportional(26.),
+        Color32::WHITE,
+    );
+    painter.text(
+        panel.left_bottom() + egui::vec2(pad, -pad),
+        egui::Align2::LEFT_BOTTOM,
+        team.name.to_uppercase(),
+        egui::FontId::proportional(14.),
+        Color32::from_gray(215),
+    );
+}
+
 fn select_team(draft: &mut Options, team: &crate::teams::Team) {
     if draft.team != team.id {
         draft.team.clone_from(&team.id);
@@ -1191,13 +1252,7 @@ fn select_team(draft: &mut Options, team: &crate::teams::Team) {
     }
 }
 
-fn preview(
-    ui: &mut egui::Ui,
-    catalog: &Catalog,
-    draft: &Options,
-    compact: bool,
-    car_preview: &car_preview::CarPreview,
-) {
+fn track_preview(ui: &mut egui::Ui, catalog: &Catalog, draft: &Options) {
     let Some(track) = catalog
         .circuits
         .iter()
@@ -1207,11 +1262,7 @@ fn preview(
         return;
     };
     let width = ui.available_width();
-    let height = if compact {
-        (width * 0.24).clamp(100., 180.)
-    } else {
-        (width * 0.5).clamp(160., 340.)
-    };
+    let height = (width * 0.62).clamp(160., 420.);
     let (rect, _) = ui.allocate_exact_size(egui::vec2(width, height), egui::Sense::hover());
     ui.painter().rect_filled(rect, 6., WELL);
     ui.painter().rect_stroke(
@@ -1254,8 +1305,6 @@ fn preview(
             egui::Stroke::new(3., Color32::from_rgb(217, 225, 238)),
         ));
     }
-    ui.add_space(14.);
-    car_preview.show(ui);
 }
 
 fn aids_panel(ui: &mut egui::Ui, frontend: &mut Frontend) -> [egui::Rect; 3] {
@@ -1833,12 +1882,11 @@ fn audio_panel(ui: &mut egui::Ui, frontend: &mut Frontend) {
 }
 
 fn display_panel(ui: &mut egui::Ui, frontend: &mut Frontend) {
-    ui.label("Changes apply immediately and are saved for your next race.");
-    ui.add_space(8.);
-    let column_count = if ui.available_width() >= 560. { 2 } else { 1 };
+    let column_count = if ui.available_width() >= 620. { 2 } else { 1 };
     ui.columns(column_count, |columns| {
         let instruments = &mut columns[0];
         section(instruments, "In-race instruments");
+        instruments.add_space(4.);
         for (layout, label, description, _key) in [
             (
                 hud::Layout::Segments,
@@ -1849,43 +1897,110 @@ fn display_panel(ui: &mut egui::Ui, frontend: &mut Frontend) {
             (
                 hud::Layout::Gauges,
                 "Analog telemetry",
-                "Needle gauges for revs, speed, pedals and tyre temperatures.",
+                "Needle gauges for revs, speed, pedals and tyres.",
                 "hud-gauges",
             ),
         ] {
-            let _response = instruments.radio_value(&mut frontend.display.layout, layout, label);
+            let response = option_card(
+                instruments,
+                frontend.display.layout == layout,
+                label,
+                description,
+            );
+            if response.clicked() {
+                frontend.display.layout = layout;
+            }
             #[cfg(test)]
-            frontend.widgets.insert(_key, _response.rect);
-            instruments.label(RichText::new(description).size(15.).color(DIM));
-            instruments.add_space(6.);
+            frontend.widgets.insert(_key, response.rect);
+            instruments.add_space(8.);
         }
 
         let minimap = &mut columns[column_count - 1];
         if column_count == 1 {
-            minimap.add_space(8.);
+            minimap.add_space(10.);
         }
         section(minimap, "Minimap");
+        minimap.add_space(4.);
         for (mode, label, description, _key) in [
             (
                 hud::MapMode::FullCircuit,
                 "Full circuit",
-                "Full circuit and the whole field.",
+                "The whole circuit and every car.",
                 "map-full",
             ),
             (
                 hud::MapMode::Nearby,
                 "Nearby track",
-                "Zoomed to nearby track, with your car pointing up.",
+                "Zoomed in around you, your car pointing up.",
                 "map-nearby",
             ),
         ] {
-            let _response = minimap.radio_value(&mut frontend.display.map, mode, label);
+            let response = option_card(minimap, frontend.display.map == mode, label, description);
+            if response.clicked() {
+                frontend.display.map = mode;
+            }
             #[cfg(test)]
-            frontend.widgets.insert(_key, _response.rect);
-            minimap.label(RichText::new(description).size(15.).color(DIM));
-            minimap.add_space(6.);
+            frontend.widgets.insert(_key, response.rect);
+            minimap.add_space(8.);
         }
     });
+}
+
+/// A selectable card: title, one-line description and a check mark when on.
+fn option_card(
+    ui: &mut egui::Ui,
+    selected: bool,
+    title: &str,
+    description: &str,
+) -> egui::Response {
+    let width = ui.available_width();
+    let (rect, response) = ui.allocate_exact_size(egui::vec2(width, 74.), egui::Sense::click());
+    let hovered = response.hovered();
+    let painter = ui.painter();
+    painter.rect_filled(
+        rect,
+        10.,
+        if selected {
+            Color32::from_rgb(46, 24, 28)
+        } else if hovered {
+            Color32::from_rgb(30, 31, 35)
+        } else {
+            WELL
+        },
+    );
+    painter.rect_stroke(
+        rect,
+        10.,
+        egui::Stroke::new(
+            if selected { 2. } else { 1. },
+            if selected { RED } else { WELL_RIM },
+        ),
+        egui::StrokeKind::Inside,
+    );
+    let mark = egui::pos2(rect.right() - 28., rect.center().y);
+    painter.circle_stroke(
+        mark,
+        9.,
+        egui::Stroke::new(2., if selected { RED } else { WELL_RIM }),
+    );
+    if selected {
+        painter.circle_filled(mark, 5., RED);
+    }
+    painter.text(
+        rect.left_top() + egui::vec2(16., 14.),
+        egui::Align2::LEFT_TOP,
+        title,
+        egui::FontId::proportional(18.),
+        Color32::WHITE,
+    );
+    painter.text(
+        rect.left_top() + egui::vec2(16., 42.),
+        egui::Align2::LEFT_TOP,
+        description,
+        egui::FontId::proportional(14.),
+        DIM,
+    );
+    response.on_hover_cursor(egui::CursorIcon::PointingHand)
 }
 
 fn camera_panel(ui: &mut egui::Ui, selected: &mut Mode, session: &mut Session) {

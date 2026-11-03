@@ -186,7 +186,6 @@ fn drive(
                 let button = frontend
                     .widgets
                     .get(label)
-                    .or_else(|| frontend.widgets.get("Game play"))
                     .or_else(|| frontend.widgets.get("settings-navigation"))
                     .expect("settings navigation is missing");
                 let position = if frontend.widgets.contains_key("settings-navigation-popup") {
@@ -198,11 +197,11 @@ fn drive(
                 proof.ticks = 0;
                 return;
             }
-            if matches!(tab, Tab::Track | Tab::Team) && !car_preview.ready {
+            if tab == Tab::Car && !car_preview.ready {
                 proof.ticks = 0;
                 return;
             }
-            if matches!(tab, Tab::Track | Tab::Team) {
+            if tab == Tab::Car {
                 let (camera, layers) = preview_cameras.single().unwrap();
                 assert!(camera.is_active);
                 assert!(
@@ -210,46 +209,42 @@ fn drive(
                     "menu changed the preview camera's isolated layer"
                 );
             }
-            if tab == Tab::Team && rect.width() > 1100. && proof.car_step < 3 {
-                match proof.car_step {
-                    0 => {
-                        if frontend.draft.team != "ferrari" {
-                            click(
-                                &mut proof,
-                                &mut input,
-                                frontend.widgets["team-ferrari"].center(),
-                            );
-                            proof.ticks = 0;
-                            return;
-                        }
-                        let team = frontend
-                            .teams
-                            .teams
-                            .iter()
-                            .find(|team| team.id == "ferrari")
-                            .unwrap();
-                        assert_eq!(frontend.draft.driver, team.drivers[0].id);
-                        click(&mut proof, &mut input, frontend.widgets["car-rb6"].center());
-                        proof.car_step = 1;
-                    }
-                    1 => {
-                        assert_eq!(car_preview.selected_car(), Some("rb6"));
-                        snapshot(&mut commands, &mut proof, "settings-Team-RB6");
-                        click(
-                            &mut proof,
-                            &mut input,
-                            frontend.widgets["car-gen22"].center(),
-                        );
-                        proof.car_step = 2;
-                    }
-                    _ => {
-                        assert_eq!(car_preview.selected_car(), Some("gen22"));
-                        assert_eq!(frontend.draft.team, "ferrari");
-                        proof.car_step = 3;
-                    }
+            if tab == Tab::Car && rect.width() > 1100. && proof.car_step < 2 {
+                if proof.car_step == 0 {
+                    click(&mut proof, &mut input, frontend.widgets["car-rb6"].center());
+                    proof.car_step = 1;
+                } else {
+                    assert_eq!(car_preview.selected_car(), Some("rb6"));
+                    snapshot(&mut commands, &mut proof, "settings-Car-RB6");
+                    click(
+                        &mut proof,
+                        &mut input,
+                        frontend.widgets["car-gen22"].center(),
+                    );
+                    proof.car_step = 2;
                 }
                 proof.ticks = 0;
                 return;
+            }
+            if tab == Tab::Driver && rect.width() > 1100. && proof.car_step < 3 {
+                assert_eq!(frontend.draft.car, "gen22");
+                if frontend.draft.team != "ferrari" {
+                    click(
+                        &mut proof,
+                        &mut input,
+                        frontend.widgets["team-ferrari"].center(),
+                    );
+                    proof.ticks = 0;
+                    return;
+                }
+                let team = frontend
+                    .teams
+                    .teams
+                    .iter()
+                    .find(|team| team.id == "ferrari")
+                    .unwrap();
+                assert_eq!(frontend.draft.driver, team.drivers[0].id);
+                proof.car_step = 3;
             }
             if tab == Tab::Audio
                 && !proof.scrolled

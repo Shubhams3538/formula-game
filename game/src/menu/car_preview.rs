@@ -141,7 +141,7 @@ pub(crate) fn update(
     mut cameras: Query<&mut Camera, With<PreviewCamera>>,
 ) {
     let visible = matches!(session.screen, Screen::Main | Screen::Paused)
-        && matches!(frontend.tab, Tab::Track | Tab::Team)
+        && frontend.tab == Tab::Car
         && frontend.benchmark.child.is_none();
     for mut camera in &mut cameras {
         camera.is_active = visible;

@@ -678,7 +678,7 @@ fn menu_probe(
             if probe.case == 0 {
                 menu_snapshot(&mut commands, &mut probe, "hud-settings");
             }
-            menu_click(&mut probe, &mut inputs, &frontend, "Game play");
+            menu_click(&mut probe, &mut inputs, &frontend, "Track");
             probe.stage = 17;
             probe.ticks = 0;
         }
