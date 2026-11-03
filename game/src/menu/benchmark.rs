@@ -178,7 +178,7 @@ fn run_panel(ui: &mut egui::Ui, frontend: &mut Frontend, size: egui::Vec2, avail
         }
     }
     if !available {
-        ui.label(RichText::new("Choose an available circuit and car in Race setup.").color(DIM));
+        ui.label(RichText::new("Choose an available circuit and car in Game play.").color(DIM));
     }
     if let Some(message) = &frontend.benchmark.message {
         ui.add_space(6.);
@@ -230,7 +230,7 @@ fn setup_panel(ui: &mut egui::Ui, frontend: &Frontend, size: egui::Vec2) {
     ui.add_space(8.);
     ui.label("VSync is disabled during the run. Six screenshots are captured after timing.");
     ui.label(
-        "Choose circuit and car in Race setup, camera in Camera, and image quality in Graphics.",
+        "Choose the circuit and car in Game play, the view in Camera, and image quality in Graphics.",
     );
 }
 

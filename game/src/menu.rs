@@ -654,7 +654,7 @@ pub fn ui(
     } else if session.screen == Screen::Paused {
         "Start new race replaces this session. Driving settings apply immediately."
     } else {
-        "Settings apply immediately. Presets are under Driving assists."
+        "Settings apply immediately. Assist presets are under Game play → Driving assistance."
     };
 
     egui::Panel::bottom("settings-actions")
