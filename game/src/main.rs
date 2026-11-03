@@ -255,6 +255,7 @@ fn build_app(mut options: Options) -> Result<App, String> {
                 assets::animate_controls,
                 wheel_dash::attach,
                 wheel_dash::lights,
+                sky::update,
                 camera::update,
                 menu::car_preview::update,
                 assets::helmet_visibility,

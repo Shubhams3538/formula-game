@@ -103,6 +103,8 @@ fn arguments(
     let mut args = vec![
         "--assets".into(),
         draft.assets.as_os_str().to_owned(),
+        "--weather".into(),
+        draft.weather.cli().into(),
         "--track".into(),
         draft.track.clone().into(),
         "--car".into(),

@@ -125,9 +125,9 @@ The full wheel LCD is a separate 768 by 448 render texture. Its pad is 14, gaps 
 
 ## Elevation & Depth
 
-Native gradients describe the charcoal housings, recessed readout glass, lamp lenses and turned metal dial rims. Plates have a fine edge stroke. Analog dials also cast a soft black offset shadow at 2 units right and 5 down, with alpha 90/255. This is physical instrument shading, not a general card-shadow system. Timing and pass notices are flat black readout areas without raised instrument chrome.
+Native gradients describe the charcoal housings, recessed readout glass, lamp lenses and turned metal dial rims. Plates have a fine edge stroke. Analog dials also cast a soft black offset shadow at 2 units right and 5 down, with alpha 90/255. This is physical instrument shading, not a general card-shadow system. Timing and pass notices follow the selected instrument finish. Digital mode uses chamfered charcoal housings and recessed readouts. Analog mode adds a narrow turned-metal bezel around its matte chronograph face, with warm-white typographic times.
 
-**The Instrument Depth Rule.** Use material gradients, rims and recessed wells for instrument depth. Keep timing and position notices flat so their rows remain easy to scan.
+**The Instrument Depth Rule.** Use the selected finish consistently for instruments, timing and position notices. Keep numeric columns fixed and the timing face rectangular so lap and sector values remain easy to scan.
 
 ## Shapes
 
@@ -137,11 +137,11 @@ Housings use eight-sided chamfered plates, cut by 6 units in digital mode and 12
 
 ### Timing strip and sector rows
 
-A fixed readout under the tower carries running lap time, LAST, BEST, VS BEST and S1 through S3. Running lap and active sector clocks show tenths; completed laps and sectors retain milliseconds. Delta displays hundredths against a recorded best lap. Until a reference exists it says SET A LAP. The active sector has a blue row and LIVE label. Stored sectors remain visible and say LAST when from the previous lap; FIRST means no previous best-sector comparison, while unavailable values use dashes. Completed sector comparisons use purple for nonpositive and amber for positive values. The build uses a 200 ms delta average.
+A fixed readout under the tower carries running lap time, LAST, BEST, VS BEST and S1 through S3. Its housing follows the selected HUD style: segmented charcoal readouts in Digital cockpit, and a metal bezel with warm-white typographic times in Analog telemetry. Running lap and active sector clocks show tenths; completed laps and sectors retain milliseconds. Delta displays hundredths against a recorded best lap. Until a reference exists it says SET A LAP. The active sector has a blue row and LIVE label. Stored sectors remain visible and say LAST when from the previous lap; FIRST means no previous best-sector comparison, while unavailable values use dashes. Completed sector comparisons use purple for nonpositive and amber for positive values. The build uses a 200 ms delta average.
 
 ### Position notice
 
-One compact well under the timing strip shows POSITION GAINED in green or POSITION LOST in amber, rival identity and new position. The heading uses `max(14 × scale, 11)` and rival text uses `max(17 × scale, 12)` before fitting to its reserved column. A thin remaining-duration bar runs along the bottom. The notice requires 108 consecutive simulation ticks, or 300 ms, with at least one metre clearance; it lasts 900 ticks, or 2.5 seconds, and clears at finish. These are presentation rules, not changes to race order.
+One compact instrument panel under the timing strip shows POSITION GAINED in green or POSITION LOST in amber, rival identity and new position. The heading uses `max(14 × scale, 11)` and rival text uses `max(17 × scale, 12)` before fitting to its reserved column. A thin remaining-duration bar runs along the bottom. The notice requires 108 consecutive simulation ticks, or 300 ms, with at least one metre clearance; it lasts 900 ticks, or 2.5 seconds, and clears at finish. These are presentation rules, not changes to race order.
 
 ### Instrument readouts and wheel LCD
 
@@ -149,7 +149,7 @@ Speed and numeric RPM average 100 ms; tyre temperature, wear, aero effects and g
 
 ### Tyres, pedals and DRS
 
-Tyre status compares the compound-specific temperature window: cold blue, optimal green, lift and coast yellow, cooked red. The text labels accompany those colors. Wheel footprints gain white outlines for locking or sliding. Brake is red and throttle green. DRS is absent on cars/tracks without the feature; otherwise it is dim when unavailable, outlined green when ready and filled green when open. These racing readouts are not interactive buttons and have no hover or focus behavior.
+Tyre status compares the compound-specific temperature window: cold blue, optimal green, lift and coast yellow, cooked red. Digital tyre modules show one large temperature per axle, with wear beside the FRONT or REAR header. There is no separate thermal-state text row. Analog mode uses two keyed needles on one temperature scale; FRONT and REAR labels match their needles, with axle wear beneath the sweep. It does not repeat temperatures as numeric values. Wheel footprints gain white outlines for locking or sliding. Brake is red and throttle green. DRS is absent on cars/tracks without the feature; otherwise it is dim when unavailable, outlined green when ready and filled green when open. These racing readouts are not interactive buttons and have no hover or focus behavior.
 
 ## Do's and Don'ts
 

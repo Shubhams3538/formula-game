@@ -4,7 +4,7 @@ use crate::{
     controls::press_amount, materials::CarSurface, options::Options, pose::Pose, sky, Session,
 };
 use bevy::{
-    asset::LoadState, light::atmosphere::ScatteringMedium, mesh::VertexAttributeValues, prelude::*,
+    asset::LoadState, mesh::VertexAttributeValues, prelude::*,
     world_serialization::WorldInstanceReady,
 };
 use racecraft_sim::{Assists, CarGeometry, CarSpec, DriverProfile, EntrantConfig, Race, Track};
@@ -181,13 +181,13 @@ pub fn setup(
     server: Res<AssetServer>,
     options: Res<Options>,
     session: Res<Session>,
-    mut media: ResMut<Assets<ScatteringMedium>>,
+    mut images: ResMut<Assets<Image>>,
 ) {
     spawn_visuals(&mut commands, &server, &options, &session);
     let sun = session.race.track.sun_direction;
     sky::setup(
         &mut commands,
-        &mut media,
+        &mut images,
         Vec3::new(sun.x as f32, sun.y as f32, sun.z as f32),
     );
 }

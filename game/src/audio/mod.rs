@@ -119,6 +119,8 @@ struct Shared {
     wheel_rps: AtomicF32,
     impact: AtomicF32,
     impacts: AtomicU32,
+    thunders: AtomicU32,
+    storm: AtomicBool,
     player: Feed,
     rivals: [Feed; RIVALS],
 }
@@ -200,6 +202,9 @@ struct Ambience {
     thump_body: Oscillator,
     impact: f32,
     impacts: u32,
+    thunders: u32,
+    thunder: f32,
+    thunder_body: OnePole,
 }
 
 impl Ambience {
@@ -219,6 +224,9 @@ impl Ambience {
             thump_body: Oscillator::default(),
             impact: 0.,
             impacts: 0,
+            thunders: 0,
+            thunder: 0.,
+            thunder_body: OnePole::new(180.),
         }
     }
 }
@@ -415,6 +423,14 @@ impl Mixer {
             self.ambience.impacts = impacts;
             self.ambience.impact = self.ambience.impact.max(s.impact.get());
         }
+        let thunders = s.thunders.load(Ordering::Relaxed);
+        if thunders != self.ambience.thunders {
+            self.ambience.thunders = thunders;
+            self.ambience.thunder = 1.;
+        }
+        if !s.storm.load(Ordering::Relaxed) {
+            self.ambience.thunder = 0.;
+        }
         // Tyre squeal pitch rises a little with speed and lock-ups.
         let pitch = 1. + 0.15 * (t.speed / 80.).min(1.) + 0.1 * t.lock;
         self.ambience.squeal[0].retune(Biquad::bandpass(1050. * pitch, 9.));
@@ -522,7 +538,11 @@ impl Mixer {
         } else {
             0.
         };
-        let center = squeal + scrub + drum + rumble + whine + thump;
+        // Low-passed noise gives a distant rolling thunder, routed through the
+        // same effects/master/mute bus as the rest of the environment.
+        let thunder = a.thunder_body.process(a.noise[0].next()) * a.thunder * 1.2;
+        a.thunder *= 1. - 1. / (2.2 * RATE);
+        let center = squeal + scrub + drum + rumble + whine + thump + thunder;
         (center + wind[0], center + wind[1])
     }
 }
@@ -620,6 +640,7 @@ pub fn update(
     time: Res<Time>,
     mut frontend: ResMut<Frontend>,
     mut audio: ResMut<GameAudio>,
+    storm: Res<crate::sky::Storm>,
 ) {
     if keys.just_pressed(KeyCode::KeyM) {
         frontend.muted = !frontend.muted;
@@ -629,6 +650,11 @@ pub fn update(
     let s = &*shared;
     s.active.store(
         session.ready && !session.paused && !frontend.muted,
+        Ordering::Relaxed,
+    );
+    s.thunders.store(storm.thunder, Ordering::Relaxed);
+    s.storm.store(
+        frontend.draft.weather == crate::sky::Weather::Storm,
         Ordering::Relaxed,
     );
     s.kind.store(
@@ -776,6 +802,43 @@ mod tests {
         shared.player.gain.set(1.);
         shared.player.doppler.set(1.);
         Mixer::new(shared)
+    }
+
+    #[test]
+    fn thunder_uses_effects_master_and_clear_weather_stops_it() {
+        let mut mixer = mixer(Kind::V8);
+        let shared = mixer.shared.clone();
+        shared.engine.set(0.);
+        shared.opponents.set(0.);
+        shared.storm.store(true, Ordering::Relaxed);
+        shared.thunders.store(1, Ordering::Relaxed);
+        mixer.read();
+        assert_eq!(mixer.ambience.thunder, 1.);
+        let mut energy = 0.;
+        for _ in 0..RATE as u32 {
+            let (l, r) = mixer.frame();
+            energy += l.abs() + r.abs();
+        }
+        assert!(energy > 1.);
+        shared.storm.store(false, Ordering::Relaxed);
+        mixer.read();
+        assert_eq!(mixer.ambience.thunder, 0.);
+        shared.storm.store(true, Ordering::Relaxed);
+        shared.thunders.store(2, Ordering::Relaxed);
+        shared.effects.set(0.);
+        for _ in 0..RATE as u32 {
+            mixer.frame();
+        }
+        let (l, r) = mixer.frame();
+        assert!(l.abs() + r.abs() < 1e-5);
+        shared.effects.set(1.);
+        shared.thunders.store(3, Ordering::Relaxed);
+        shared.master.set(0.);
+        for _ in 0..RATE as u32 {
+            mixer.frame();
+        }
+        let (l, r) = mixer.frame();
+        assert!(l.abs() + r.abs() < 1e-5);
     }
 
     #[test]

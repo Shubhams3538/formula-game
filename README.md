@@ -215,7 +215,7 @@ GEN22 retains original per-part UVs and baked ambient occlusion, with neutral bo
 
 The HUD includes the timing tower, lap times, countdown lights, race messages, shift lights, speed, pedals, tyre temperatures/wear, lock-up/sliding indicators, aero effects, minimap and results.
 
-Open **Interface** from the settings sidebar or the pause menu to choose between **Digital cockpit**, with illuminated segments and a neutral gear aperture, and **Analog telemetry**, with separate metal-rimmed RPM, speed, pedal and G-force instruments. Tyre temperatures and live tow/wake effects use needle gauges in both layouts. The unboxed minimap supports Full circuit and Nearby track modes. Driving-aid buttons, camera shortcut strips and map headings are omitted while racing; their settings and keyboard shortcuts remain available. The G-force plot uses one G per ring. Both layouts use live simulation data and leave the physical cockpit wheel visible.
+Open **Interface** from the settings sidebar or the pause menu to choose between **Digital cockpit**, with illuminated segments and a neutral gear aperture, and **Analog telemetry**, with separate metal-rimmed RPM, speed, pedal and G-force instruments. Tyre temperatures and live tow/wake effects use needle gauges in both layouts. The unboxed minimap supports Full circuit and Nearby track modes. Driving-aid buttons, camera shortcut strips and map headings are omitted while racing; their settings and keyboard shortcuts remain available. The G-force plot uses one G per ring. Lap timing follows the selected instrument finish. Digital tyre wear sits beside each axle label; analog tyre temperatures appear only on the two-needle scale, with Front/Rear keys and wear below. Both layouts use live simulation data and leave the physical cockpit wheel visible.
 
 The minimap setting is independent: **Full circuit** shows the whole field; **Nearby track** magnifies the road around the car with the road ahead pointing up, while compressing distant sections to keep the complete circuit visible. Neither mode uses a rectangular background or crops the track. Both choices apply immediately, survive new races, and are saved with your other preferences. Automated capture runs use the defaults and never write your preferences.
 
@@ -290,3 +290,16 @@ sources have [reference credits](game/audio/reference/CREDITS.md) and
 The bundled font uses the [SIL Open Font License](game/fonts/OFL.txt).
 AppImages include runtime package metadata and applicable license texts; see the
 [packaging notes](tools/package/README.md).
+
+### Dry weather skies
+
+Game play → Track has **Clear sky** and **Storm**. Storm darkens the sky and
+scene, with occasional lightning and delayed thunder. Both modes keep the
+track dry and leave tyre grip unchanged. Thunder uses the Sound effects and
+Master controls, follows mute, and stops while paused.
+
+Use `--weather clear` or `--weather storm` for quick races, captures and
+benchmarks. Interactive launches remember the selected weather; an explicit
+CLI choice overrides it. The CC0 Poly Haven cubemaps are embedded in the
+executable, including packaged builds. Sources, credit and conversion steps
+are in [game/sky/CREDITS.md](game/sky/CREDITS.md).

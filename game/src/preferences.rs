@@ -12,6 +12,8 @@ pub struct Preferences {
     #[serde(default)]
     pub team: String,
     #[serde(default)]
+    pub weather: crate::sky::Weather,
+    #[serde(default)]
     pub driver: String,
     pub aids: Assists,
     pub corner_braking: f64,
@@ -39,6 +41,7 @@ impl Preferences {
     pub fn defaults(options: &Options) -> Self {
         Self {
             team: options.team.clone(),
+            weather: options.weather,
             driver: options.driver.clone(),
             aids: options.player_assists(),
             corner_braking: options.corner_braking,
@@ -116,6 +119,9 @@ impl Store {
             .and_then(|bytes| serde_json::from_slice::<Preferences>(&bytes).ok())
             .unwrap_or_else(|| Preferences::defaults(options));
         prefs.sanitize();
+        if options.weather_explicit {
+            prefs.weather = options.weather;
+        }
         if options.camera_explicit {
             prefs.camera = options.camera;
         }

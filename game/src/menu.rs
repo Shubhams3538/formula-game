@@ -239,6 +239,7 @@ impl Frontend {
         let (store, prefs) = crate::preferences::Store::load(options);
         let mut draft = options.clone();
         draft.camera = prefs.camera;
+        draft.weather = prefs.weather;
         let teams = crate::teams::Teams::load(&options.assets).unwrap_or_default();
         if !options.quick_race && options.frames.is_none() {
             if options.team.is_empty() {
@@ -344,6 +345,7 @@ pub fn apply(
     }
     let prefs = crate::preferences::Preferences {
         team: frontend.draft.team.clone(),
+        weather: frontend.draft.weather,
         driver: frontend.draft.driver.clone(),
         aids: frontend.aids,
         corner_braking: frontend.corner_braking,
@@ -986,6 +988,13 @@ fn selection(ui: &mut egui::Ui, catalog: &Catalog, draft: &mut Options) {
                 }
             }
         });
+    ui.separator();
+    section(ui, "Weather");
+    ui.horizontal(|ui| {
+        for weather in crate::sky::Weather::ALL {
+            ui.selectable_value(&mut draft.weather, weather, weather.label());
+        }
+    });
     ui.separator();
     section(ui, "Race distance & grid");
     if ui.available_width() >= 720. {
