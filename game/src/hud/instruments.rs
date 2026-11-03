@@ -80,7 +80,6 @@ fn segments(hud: &Hud, style: &HudStyle, session: &Session, scale: f32) {
     let player = &race.entrants[session.player];
     let car = &player.car;
     let lap = (player.timing.laps_completed + 1).min(race.laps);
-    let position = race.position_of(session.player);
     // ---- Dash (bottom right): RPM LEDs, lap / gear / speed, lap time and
     // position, then pedal traces.
     let pad = 14.0 * scale;
@@ -263,8 +262,7 @@ fn segments(hud: &Hud, style: &HudStyle, session: &Session, scale: f32) {
         &kmh.to_string(),
     );
 
-    // Lower row: current lap time where a fuel readout would sit, position
-    // under the speed window.
+    // Lower row: lap time on the left and the live sector clock on the right.
     let lower_y = main_y + main_h + 14. * scale;
     let time_w = speed_x - gap - inner_x;
     well(hud, inner_x, lower_y, time_w, lower_h, scale);
@@ -292,14 +290,14 @@ fn segments(hud: &Hud, style: &HudStyle, session: &Session, scale: f32) {
         14.0 * scale,
         (speed_x + 10.0 * scale, lower_y + 14.0 * scale),
         Align::Left,
-        "POS",
+        "SECTOR TIME",
     );
     hud.segments(
         lower_size,
         (speed_x + side_w - 12.0 * scale, lower_value_y),
         Align::Right,
         ink,
-        &format!("{position}/{}", race.entrants.len()),
+        &format!("{:.1}", (race.time - player.timing.sector_start).max(0.)),
     );
     if let Some(text) = refusal {
         let tag_w = hud.text_width(&style.bold, 20.0 * scale, text) + 24.0 * scale;
@@ -726,7 +724,7 @@ fn tyre_display(hud: &Hud, style: &HudStyle, session: &Session, scale: f32) {
     let compound = car.setup.compound;
     let pad = 14. * scale;
     let gap = 10. * scale;
-    let tyre_h = 92. * scale;
+    let tyre_h = 72. * scale;
     let aero_h = 38. * scale;
     let header_h = 22. * scale;
     let panel_w = 330. * scale;
@@ -801,17 +799,11 @@ fn tyre_display(hud: &Hud, style: &HudStyle, session: &Session, scale: f32) {
                 session.telemetry.temperatures[axle].value(tyre.temperature)
             ),
         );
-        hud.text(
-            &style.bold,
-            12. * scale,
-            (x + 10. * scale, tyre_y + 70. * scale),
-            Align::Left,
-            color,
-            band.label(),
-        );
-        hud.segments(
-            13. * scale,
-            (x + cell_w - 12. * scale, tyre_y + 71. * scale),
+        readout(
+            hud,
+            style,
+            11. * scale,
+            (x + cell_w - 42. * scale, tyre_y + 14. * scale),
             Align::Right,
             hud.finish.colors().ink,
             &format!(
@@ -867,8 +859,8 @@ fn tyre_display(hud: &Hud, style: &HudStyle, session: &Session, scale: f32) {
 }
 
 /// Twin-needle tyre gauge: front and rear share one compound-banded scale,
-/// a top-down car on the face holds the per-axle numbers and lock warnings,
-/// and tow and wake are tell-tale lamps rather than more dials.
+/// front/rear labels key the needles, with wear and wheel-lock warnings below.
+/// Tow and wake are tell-tale lamps rather than more dials.
 fn tyre_dials(hud: &Hud, style: &HudStyle, session: &Session, scale: f32) {
     let car = &session.race.entrants[session.player].car;
     let colors = hud.finish.colors();
@@ -950,25 +942,21 @@ fn tyre_dials(hud: &Hud, style: &HudStyle, session: &Session, scale: f32) {
         );
     }
 
-    // Car plan view in the gap under the sweep. Temperatures take their
-    // needle's colour as the key; footprints carry the thermal band and an
-    // outline when that wheel locks or slides.
+    // Axle labels key the two needles; only wear is numeric below the sweep.
+    // Footprints retain thermal colour and per-wheel lock/slide warnings.
     let needles = [(colors.ink, 0.8), (AMBER, 0.6)];
-    for (axle, y) in [0.56, 0.76].into_iter().enumerate() {
+    for (axle, y) in [0.60, 0.80].into_iter().enumerate() {
         let tyre = car.tyres[axle];
         let band = TyreBand::of(tyre.temperature, compound);
         let (cx, cy) = at(0., y);
-        let size = 13. * scale;
+        let size = 12. * scale;
         hud.text_mid(
             &style.bold,
-            size,
-            (cx - 0.15 * r, cy),
+            10. * scale,
+            (cx - 0.18 * r, cy),
             Align::Right,
             needles[axle].0,
-            &format!(
-                "{:.0}°",
-                session.telemetry.temperatures[axle].value(tyre.temperature)
-            ),
+            ["FRONT", "REAR"][axle],
         );
         for side in 0..2 {
             let wheel = &car.wheels[axle * 2 + side];
@@ -992,7 +980,7 @@ fn tyre_dials(hud: &Hud, style: &HudStyle, session: &Session, scale: f32) {
         );
     }
     // Chassis spine joining the axles.
-    hud.line(at(0., 0.5), at(0., 0.82), 2. * scale, Color::from_gray(70));
+    hud.line(at(0., 0.54), at(0., 0.87), 2. * scale, Color::from_gray(70));
     // Rear first so the front needle reads on top.
     for axle in [1, 0] {
         let (color, length) = needles[axle];
