@@ -267,7 +267,14 @@ impl CarSpec {
         let mut gear_ratios = gear_set(18.0, 5.22, 8);
         // Seventh must reach its shift lights before high-wing drag balances
         // engine power. Keep eighth's ratio for the low-drag/DRS top speed.
-        gear_ratios[6] = 6.15;
+        // Fifth to seventh are spaced evenly from fourth so no upshift comes
+        // early: the auto box shifts at the power crossover, which a short
+        // step pulls down toward the power peak.
+        let seventh: f64 = 6.15;
+        let step = (gear_ratios[3] / seventh).powf(1.0 / 3.0);
+        for gear in 4..7 {
+            gear_ratios[gear] = gear_ratios[gear - 1] / step;
+        }
         Self {
             name: "GEN22".to_string(),
             // Race trim: the 798 kg minimum with driver plus a race-average fuel load.
@@ -429,5 +436,30 @@ mod tests {
             .iter()
             .fold((f64::MAX, 0.0_f64), |(a, b), &x| (a.min(x), b.max(x)));
         assert!(max < min * 1.5, "{steps:?}");
+    }
+}
+
+#[cfg(test)]
+mod gear_spacing {
+    use super::*;
+    use crate::car::powertrain::power_shape;
+
+    /// Rpm where the next gear starts giving more power: the auto upshift point.
+    fn crossover(step: f64, peak: f64) -> f64 {
+        let mut x = 1.0;
+        while power_shape(x / step) <= power_shape(x) && x < 1.2 {
+            x += 0.0005;
+        }
+        x * peak
+    }
+
+    #[test]
+    fn gen22_upshifts_near_the_limiter_in_every_gear() {
+        let spec = CarSpec::gen22(test_wheels(), 5.4, 1.9);
+        let ratios = &spec.engine.gear_ratios;
+        for gear in 1..ratios.len() {
+            let rpm = crossover(ratios[gear - 1] / ratios[gear], spec.engine.peak_power_rpm);
+            assert!(rpm > 12_950.0, "gear {gear} upshifts at {rpm:.0} rpm");
+        }
     }
 }
