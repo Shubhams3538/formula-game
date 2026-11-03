@@ -834,13 +834,13 @@ pub fn draw(hud: &mut Hud, style: &HudStyle, session: &mut Session, display: Set
         y += row;
     }
     y += 8. * scale;
-    timing::strip(hud, style, session, tower_x, y, tower_w, scale);
+    let strip_h = timing::strip(hud, style, session, tower_x, y, tower_w, scale);
     timing::pass_notice(
         hud,
         style,
         session,
         tower_x,
-        y + 260. * scale,
+        y + strip_h + 8. * scale,
         tower_w,
         scale,
     );
