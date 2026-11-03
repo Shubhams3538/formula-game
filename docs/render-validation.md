@@ -29,7 +29,7 @@ while UDP LAN hosting and offline racing remain available.
 | Native platforms | yes | Rust TLS, no Steam SDK | Linux release build; other OS untested | partial |
 | Offline and UDP | yes | Preserve old connection mode | Workspace tests and 16-client lossy UDP test | proved in tests |
 | Assets and packaging | yes | Only simulation assets on server | Server-only staged bundle boots; Docker daemon unavailable | partial |
-| Render deployment | yes | Container, health, secure public URL | Deployed WSS join needs Render credentials | blocked |
+| Render deployment | yes | Container, health, secure public URL | Authenticated browser reached card verification before creation | blocked |
 | Account/matchmaking/Steam | no | Direct URL connection needs none | Not part of this task | excluded |
 | Archive engine and liveries | no | Frozen/unrelated | No edits | excluded |
 
@@ -57,10 +57,17 @@ Renet retries reliable messages. A paused-reader regression test covers recovery
 
 ## Remaining deployment work
 
-No Render deployment attempted. Credentials are not configured locally. First
-resume action: authenticate via the private Render API-key card, inspect the
-workspace and credit eligibility, create the Starter web service from the pushed
-branch, then verify public `/health`, WSS admission, racing and service restart.
+The deployment branch was pushed at `e92b4bb59d954f70b8302e22208bc0645385f1ce`.
+The authenticated Render browser was configured for Docker, Singapore, Starter
+at $7/month, this branch, `tools/package/render.Dockerfile`, `/health`, and
+auto-deploy off. Creating the service is blocked by Render's Add Card dialog.
+Render states that card verification places a temporary $1 authorization, not
+a charge. No service was created and the reported $50 credit was not verified.
+
+First resume action: after the user completes card verification in Render,
+create the configured service, inspect its build, and verify public `/health`,
+WSS admission, racing and service restart. No API key is needed for the current
+authenticated browser session.
 
 Untested: Docker image boot (no local daemon), Windows/macOS runtime, two people
 driving on different computers, internet latency, and capacity on Render Starter.
