@@ -267,7 +267,7 @@ impl CarSpec {
         let mut gear_ratios = gear_set(18.0, 5.22, 8);
         // Seventh must reach its shift lights before high-wing drag balances
         // engine power. Keep eighth's ratio for the low-drag/DRS top speed.
-        gear_ratios[6] = 6.0;
+        gear_ratios[6] = 6.15;
         Self {
             name: "GEN22".to_string(),
             // Race trim: the 798 kg minimum with driver plus a race-average fuel load.
@@ -290,16 +290,18 @@ impl CarSpec {
                 downshift_time: 0.06,
             },
             aero: AeroSpec {
-                front_lift_area: 1.86,
-                rear_lift_area: 2.4,
-                front_wing_lift: 0.12,
-                rear_wing_lift: 0.16,
+                // Ground-effect floor: ~4x weight in downforce at 300 km/h,
+                // enough to take Eau Rouge-Raidillon flat on warm tyres and default wings.
+                front_lift_area: 2.75,
+                rear_lift_area: 3.55,
+                front_wing_lift: 0.15,
+                rear_wing_lift: 0.2,
                 drag_area: 0.98,
                 front_wing_drag: 0.022,
                 rear_wing_drag: 0.042,
                 // About 10% of the car's drag: roughly +12 km/h at the end of Kemmel.
                 drs_drag: 0.13,
-                drs_lift: 0.4,
+                drs_lift: 0.57,
             },
             tyre_friction: 1.72,
             peak_slip_angle: 0.095,

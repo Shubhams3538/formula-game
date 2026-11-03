@@ -666,3 +666,94 @@ mod tests {
         assert!(worst_lateral < 6.5, "left the track: {worst_lateral} m");
     }
 }
+
+/// Needs converted assets: `F1_ASSETS=assets cargo test -p racecraft-sim -- --ignored eau_rouge`.
+#[cfg(test)]
+mod eau_rouge {
+    use super::*;
+    use crate::car::spec::{test_wheels, CarSpec, Setup};
+    use crate::car::Assists;
+    use std::sync::Arc;
+
+    /// Kemmel run-up from La Source exit to the top of Raidillon.
+    const SECTION: std::ops::Range<f64> = 880.0..1250.0;
+
+    fn spa() -> Option<Track> {
+        let root = std::env::var("F1_ASSETS").ok()?;
+        Track::load(std::path::Path::new(&root).join("tracks/spa")).ok()
+    }
+
+    fn car(track: &Track) -> Car {
+        let (position, yaw) = track.grid_slot(0);
+        Car::new(
+            Arc::new(CarSpec::gen22(test_wheels(), 5.4, 1.9)),
+            Setup::default(),
+            Assists {
+                automatic_gears: true,
+                ..Assists::default()
+            },
+            track,
+            position,
+            yaw,
+        )
+    }
+
+    const PROFILE: DriverProfile = DriverProfile {
+        pace: 1.0,
+        aggression: 0.5,
+        consistency: 1.0,
+    };
+
+    #[test]
+    #[ignore]
+    fn plan_keeps_accelerating_through_eau_rouge() {
+        let Some(track) = spa() else { return };
+        let speed = speed_profile(PROFILE, &car(&track), &track, 1.0);
+        let stations: Vec<usize> = (300..1400)
+            .map(|s| (s as f64 / STATION_SPACING) as usize)
+            .collect();
+        for pair in stations.windows(2) {
+            assert!(
+                speed[pair[1]] >= speed[pair[0]] - 1e-6,
+                "plan lifts at {:.0} m",
+                pair[1] as f64 * STATION_SPACING
+            );
+        }
+    }
+
+    #[test]
+    #[ignore]
+    fn ai_never_brakes_through_eau_rouge_on_cold_or_warm_tyres() {
+        let Some(track) = spa() else { return };
+        let mut car = car(&track);
+        let mut driver = AiDriver::new(PROFILE, &car, &track, 7);
+        let dt = 1.0 / 360.0;
+        let (mut lap, mut last_s) = (0, car.track_position.s);
+        let mut worst = [(1.0_f64, 0.0_f64); 2];
+        for _ in 0..(240.0 / dt) as usize {
+            let input = driver.drive(&car, &track, &[], dt);
+            car.step(&input, &track, dt);
+            let s = car.track_position.s;
+            if s + 1000.0 < last_s {
+                lap += 1;
+            }
+            last_s = s;
+            if (1..=2).contains(&lap) && SECTION.contains(&s) {
+                let (throttle, brake) = &mut worst[lap - 1];
+                *throttle = throttle.min(input.throttle);
+                *brake = brake.max(input.brake);
+            }
+            if lap == 3 {
+                break;
+            }
+        }
+        for (lap, (throttle, brake)) in worst.into_iter().enumerate() {
+            // Throttle eases only by the steering feed-in, never a lift.
+            assert!(
+                brake == 0.0 && throttle > 0.85,
+                "lap {}: throttle {throttle:.2}, brake {brake:.2}",
+                lap + 1
+            );
+        }
+    }
+}
