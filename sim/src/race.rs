@@ -1335,6 +1335,26 @@ mod race_with_player {
             "TOTAL 8 races: contacts {}, yours {}, heavy {}, recoveries {}, in your path {}",
             total[0], total[1], total[2], total[3], total[4]
         );
+        // Before recovery ghosting and edge rejoins, eight races gave ~26
+        // heavy contacts and ~16 rejoins just ahead of the player.
+        assert!(total[2] <= 14, "{} heavy contacts", total[2]);
+        assert!(total[4] <= 8, "{} rejoins in the player's path", total[4]);
+        let mut opening = [0usize; 4];
+        for seed in 1..=8 {
+            let r = run(seed, 25.0, false);
+            for (sum, value) in opening.iter_mut().zip([r.0, r.1, r.2, r.3]) {
+                *sum += value;
+            }
+        }
+        println!(
+            "FIRST 25 s, 8 starts: contacts {}, yours {}, heavy {}, recoveries {}",
+            opening[0], opening[1], opening[2], opening[3]
+        );
+        assert!(
+            opening[2] <= 3,
+            "{} heavy contacts at the start",
+            opening[2]
+        );
     }
 }
 
