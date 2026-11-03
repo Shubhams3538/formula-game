@@ -218,7 +218,7 @@ impl Race {
         let rivals: Vec<Vec<Rival>> = (0..self.entrants.len())
             .map(|index| self.rivals_of(index))
             .collect();
-        self.update_drs();
+        self.update_drs(dt);
 
         for (index, entrant) in self.entrants.iter_mut().enumerate() {
             entrant.car.aero = influences[index];
@@ -251,7 +251,7 @@ impl Race {
 
     /// Earns DRS at each detection point (within [`drs::GAP`] of the car ahead,
     /// from lap [`drs::ENABLED_AFTER_LAPS`] + 1) and opens it inside the zone.
-    fn update_drs(&mut self) {
+    fn update_drs(&mut self, dt: f64) {
         let racing = matches!(self.phase, Phase::Racing | Phase::Finishing);
         let gaps: Vec<Option<f64>> = (0..self.entrants.len())
             .map(|index| self.physical_gap_ahead(index))
@@ -264,12 +264,15 @@ impl Race {
                     && timing.laps_completed >= drs::ENABLED_AFTER_LAPS
                     && gaps[index].is_some_and(|gap| gap <= drs::GAP)
             };
-            let open = entrant.drs.update(
-                &self.track,
-                &self.drs_zones,
-                entrant.car.track_position.s,
-                qualifies,
-            );
+            // Judge the zone where the car will be after this tick, so the
+            // flap starts closing on the tick that crosses the zone's end
+            // rather than one tick past it.
+            let s = self
+                .track
+                .wrap(entrant.car.track_position.s + entrant.car.forward_speed().max(0.0) * dt);
+            let open = entrant
+                .drs
+                .update(&self.track, &self.drs_zones, s, qualifies);
             let anywhere = entrant.car.assists.drs_anywhere;
             entrant.car.drs.available = (open || anywhere)
                 && racing
@@ -961,5 +964,78 @@ mod spa_overtaking {
         }
         assert!(wins >= 5, "the faster car won only {wins} of 6");
         assert!(contacts <= 4, "{contacts} car contacts in 6 races");
+    }
+}
+
+/// Needs converted assets: `F1_ASSETS=assets cargo test -p racecraft-sim -- --ignored opening_lap`.
+#[cfg(test)]
+mod spa_opening_lap {
+    use super::*;
+    use crate::car::spec::test_wheels;
+
+    #[test]
+    #[ignore]
+    fn a_full_grid_gets_through_la_source_without_wrecking() {
+        let Ok(root) = std::env::var("F1_ASSETS") else {
+            return;
+        };
+        let track = Arc::new(Track::load(std::path::Path::new(&root).join("tracks/spa")).unwrap());
+        let spec = Arc::new(CarSpec::gen22(test_wheels(), 5.4, 1.9));
+        let (mut total, mut heavy, mut spun) = (0, 0, 0);
+        for seed in [1, 2, 3, 4] {
+            let entrants = (0..22)
+                .map(|slot| EntrantConfig {
+                    name: format!("AI{slot}"),
+                    spec: spec.clone(),
+                    setup: Setup::default(),
+                    assists: Assists {
+                        automatic_gears: true,
+                        ..Assists::default()
+                    },
+                    ai: Some(DriverProfile {
+                        pace: 0.985 - 0.006 * slot as f64,
+                        aggression: 0.3 + 0.03 * (slot % 10) as f64,
+                        consistency: 0.97,
+                    }),
+                    human_slot: 0,
+                    livery: [1.0; 3],
+                })
+                .collect();
+            let mut race = Race::new(track.clone(), entrants, 2, seed);
+            let (mut contacts, mut big) = (0, 0);
+            for _ in 0..(45.0 * PHYSICS_RATE) as usize {
+                race.step(&[]);
+                for event in &race.events {
+                    if let RaceEvent::Contact {
+                        b: Some(_),
+                        impulse,
+                        ..
+                    } = event
+                    {
+                        contacts += 1;
+                        if *impulse > 8000.0 {
+                            big += 1;
+                        }
+                    }
+                }
+                race.events.clear();
+            }
+            // Cars left far behind or turned around after the first corner.
+            let lost = race
+                .entrants
+                .iter()
+                .filter(|e| e.timing.distance < 600.0)
+                .count();
+            println!("seed {seed}: contacts {contacts}, heavy {big}, stranded before 600 m {lost}");
+            total += contacts;
+            heavy += big;
+            spun += lost;
+        }
+        println!("TOTAL contacts {total}, heavy {heavy}, stranded {spun}");
+        // Light rubbing in a 22-car opening is fine; hard hits and wrecked
+        // cars are not. Before pack-aware following this was 104 contacts.
+        assert!(total <= 40, "{total} contacts in four openings");
+        assert!(heavy <= 1, "{heavy} heavy contacts");
+        assert_eq!(spun, 0, "{spun} cars stranded at the first corner");
     }
 }

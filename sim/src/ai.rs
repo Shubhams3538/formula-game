@@ -311,11 +311,15 @@ impl AiDriver {
                 // Reserve the body length and braking distance for our closing
                 // speed. React to closing, not absolute speed: a steady tow
                 // must still let a faster car reach a passing opportunity.
-                let room = (rival.gap - car.spec.length - 1.5).max(0.0);
+                let room = (rival.gap - car.spec.length - if crowded { 3.0 } else { 1.5 }).max(0.0);
                 // A fast car can stop hard: aero braking at 300 km/h is well
                 // over 30 m/s². Assuming a slow car's 8 m/s² everywhere held
                 // followers a full tow's length back, too far to pull out.
-                let deceleration = (12.0 + speed * 0.25).min(32.0);
+                let deceleration = if crowded {
+                    8.0
+                } else {
+                    (12.0 + speed * 0.25).min(32.0)
+                };
                 let closing = (speed - rival.speed).max(0.0);
                 let safe_speed =
                     (rival.speed.powi(2) + 2.0 * deceleration * room).sqrt() - closing * 0.7;
