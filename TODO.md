@@ -16,11 +16,17 @@
   first corner stays clean with a full 22-car grid.
 - ABS braking no longer spins the car with a touch of lock; confirm the feel
   with a wheel and a gamepad.
+- Grid lanes keep the start two wide but cost the leader ~50 m by 30 s
+  (La Source from a lane, not the line). An early merge for the leader did not
+  recover it and added contacts.
 
-## Weather (uncommitted work in progress)
+## Release assets
 
-- Weather skyboxes, storm audio and the Track page's weather picker are in the
-  working tree but not committed. Review and land them separately.
+- Upload `target/packaging/f1-racecraft-assets.zip` (adds the GEN22 car, 2026
+  roster and the fixed Spa collision) to the asset archive URL before the next
+  release tag; `release.yml` already pins its SHA-256.
+- The archive's experimental tracks (Silverstone, Bahrain, COTA) predate the
+  local conversions; refresh them once that track work is reviewed.
 
 ## Car artwork
 
