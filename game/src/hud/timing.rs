@@ -155,9 +155,13 @@ fn split_color(split: Option<Split>, active: bool, fresh: bool) -> Color {
     if active {
         BLUE
     } else if let Some(split) = split.filter(|_| fresh) {
-        split
-            .delta
-            .map_or(GREEN, |delta| if delta <= 0. { PURPLE } else { AMBER })
+        if split.overall {
+            PURPLE
+        } else if split.delta.is_none_or(|delta| delta <= 0.) {
+            GREEN
+        } else {
+            AMBER
+        }
     } else if split.is_some() {
         DIM
     } else {
@@ -165,8 +169,9 @@ fn split_color(split: Option<Split>, active: bool, fresh: bool) -> Color {
     }
 }
 
-/// Nine flat cells: three minisectors per sector, with wider breaks between
-/// sectors. Finished sectors take their timing colour; the live one fills blue.
+/// Nine flat cells, three per sector with wider breaks between sectors. Each
+/// cell shows its own minisector time: purple fastest of anyone, green the
+/// player's best, yellow slower. The live cell fills blue.
 fn sector_bar(
     hud: &Hud,
     (x, y): (f32, f32),
@@ -175,47 +180,38 @@ fn sector_bar(
     running: bool,
     s: f32,
 ) {
+    use super::telemetry::{MiniResult, MINISECTORS};
     let race = &session.race;
     let timing = &race.entrants[session.player].timing;
     let mini_gap = 2. * s;
     let sector_gap = 6. * s;
     let sector_w = (w - sector_gap * 2.) / 3.;
     let cell_w = (sector_w - mini_gap * 2.) / 3.;
-    let sector_length = race.track.length / 3.;
+    let length = race.track.length / MINISECTORS as f64;
+    let distance = timing.distance.max(0.);
+    let lap = (distance / race.track.length).floor() as u32;
+    let progress = (distance / length).fract() as f32;
+    let current = ((distance / length).floor() as usize) % MINISECTORS;
     for sector in 0..3 {
-        let active = running && timing.sector == sector;
-        let split = session.telemetry.splits[sector];
-        let fresh = split.is_some_and(|split| split.lap == timing.laps_completed);
-        let progress = if active && sector_length > 0. {
-            ((timing.distance.rem_euclid(race.track.length) - sector as f64 * sector_length)
-                / sector_length)
-                .clamp(0., 1.)
-        } else {
-            0.
-        };
-        let filled = (progress * 3.).floor() as usize;
-        let done = split_color(split, false, fresh);
         for mini in 0..3 {
-            let color = if active {
-                if mini < filled {
-                    BLUE
-                } else if mini == filled && progress > 0. {
-                    BLUE.gamma_multiply(0.45)
-                } else {
-                    Color::from_gray(65)
-                }
-            } else if fresh {
-                done
-            } else {
-                Color::from_gray(65)
+            let index = sector * 3 + mini;
+            let cell_x =
+                x + sector as f32 * (sector_w + sector_gap) + mini as f32 * (cell_w + mini_gap);
+            let unlit = Color::from_gray(65);
+            if running && index == current {
+                hud.fill_rect(cell_x, y, cell_w, h, unlit);
+                hud.fill_rect(cell_x, y, cell_w * progress, h, BLUE);
+                continue;
+            }
+            let done = session.telemetry.minis[index]
+                .filter(|split| running && split.lap == lap && index < current);
+            let color = match done.map(|split| split.result) {
+                Some(MiniResult::Overall) => PURPLE,
+                Some(MiniResult::Personal) => GREEN,
+                Some(MiniResult::Slower) => AMBER,
+                None => unlit,
             };
-            hud.fill_rect(
-                x + sector as f32 * (sector_w + sector_gap) + mini as f32 * (cell_w + mini_gap),
-                y,
-                cell_w,
-                h,
-                color,
-            );
+            hud.fill_rect(cell_x, y, cell_w, h, color);
         }
     }
 }

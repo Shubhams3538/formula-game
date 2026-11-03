@@ -63,6 +63,28 @@ pub(super) struct Split {
     pub time: f64,
     pub delta: Option<f64>,
     pub lap: u32,
+    /// As fast as any car's best for this sector in the session.
+    pub overall: bool,
+}
+
+/// Three minisectors per sector, timed on their own.
+pub(super) const MINISECTORS: usize = 9;
+
+/// How a minisector compared, in broadcast colours.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) enum MiniResult {
+    /// Fastest of any car this session (purple).
+    Overall,
+    /// The player's best so far (green).
+    Personal,
+    /// Slower than the player's best (yellow).
+    Slower,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub(super) struct MiniSplit {
+    pub lap: u32,
+    pub result: MiniResult,
 }
 
 #[derive(Default)]
@@ -79,6 +101,11 @@ pub struct Telemetry {
     rivals: Vec<Rival>,
     pub(super) pass: Option<PassNotice>,
     pub(super) splits: [Option<Split>; 3],
+    pub(super) minis: [Option<MiniSplit>; MINISECTORS],
+    mini_best: [Option<f64>; MINISECTORS],
+    mini_overall: [Option<f64>; MINISECTORS],
+    /// Per entrant: the minisector count it last crossed into, and when.
+    mini_clock: Vec<Option<(i64, f64)>>,
     sector: Option<(u32, usize, f64)>,
     best_sectors: [Option<f64>; 3],
     leader: Option<usize>,
@@ -113,6 +140,7 @@ impl Telemetry {
         }
         self.last_tick = Some(race.tick);
         self.update_splits(race, player);
+        self.update_minis(race, player);
         let car = &race.entrants[player].car;
         self.speed.push(car.speed() * 3.6);
         self.rpm.push(car.powertrain.rpm);
@@ -146,15 +174,71 @@ impl Telemetry {
             if (current.0 > lap || current.0 == lap && current.1 > sector) && timing.distance > 0. {
                 // S3 disappears from sim's sector_times at the lap boundary.
                 let time = race.time - started;
+                let fastest = race
+                    .entrants
+                    .iter()
+                    .filter_map(|entrant| entrant.timing.best_sectors[sector])
+                    .fold(f64::INFINITY, f64::min);
                 self.splits[sector] = Some(Split {
                     time,
                     delta: self.best_sectors[sector].map(|best| time - best),
                     lap,
+                    overall: time <= fastest + 1e-9,
                 });
             }
         }
         self.sector = Some(current);
         self.best_sectors = timing.best_sectors;
+    }
+
+    /// Times every car through each minisector, so each of the player's
+    /// cells is coloured by its own time rather than the whole sector's.
+    fn update_minis(&mut self, race: &Race, player: usize) {
+        if self.mini_clock.len() != race.entrants.len() {
+            self.mini_clock = vec![None; race.entrants.len()];
+        }
+        let length = race.track.length / MINISECTORS as f64;
+        let racing = matches!(
+            race.phase,
+            racecraft_sim::Phase::Racing | racecraft_sim::Phase::Finishing
+        );
+        for (index, entrant) in race.entrants.iter().enumerate() {
+            let distance = entrant.timing.distance;
+            if !racing || distance < 0. || entrant.timing.finish_time.is_some() {
+                self.mini_clock[index] = None;
+                continue;
+            }
+            let count = (distance / length).floor() as i64;
+            let crossed = match self.mini_clock[index] {
+                Some((previous, started)) if count == previous + 1 => Some((previous, started)),
+                Some((previous, _)) if count == previous => continue,
+                // First sighting, a recovery or a skipped boundary: restart.
+                _ => None,
+            };
+            self.mini_clock[index] = Some((count, race.time));
+            let Some((previous, started)) = crossed else {
+                continue;
+            };
+            let mini = previous.rem_euclid(MINISECTORS as i64) as usize;
+            let time = race.time - started;
+            if index == player {
+                let result = if self.mini_overall[mini].is_none_or(|best| time <= best) {
+                    MiniResult::Overall
+                } else if self.mini_best[mini].is_none_or(|best| time <= best) {
+                    MiniResult::Personal
+                } else {
+                    MiniResult::Slower
+                };
+                self.minis[mini] = Some(MiniSplit {
+                    lap: (previous / MINISECTORS as i64) as u32,
+                    result,
+                });
+                self.mini_best[mini] =
+                    Some(self.mini_best[mini].map_or(time, |best| best.min(time)));
+            }
+            self.mini_overall[mini] =
+                Some(self.mini_overall[mini].map_or(time, |best| best.min(time)));
+        }
     }
 
     fn update_pass(&mut self, race: &Race, player: usize) {
@@ -251,6 +335,40 @@ mod tests {
     }
 
     #[test]
+    fn each_minisector_is_judged_on_its_own_time() {
+        let mut session = crate::tests::session();
+        session.race.phase = racecraft_sim::Phase::Racing;
+        let length = session.race.track.length / MINISECTORS as f64;
+        let mut clock = 0.;
+        // Drive minisectors with the given durations, from `start` onward.
+        let mut drive = |session: &mut crate::Session, start: usize, durations: &[f64]| {
+            for (offset, duration) in durations.iter().enumerate() {
+                let mini = start + offset;
+                session.race.entrants[0].timing.distance = mini as f64 * length + 1.;
+                session.race.time = clock;
+                session.telemetry.update_minis(&session.race, 0);
+                clock += duration;
+            }
+            session.race.entrants[0].timing.distance =
+                (start + durations.len()) as f64 * length + 1.;
+            session.race.time = clock;
+            session.telemetry.update_minis(&session.race, 0);
+        };
+        // First lap: every minisector is the best so far (purple).
+        drive(&mut session, 0, &[10.; MINISECTORS]);
+        assert!(session.telemetry.minis.iter().all(|split| split
+            .is_some_and(|split| split.result == MiniResult::Overall && split.lap == 0)));
+        // Second lap: quicker through the first, slower through the second.
+        drive(&mut session, MINISECTORS + 1, &[9., 11.]);
+        let result = |index: usize| session.telemetry.minis[index].unwrap();
+        assert_eq!(result(1).lap, 1);
+        assert_eq!(result(1).result, MiniResult::Overall);
+        assert_eq!(result(2).result, MiniResult::Slower);
+        // The third minisector of lap one is untouched by lap two so far.
+        assert_eq!(result(3).lap, 0);
+    }
+
+    #[test]
     fn track_recovery_drops_motion_history_but_keeps_completed_splits() {
         let mut session = crate::tests::session();
         session.race.tick = 100;
@@ -260,6 +378,7 @@ mod tests {
             time: 31.125,
             delta: None,
             lap: 0,
+            overall: false,
         });
         session.race.recover(0);
         session.recover_hud();
