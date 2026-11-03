@@ -331,7 +331,10 @@ fn segments(hud: &Hud, style: &HudStyle, session: &Session, scale: f32) {
             egui::vec2(pedal_w, 28. * scale),
         ),
         "BRAKE",
-        session.guidance.activity.input.brake as f32,
+        session
+            .telemetry
+            .brake
+            .value(session.guidance.activity.input.brake) as f32,
         ACCENT,
     );
     pedal(
@@ -342,7 +345,10 @@ fn segments(hud: &Hud, style: &HudStyle, session: &Session, scale: f32) {
             egui::vec2(pedal_w, 28. * scale),
         ),
         "THROTTLE",
-        session.guidance.activity.input.throttle as f32,
+        session
+            .telemetry
+            .throttle
+            .value(session.guidance.activity.input.throttle) as f32,
         GREEN,
     );
 }
@@ -380,26 +386,17 @@ fn arc(
     ));
 }
 
-/// One input readout, shared by both layouts so pedals never appear twice.
+/// One input bar, shared by both layouts so pedals never appear twice. The
+/// bar is the reading; a percentage beside it would only repeat it.
 fn pedal(hud: &Hud, style: &HudStyle, rect: egui::Rect, label: &str, value: f32, color: Color) {
     let scale = rect.height() / 30.;
-    let mid = rect.top() + 8. * scale;
     hud.text_mid(
         &style.bold,
         12. * scale,
-        (rect.left(), mid),
+        (rect.left(), rect.top() + 8. * scale),
         Align::Left,
         hud.finish.colors().muted,
         label,
-    );
-    readout(
-        hud,
-        style,
-        11. * scale,
-        (rect.right(), mid),
-        Align::Right,
-        hud.finish.colors().ink,
-        &format!("{:.0}%", value * 100.),
     );
     hud.fill_round(
         rect.left(),
@@ -601,14 +598,20 @@ fn gauges(hud: &Hud, style: &HudStyle, session: &Session, scale: f32) {
         (
             130.,
             -1.,
-            session.guidance.activity.input.brake,
+            session
+                .telemetry
+                .brake
+                .value(session.guidance.activity.input.brake),
             ACCENT,
             "BRK",
         ),
         (
             50.,
             1.,
-            session.guidance.activity.input.throttle,
+            session
+                .telemetry
+                .throttle
+                .value(session.guidance.activity.input.throttle),
             GREEN,
             "THR",
         ),

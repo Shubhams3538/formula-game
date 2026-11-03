@@ -23,6 +23,7 @@ impl Session {
     /// Called once after each physics step, before either display renders.
     pub fn sample_hud(&mut self) {
         self.telemetry.update(&self.race, self.player);
+        self.telemetry.pedals(self.guidance.activity.input);
         self.delta.update(&self.race, self.player);
     }
 

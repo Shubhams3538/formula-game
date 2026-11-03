@@ -78,6 +78,17 @@ impl Guidance {
     }
 }
 
+/// Racing-line offset interpolated between stations.
+fn line_offset(track: &Track, distance: f64) -> f64 {
+    use racecraft_sim::track::STATION_SPACING;
+    let s = distance.rem_euclid(track.length);
+    let index = track.station_at(s);
+    let next = (index + 1) % track.racing_line.offsets.len();
+    let t = (s / STATION_SPACING).fract();
+    let offsets = &track.racing_line.offsets;
+    offsets[index] + (offsets[next] - offsets[index]) * t
+}
+
 pub fn racing_line(session: bevy::prelude::Res<crate::Session>, mut gizmos: bevy::prelude::Gizmos) {
     use bevy::prelude::*;
     if !session.ready || !session.show_racing_line || session.screen == crate::menu::Screen::Main {
@@ -85,11 +96,16 @@ pub fn racing_line(session: bevy::prelude::Res<crate::Session>, mut gizmos: bevy
     }
     let car = &session.race.entrants[session.player].car;
     let track = &session.race.track;
+    // Samples sit at fixed lap distances, not relative to the car, so the
+    // ribbon stays put on the asphalt instead of re-sampling every frame.
+    const SPACING: f64 = 6.;
+    let start = car.track_position.s + SPACING;
+    let first = (start / SPACING).ceil() * SPACING;
     let mut previous = None;
-    for step in 1..=24 {
-        let distance = car.track_position.s + step as f64 * 6.;
+    for distance in std::iter::once(start).chain((0..24).map(|step| first + step as f64 * SPACING))
+    {
         let frame = track.frame_at(distance);
-        let mut point = frame.point_at(track.racing_line.offsets[track.station_at(distance)]);
+        let mut point = frame.point_at(line_offset(track, distance));
         if let Some(ground) = track.collision.ground(point + glam::DVec3::Y * 3.) {
             point.y = ground.height;
         }

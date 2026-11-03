@@ -69,6 +69,8 @@ pub(super) struct Split {
 pub struct Telemetry {
     pub(super) speed: Average<36>,
     pub(super) rpm: Average<36>,
+    pub(super) throttle: Average<36>,
+    pub(super) brake: Average<36>,
     pub(super) temperatures: [Average<90>; 2],
     pub(super) wear: [Average<90>; 2],
     pub(super) tow: Average<90>,
@@ -87,11 +89,19 @@ impl Telemetry {
     pub(super) fn recover(&mut self) {
         self.speed = Average::default();
         self.rpm = Average::default();
+        self.throttle = Average::default();
+        self.brake = Average::default();
         self.tow = Average::default();
         self.wake = Average::default();
         self.gaps.clear();
         self.rivals.clear();
         self.pass = None;
+    }
+
+    /// Pedal displays average the applied input over the same ticks as speed.
+    pub(super) fn pedals(&mut self, input: racecraft_sim::CarInput) {
+        self.throttle.push(input.throttle);
+        self.brake.push(input.brake);
     }
 
     pub(super) fn update(&mut self, race: &Race, player: usize) {

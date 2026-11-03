@@ -325,9 +325,13 @@ impl AiDriver {
         } else {
             (0.0, ((-error - 1.5) * 0.22).clamp(0.0, 1.0))
         };
-        // Feed the throttle in as the steering unwinds; back off if the rear slides.
+        // Feed the throttle in as the steering unwinds where traction is the
+        // limit; at high speed the engine cannot overpower the rears, so fast
+        // bends such as Eau Rouge stay flat. Back off if the rear slides.
         let rear_sliding = car.wheels[2].sliding.max(car.wheels[3].sliding);
-        let throttle = throttle * (1.0 - rear_sliding * 0.6) * (1.0 - steer.abs() * 0.35);
+        let traction_limited = ((TRACTION_SPEED - speed) / 20.0).clamp(0.0, 1.0);
+        let throttle =
+            throttle * (1.0 - rear_sliding * 0.6) * (1.0 - steer.abs() * 0.35 * traction_limited);
 
         CarInput {
             steer,
@@ -482,6 +486,10 @@ fn in_pack(car: &Car, rivals: &[Rival]) -> bool {
         >= 2
 }
 
+/// Above this speed (m/s) drive torque no longer threatens rear grip, so
+/// steering lock stops trimming the throttle.
+const TRACTION_SPEED: f64 = 60.0;
+
 /// Share of tyre friction the AI plans to use at low load.
 const GRIP_MARGIN: f64 = 0.88;
 /// The plan's grip falls off with aero load like the tyres do, so fast
@@ -497,7 +505,11 @@ fn speed_profile(profile: DriverProfile, car: &Car, track: &Track, tyre_grip: f6
         grip: spec.tyre_friction * GRIP_MARGIN * profile.pace * tyre_grip,
         lift_area: car.setup.front_lift_area(&spec.aero) + car.setup.rear_lift_area(&spec.aero),
         drag_area: car.setup.drag_area(&spec.aero),
-        power: spec.engine.max_power * 0.92,
+        // Slightly optimistic, so on straights and flat-out bends the car can
+        // never catch the plan and the throttle saturates instead of tracking
+        // the curve. Braking points come from the backward pass and are
+        // unaffected.
+        power: spec.engine.max_power * 1.1,
         // Leave headroom for axle brake bias, ABS trimming and turn-in loads.
         brake_fraction: 0.76 * profile.pace,
         load_sensitivity: LOAD_SENSITIVITY,
@@ -748,9 +760,8 @@ mod eau_rouge {
             }
         }
         for (lap, (throttle, brake)) in worst.into_iter().enumerate() {
-            // Throttle eases only by the steering feed-in, never a lift.
             assert!(
-                brake == 0.0 && throttle > 0.85,
+                brake == 0.0 && throttle > 0.99,
                 "lap {}: throttle {throttle:.2}, brake {brake:.2}",
                 lap + 1
             );
