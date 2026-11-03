@@ -48,6 +48,14 @@ pub struct Assists {
     /// Lets this driver open DRS anywhere, not only where it is earned.
     #[serde(default)]
     pub drs_anywhere: bool,
+    /// Opens DRS by itself whenever it is available; it still closes on
+    /// braking or at the end of the zone. Saved aids from before default on.
+    #[serde(default = "enabled")]
+    pub auto_drs: bool,
+}
+
+fn enabled() -> bool {
+    true
 }
 
 impl Default for Assists {
@@ -59,6 +67,7 @@ impl Default for Assists {
             stability: 0.5,
             automatic_gears: false,
             drs_anywhere: false,
+            auto_drs: false,
         }
     }
 }
@@ -347,7 +356,8 @@ impl Car {
         self.steer_angle += (target - self.steer_angle) * (dt * response).min(1.0);
 
         // Aerodynamics. An open DRS flap stalls part of the rear wing.
-        self.drs.update(input.drs, brake, dt);
+        self.drs
+            .update(input.drs || self.assists.auto_drs, brake, dt);
         let dynamic_pressure = 0.5 * AIR_DENSITY * speed * speed;
         let front_downforce = dynamic_pressure
             * self.setup.front_lift_area(&spec.aero)
@@ -980,6 +990,36 @@ mod tests {
         // Re-opening needs a fresh request.
         run(&mut car, &track, cruise, 0.1);
         assert!(!car.drs.open);
+    }
+
+    #[test]
+    fn automatic_drs_opens_when_available_and_closes_without_a_button() {
+        let track = oval_track();
+        let mut car = car_on(&track);
+        car.assists.auto_drs = true;
+        let cruise = CarInput {
+            throttle: 1.0,
+            ..CarInput::default()
+        };
+        let brake = CarInput {
+            brake: 0.5,
+            ..CarInput::default()
+        };
+        let settle = crate::drs::ACTUATION + 0.01;
+        run(&mut car, &track, cruise, 0.3);
+        assert_eq!(car.drs.flap, 0.0, "opened without DRS available");
+        car.drs.available = true;
+        run(&mut car, &track, cruise, settle);
+        assert!(car.drs.open && car.drs.flap == 1.0);
+        run(&mut car, &track, brake, settle);
+        assert_eq!(car.drs.flap, 0.0, "braking must close it");
+        // Off the brakes while still available: it opens again by itself.
+        run(&mut car, &track, cruise, settle);
+        assert_eq!(car.drs.flap, 1.0);
+        // The end of the zone withdraws DRS and the flap closes.
+        car.drs.available = false;
+        run(&mut car, &track, cruise, settle);
+        assert!(!car.drs.open && car.drs.flap == 0.0);
     }
 
     #[test]

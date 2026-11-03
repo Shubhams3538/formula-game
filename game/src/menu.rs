@@ -1334,6 +1334,7 @@ fn aids_panel(ui: &mut egui::Ui, frontend: &mut Frontend) -> [egui::Rect; 3] {
                     automatic_gears: true,
                     // A mode, not an aid: presets leave it alone.
                     drs_anywhere: aids.drs_anywhere,
+                    auto_drs: true,
                 };
             }
             let balanced = ui.button("Balanced");
@@ -1348,6 +1349,7 @@ fn aids_panel(ui: &mut egui::Ui, frontend: &mut Frontend) -> [egui::Rect; 3] {
                     automatic_gears: true,
                     // A mode, not an aid: presets leave it alone.
                     drs_anywhere: aids.drs_anywhere,
+                    auto_drs: true,
                 };
             }
             let unassisted = ui.button("Unassisted");
@@ -1362,6 +1364,7 @@ fn aids_panel(ui: &mut egui::Ui, frontend: &mut Frontend) -> [egui::Rect; 3] {
                     automatic_gears: false,
                     // A mode, not an aid: presets leave it alone.
                     drs_anywhere: aids.drs_anywhere,
+                    auto_drs: false,
                 };
             }
             [beginner.rect, balanced.rect, unassisted.rect]
@@ -1375,6 +1378,11 @@ fn aids_panel(ui: &mut egui::Ui, frontend: &mut Frontend) -> [egui::Rect; 3] {
     });
     setting_row(ui, "Racing line", |ui| {
         ui.checkbox(&mut frontend.show_racing_line, "Enabled");
+    });
+    setting_row(ui, "Automatic DRS", |ui| {
+        ui.checkbox(&mut aids.auto_drs, "Enabled").on_hover_text(
+            "Opens the flap as soon as DRS is available. Braking or the end of the zone closes it.",
+        );
     });
     setting_row(ui, "DRS anywhere", |ui| {
         ui.checkbox(&mut aids.drs_anywhere, "Enabled")

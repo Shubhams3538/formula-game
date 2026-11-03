@@ -280,6 +280,7 @@ impl Options {
             stability: self.assist_level,
             automatic_gears: self.automatic_gears,
             drs_anywhere: false,
+            auto_drs: true,
         });
         aids.drs_anywhere |= self.drs_anywhere;
         aids
@@ -412,6 +413,7 @@ mod tests {
             stability: 0.,
             automatic_gears: false,
             drs_anywhere: false,
+            auto_drs: false,
         };
         options.driver_aids = Some(selected);
         assert_eq!(options.player_assists(), selected);
