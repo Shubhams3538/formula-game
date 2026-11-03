@@ -206,7 +206,7 @@ impl Catalog {
             let car = root.join("cars").join(id);
             if car.join("car.glb").is_file()
                 && car.join("car.json").is_file()
-                && (id != "gen22" || car.join("teams.json").is_file())
+                && (id != "gen22" || crate::teams::Teams::load(root).is_ok())
             {
                 catalog.cars.push(CarChoice {
                     id: id.into(),
@@ -531,6 +531,7 @@ fn setting_row(ui: &mut egui::Ui, label: &str, add_control: impl FnOnce(&mut egu
     ui.add_space(3.);
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn ui(
     mut contexts: EguiContexts,
     mut frontend: ResMut<Frontend>,
@@ -539,6 +540,7 @@ pub fn ui(
     mut styled: Local<bool>,
     mut warmed: Local<u8>,
     car_preview: Res<car_preview::CarPreview>,
+    mut exit: MessageWriter<AppExit>,
 ) -> Result {
     frontend.benchmark.poll();
     let context = contexts.ctx_mut()?;
@@ -669,42 +671,53 @@ pub fn ui(
             ui.vertical_centered(|ui| {
                 ui.allocate_ui_with_layout(
                     egui::vec2(width, ui.available_height()),
-                    egui::Layout::left_to_right(egui::Align::Center),
+                    egui::Layout::top_down(egui::Align::Min),
                     |ui| {
-                        ui.spacing_mut().item_spacing.x = 12.;
-                        if frontend.race_started && session.ready {
-                            let resume_button = ui.add_enabled(
-                                frontend.benchmark.child.is_none(),
-                                egui::Button::new(RichText::new("Resume race").strong())
-                                    .fill(RED)
-                                    .min_size(egui::vec2(160., 44.)),
-                            );
-                            if resume_button.clicked() {
-                                resume(&mut session);
+                        ui.horizontal_wrapped(|ui| {
+                            ui.spacing_mut().item_spacing.x = 12.;
+                            if frontend.race_started && session.ready {
+                                let resume_button = ui.add_enabled(
+                                    frontend.benchmark.child.is_none(),
+                                    egui::Button::new(RichText::new("Resume race").strong())
+                                        .fill(RED)
+                                        .min_size(egui::vec2(width.min(160.), 44.)),
+                                );
+                                if resume_button.clicked() {
+                                    resume(&mut session);
+                                }
                             }
-                        }
-                        let start = ui.add_enabled(
-                            available && !frontend.pending && frontend.benchmark.child.is_none(),
-                            egui::Button::new(
-                                RichText::new(if frontend.race_started {
-                                    "Start new race"
-                                } else {
-                                    "Start race"
-                                })
-                                .strong(),
-                            )
-                            .fill(if frontend.race_started { HOUSING } else { RED })
-                            .min_size(egui::vec2(200., 44.)),
-                        );
-                        #[cfg(test)]
-                        frontend.widgets.insert("start", start.rect);
-                        if start.clicked() {
-                            frontend.pending = true;
-                        }
-                        if !compact_footer {
-                            ui.add_space(4.);
-                            ui.label(RichText::new(status).color(DIM));
-                        }
+                            let start = ui.add_enabled(
+                                available
+                                    && !frontend.pending
+                                    && frontend.benchmark.child.is_none(),
+                                egui::Button::new(
+                                    RichText::new(if frontend.race_started {
+                                        "Start new race"
+                                    } else {
+                                        "Start race"
+                                    })
+                                    .strong(),
+                                )
+                                .fill(if frontend.race_started { HOUSING } else { RED })
+                                .min_size(egui::vec2(width.min(200.), 44.)),
+                            );
+                            #[cfg(test)]
+                            frontend.widgets.insert("start", start.rect);
+                            if start.clicked() {
+                                frontend.pending = true;
+                            }
+                            if ui.button("Quit game").clicked() {
+                                if let Some(child) = frontend.benchmark.child.as_mut() {
+                                    let _ = child.kill();
+                                    let _ = child.wait();
+                                }
+                                exit.write(AppExit::Success);
+                            }
+                            if !compact_footer {
+                                ui.add_space(4.);
+                                ui.label(RichText::new(status).color(DIM));
+                            }
+                        });
                     },
                 );
             });
@@ -1379,81 +1392,88 @@ fn camera_editor(viewport: &egui::Ui, session: &mut Session, car: &str) {
     egui::Area::new("camera-editor".into())
         .anchor(egui::Align2::RIGHT_CENTER, egui::vec2(-18., 0.))
         .show(viewport, |ui| {
-            housing().fill(HOUSING.gamma_multiply(0.96)).show(ui, |ui| {
-                ui.set_width((viewport.max_rect().width() - 76.).clamp(180., 330.));
-                section(ui, "Camera position");
-                ui.label(RichText::new("Live preview / saved for this car").color(DIM));
-                ui.horizontal(|ui| {
-                    for mode in Mode::ALL {
+            egui::ScrollArea::vertical()
+                .id_salt("camera-editor-scroll")
+                .max_height((viewport.max_rect().height() - 48.).max(80.))
+                .show(ui, |ui| {
+                    housing().fill(HOUSING.gamma_multiply(0.96)).show(ui, |ui| {
+                        ui.set_width((viewport.max_rect().width() - 76.).clamp(180., 330.));
+                        section(ui, "Camera position");
+                        ui.label(RichText::new("Live preview / saved for this car").color(DIM));
+                        ui.horizontal(|ui| {
+                            for mode in Mode::ALL {
+                                if ui
+                                    .selectable_label(session.camera.mode == mode, mode.label())
+                                    .clicked()
+                                {
+                                    session.camera.select(mode);
+                                }
+                            }
+                        });
+                        let mut tuning = session.camera.tuning.clone();
+                        let view = tuning.view_mut(session.camera.mode);
+                        setting_row(ui, "Height", |ui| {
+                            ui.add_sized(
+                                egui::vec2(ui.available_width(), 28.),
+                                egui::Slider::new(&mut view.height, 0.65..=4.),
+                            );
+                        });
+                        let range = if session.camera.mode == Mode::Chase {
+                            -10.0..=-3.5
+                        } else {
+                            -1.5..=0.7
+                        };
+                        setting_row(ui, "Forward / back", |ui| {
+                            ui.add_sized(
+                                egui::vec2(ui.available_width(), 28.),
+                                egui::Slider::new(&mut view.fore_aft, range),
+                            );
+                        });
+                        setting_row(ui, "Look down", |ui| {
+                            ui.add_sized(
+                                egui::vec2(ui.available_width(), 28.),
+                                egui::Slider::new(&mut view.pitch, -10.0..=20.),
+                            );
+                        });
+                        setting_row(ui, "Field of view", |ui| {
+                            ui.add_sized(
+                                egui::vec2(ui.available_width(), 28.),
+                                egui::Slider::new(&mut view.fov, 40.0..=95.),
+                            );
+                        });
+                        ui.separator();
+                        setting_row(ui, "Vibration", |ui| {
+                            ui.add_sized(
+                                egui::vec2(ui.available_width(), 28.),
+                                egui::Slider::new(&mut tuning.shake, 0.0..=1.),
+                            );
+                        });
+                        setting_row(ui, "Stable horizon", |ui| {
+                            ui.add_sized(
+                                egui::vec2(ui.available_width(), 28.),
+                                egui::Slider::new(&mut tuning.horizon, 0.0..=1.),
+                            );
+                        });
+                        if ui.button("Reset this view").clicked() {
+                            *tuning.view_mut(session.camera.mode) =
+                                crate::camera::Tuning::for_car(car).view(session.camera.mode);
+                        }
+                        session.camera.configure(tuning);
+                        ui.separator();
                         if ui
-                            .selectable_label(session.camera.mode == mode, mode.label())
+                            .add(
+                                egui::Button::new(
+                                    RichText::new("Done / resume  F4 or Esc").strong(),
+                                )
+                                .fill(RED)
+                                .min_size(egui::vec2(ui.available_width(), 36.)),
+                            )
                             .clicked()
                         {
-                            session.camera.select(mode);
+                            resume(session);
                         }
-                    }
+                    });
                 });
-                let mut tuning = session.camera.tuning.clone();
-                let view = tuning.view_mut(session.camera.mode);
-                setting_row(ui, "Height", |ui| {
-                    ui.add_sized(
-                        egui::vec2(ui.available_width(), 28.),
-                        egui::Slider::new(&mut view.height, 0.65..=4.),
-                    );
-                });
-                let range = if session.camera.mode == Mode::Chase {
-                    -10.0..=-3.5
-                } else {
-                    -1.5..=0.7
-                };
-                setting_row(ui, "Forward / back", |ui| {
-                    ui.add_sized(
-                        egui::vec2(ui.available_width(), 28.),
-                        egui::Slider::new(&mut view.fore_aft, range),
-                    );
-                });
-                setting_row(ui, "Look down", |ui| {
-                    ui.add_sized(
-                        egui::vec2(ui.available_width(), 28.),
-                        egui::Slider::new(&mut view.pitch, -10.0..=20.),
-                    );
-                });
-                setting_row(ui, "Field of view", |ui| {
-                    ui.add_sized(
-                        egui::vec2(ui.available_width(), 28.),
-                        egui::Slider::new(&mut view.fov, 40.0..=95.),
-                    );
-                });
-                ui.separator();
-                setting_row(ui, "Vibration", |ui| {
-                    ui.add_sized(
-                        egui::vec2(ui.available_width(), 28.),
-                        egui::Slider::new(&mut tuning.shake, 0.0..=1.),
-                    );
-                });
-                setting_row(ui, "Stable horizon", |ui| {
-                    ui.add_sized(
-                        egui::vec2(ui.available_width(), 28.),
-                        egui::Slider::new(&mut tuning.horizon, 0.0..=1.),
-                    );
-                });
-                if ui.button("Reset this view").clicked() {
-                    *tuning.view_mut(session.camera.mode) =
-                        crate::camera::Tuning::for_car(car).view(session.camera.mode);
-                }
-                session.camera.configure(tuning);
-                ui.separator();
-                if ui
-                    .add(
-                        egui::Button::new(RichText::new("Done / resume  F4 or Esc").strong())
-                            .fill(RED)
-                            .min_size(egui::vec2(ui.available_width(), 36.)),
-                    )
-                    .clicked()
-                {
-                    resume(session);
-                }
-            });
         });
 }
 
@@ -2055,6 +2075,14 @@ mod tests {
         options.opponents = 0;
         assert!(!Catalog::discover(&root).car_available(&options));
         std::fs::write(car.join("teams.json"), []).unwrap();
+        assert!(!Catalog::discover(&root).car_available(&options));
+        std::fs::write(car.join("teams.json"), br#"{"teams":[]}"#).unwrap();
+        assert!(!Catalog::discover(&root).car_available(&options));
+        std::fs::write(
+            car.join("teams.json"),
+            include_bytes!("../../tools/car/teams.json"),
+        )
+        .unwrap();
         let catalog = Catalog::discover(&root);
         assert!(catalog.car_available(&options));
         options.opponents = 1;

@@ -24,6 +24,8 @@ pub(crate) struct CarPreview {
     selected: Option<(String, Compound)>,
     root: Option<Entity>,
     asset: Option<Handle<WorldAsset>>,
+    tyre_texture: Option<Handle<Image>>,
+    scene_ready: bool,
     pub(super) ready: bool,
     failed: bool,
 }
@@ -75,6 +77,8 @@ pub(crate) fn setup(
         selected: None,
         root: None,
         asset: None,
+        tyre_texture: None,
+        scene_ready: false,
         ready: false,
         failed: false,
     });
@@ -137,7 +141,8 @@ pub(crate) fn update(
     mut cameras: Query<&mut Camera, With<PreviewCamera>>,
 ) {
     let visible = matches!(session.screen, Screen::Main | Screen::Paused)
-        && matches!(frontend.tab, Tab::Track | Tab::Team);
+        && matches!(frontend.tab, Tab::Track | Tab::Team)
+        && frontend.benchmark.child.is_none();
     for mut camera in &mut cameras {
         camera.is_active = visible;
     }
@@ -165,6 +170,8 @@ pub(crate) fn update(
         preview.asset = Some(scene);
         preview.selected = Some((selected.0.clone(), selected.1));
         preview.ready = false;
+        preview.scene_ready = false;
+        preview.tyre_texture = None;
         preview.failed = false;
     }
     preview.failed = preview.asset.as_ref().is_some_and(|asset| {
@@ -175,7 +182,18 @@ pub(crate) fn update(
             server.get_recursive_dependency_load_state(asset.id()),
             Some(RecursiveDependencyLoadState::Failed(_))
         )
+    }) || preview.tyre_texture.as_ref().is_some_and(|texture| {
+        matches!(
+            server.get_load_state(texture.id()),
+            Some(LoadState::Failed(_))
+        )
     });
+    preview.ready = preview.scene_ready
+        && !preview.failed
+        && preview
+            .tyre_texture
+            .as_ref()
+            .is_none_or(|texture| server.is_loaded_with_dependencies(texture.id()));
 }
 
 fn ready(
@@ -203,8 +221,9 @@ fn ready(
                     preview.selected.as_ref().filter(|(car, _)| car == "gen22")
                 {
                     if name.0 == "tyre" {
-                        material.base_color_texture =
-                            Some(server.load(crate::materials::tyre_texture(None, *compound)));
+                        let texture = server.load(crate::materials::tyre_texture(None, *compound));
+                        material.base_color_texture = Some(texture.clone());
+                        preview.tyre_texture = Some(texture);
                     }
                 }
                 commands
@@ -213,5 +232,5 @@ fn ready(
             }
         }
     }
-    preview.ready = true;
+    preview.scene_ready = true;
 }

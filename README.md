@@ -93,17 +93,17 @@ Normal launches open Game play with the Track tab selected. Choose the circuit, 
 
 **Spa is the only supported circuit in normal builds.** Other track assets are hidden from the menu and rejected by `--track`. To enable unfinished circuits for development, build or run with the opt-in Cargo feature: `cargo run --release -p f1-the-game --features exp -- --assets ./assets`. Experimental builds discover converted circuits such as Silverstone, Bahrain and COTA; deferred Nürburgring assets remain unavailable until their conversion is repaired. The ignored `assets` symlink points at the original asset tree for convenient local launching.
 
-The Video settings page offers Low, Medium, High (default) and Ultra presets, applied immediately and saved with your preferences; `--graphics low|medium|high|ultra` sets one from the command line. Leaving the window during a race opens the pause menu, and rendering is throttled while the window is unfocused.
+The Graphics settings page offers Low, Medium, High (default) and Ultra presets, applied immediately and saved with your preferences; `--graphics low|medium|high|ultra` sets one from the command line. Leaving the window during a race opens the pause menu, and rendering is throttled while the window is unfocused.
 
 Both HUD layouts and wheel dashboards average telemetry on physics ticks. Speed and RPM use a 100 ms window, gaps and tyre/aero readouts use 250 ms, and the best-lap delta uses 200 ms. Numbers refresh at 20 Hz; gears, pedals and warning lights stay immediate. Running clocks show tenths, while completed lap and sector times retain milliseconds. The timing strip keeps all three sector splits, marking old splits LAST until replaced. Position-change notices require 300 ms of continuous change with at least one metre clearance.
 
-Driving aids has Beginner, Balanced and Unassisted presets. Beginner is the default, including automatic gears. Steering guidance follows the racing line when you release steering; strong manual steering overrides it. Corner braking anticipates bends, adds brake pressure and reduces a held accelerator. ABS, traction and stability are separate controls. You still control acceleration. The coloured racing line previews corner speed, and STEER / BRAKE indicators light up during interventions. Pause-menu changes apply immediately. Unassisted disables all aids and automatic shifting.
+Game play → Driving assistance has Beginner, Balanced and Unassisted presets. Beginner is the default, including automatic gears. Steering guidance follows the racing line when you release steering; strong manual steering overrides it. Corner braking anticipates bends, adds brake pressure and reduces a held accelerator. ABS, traction and stability are separate controls. You still control acceleration. The coloured racing line previews corner speed, and STEER / BRAKE indicators light up during interventions. Pause-menu changes apply immediately. Unassisted disables all aids and automatic shifting.
 
 Aids and per-car camera positions persist in `$XDG_CONFIG_HOME/f1-racecraft/preferences.json` (or `~/.config/f1-racecraft/preferences.json`). `F1_SETTINGS` overrides the file. Explicit CLI aid settings override saved aids; `--quick-race` and capture runs use their CLI configuration without reading or writing preferences. Start new race replaces the current session; Resume race keeps it.
 
 ## Performance
 
-On Linux with the NVIDIA driver under Wayland, the game presents through XWayland: NVIDIA's native Wayland presentation waits for each frame to finish before returning, which serialized CPU and GPU work (set `F1_WAYLAND=1` to keep native Wayland). Sky lighting is generated once per circuit rather than every frame. Together these took the High preset from 115 to 236 fps uncapped on an RTX 3050 laptop with unchanged output. Vertical sync is on by default; turn it off in Video or with `--no-vsync`.
+On Linux with the NVIDIA driver under Wayland, the game presents through XWayland: NVIDIA's native Wayland presentation waits for each frame to finish before returning, which serialized CPU and GPU work (set `F1_WAYLAND=1` to keep native Wayland). Sky lighting is generated once per circuit rather than every frame. Together these took the High preset from 115 to 236 fps uncapped on an RTX 3050 laptop with unchanged output. Vertical sync is on by default; turn it off in Graphics or with `--no-vsync`.
 
 - `--benchmark DIR` runs the comparison workload: the selected field, including an automated player,
   already moving and separated on the racing line, for 20 seconds. It checks the
@@ -125,7 +125,7 @@ On Linux with the NVIDIA driver under Wayland, the game presents through XWaylan
 - `--frames N --capture FILE` remains a capture utility. Its old FPS log is
   diagnostic, not the repeatable moving benchmark.
 - `F1_DETERMINISTIC=1` with a capture run advances exactly 1/60 s per frame and restarts temporal jitter with the race, so captures from different builds can be compared pixel by pixel.
-- Settings → Video has presets plus detailed video settings (anti-aliasing, sharpening, shadows, ambient occlusion, sky, haze, texture detail, AI car detail and Bevy post-processing). Texture detail applies from the next race. Imported textures use BC7 on supported GPUs, keeping Ultra maps at full resolution. The first load encodes and caches blocks in `$XDG_CACHE_HOME/f1-racecraft/bc7-v1`, or `~/.cache/f1-racecraft/bc7-v1`; later loads reuse them. `F1_VIDEO` takes a JSON `graphics::Video` and overrides the settings, including for `--frames` captures and benchmarks.
+- Settings → Graphics has presets plus detailed video settings (anti-aliasing, sharpening, shadows, ambient occlusion, sky, haze, texture detail, AI car detail and Bevy post-processing). Texture detail applies from the next race. Imported textures use BC7 on supported GPUs, keeping Ultra maps at full resolution. The first load encodes and caches blocks in `$XDG_CACHE_HOME/f1-racecraft/bc7-v1`, or `~/.cache/f1-racecraft/bc7-v1`; later loads reuse them. `F1_VIDEO` takes a JSON `graphics::Video` and overrides the settings, including for `--frames` captures and benchmarks.
 - `F1_PROFILE=1` logs per-pass CPU and GPU timings; `--features profile` writes a Chrome trace for ui.perfetto.dev.
 - F3 shows frame rate and frame times in game.
 
@@ -205,7 +205,7 @@ car ahead at a zone's detection point may open the flap in that zone with F
 closes it. An open flap removes about 10% of the car's drag and some rear
 downforce. The 2010 RB6 predates DRS and has none.
 
-**DRS anywhere** (Driving page, or `--drs-anywhere`) drops the zone and
+**DRS anywhere** (Game play → Driving assistance, or `--drs-anywhere`) drops the zone and
 one-second rules for your car: F opens the flap anywhere on track from the
 start, and braking still closes it. AI cars keep to the race rules. The
 setting is saved with your other aids.

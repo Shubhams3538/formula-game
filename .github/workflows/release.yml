@@ -6,11 +6,16 @@ on:
       - "v*"
   workflow_dispatch:
 
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
 permissions:
   contents: read
 
 env:
   ASSET_ARCHIVE_URL: https://fbs.jr4.in/s/f1-assets
+  ASSET_ARCHIVE_SHA256: fd4cc0b231967b18d628e2883686498cd676b7ffc0d599c211502e06f039dbf0
 
 jobs:
   build-linux:
@@ -57,11 +62,11 @@ jobs:
         run: |
           curl --fail --location --retry 3 --retry-all-errors \
             "$ASSET_ARCHIVE_URL" --output "$RUNNER_TEMP/f1-assets.zip"
-          unzip -q "$RUNNER_TEMP/f1-assets.zip" -d "$GITHUB_WORKSPACE"
+          python tools/package/extract_assets.py "$RUNNER_TEMP/f1-assets.zip" "$RUNNER_TEMP/game-assets/assets" --sha256 "$ASSET_ARCHIVE_SHA256"
 
       - name: Build normal and experimental AppImages
         run: |
-          export F1_PACKAGE_ASSETS="$GITHUB_WORKSPACE/assets"
+          export F1_PACKAGE_ASSETS="$RUNNER_TEMP/game-assets/assets"
           python tools/package/build_appimage.py
           python tools/package/build_appimage.py --exp
 
@@ -78,7 +83,7 @@ jobs:
     env:
       CARGO_BUILD_JOBS: "2"
       CARGO_PROFILE_RELEASE_DEBUG: "0"
-      F1_PACKAGE_ASSETS: ${{ github.workspace }}/assets
+      F1_PACKAGE_ASSETS: ${{ runner.temp }}/game-assets/assets
     steps:
       - uses: actions/checkout@v7
         with:
@@ -119,7 +124,7 @@ jobs:
         run: |
           $archive = Join-Path $env:RUNNER_TEMP 'f1-assets.zip'
           Invoke-WebRequest -Uri $env:ASSET_ARCHIVE_URL -OutFile $archive
-          Expand-Archive -LiteralPath $archive -DestinationPath $env:GITHUB_WORKSPACE -Force
+          python tools/package/extract_assets.py $archive (Join-Path $env:RUNNER_TEMP 'game-assets/assets') --sha256 $env:ASSET_ARCHIVE_SHA256
 
       - name: Build the portable EXE
         shell: pwsh
@@ -160,7 +165,6 @@ jobs:
           cd dist
           sha256sum \
             F1-Racecraft-*-linux-x86_64.AppImage \
-            F1-Racecraft-*-exp-linux-x86_64.AppImage \
             F1-Racecraft-*-windows-x86_64.exe > SHA256SUMS
 
       - name: Create or update the GitHub Release
@@ -170,12 +174,18 @@ jobs:
           REPOSITORY: ${{ github.repository }}
         run: |
           if gh release view "$TAG" --repo "$REPOSITORY" >/dev/null 2>&1; then
-            gh release upload "$TAG" dist/* --repo "$REPOSITORY" --clobber
+            echo "Release $TAG already exists; published assets are immutable. Use a new version tag." >&2
+            exit 1
           else
+            flags=()
+            if [[ "$TAG" == *-* ]]; then
+              flags+=(--prerelease --latest=false)
+            fi
             gh release create "$TAG" dist/* \
               --repo "$REPOSITORY" \
               --title "F1 Racecraft $TAG" \
               --generate-notes \
-              --verify-tag \
-              --latest
+              --draft \
+              --verify-tag "${flags[@]}"
+            gh release edit "$TAG" --repo "$REPOSITORY" --draft=false "${flags[@]}"
           fi
