@@ -54,7 +54,7 @@ pub fn prepare(
     }
 }
 
-fn tyre_texture(lod: Option<&str>, compound: racecraft_sim::Compound) -> String {
+pub(crate) fn tyre_texture(lod: Option<&str>, compound: racecraft_sim::Compound) -> String {
     let compound = compound.label().to_ascii_lowercase();
     let directory = lod.map_or_else(String::new, |lod| format!("{lod}/"));
     format!("cars/gen22/tyres/{directory}{compound}.png")
@@ -87,7 +87,7 @@ impl CompoundMaterials {
     }
 }
 
-fn calibrate(name: &str, material: &mut StandardMaterial) {
+pub(crate) fn calibrate(name: &str, material: &mut StandardMaterial) {
     if name.starts_with("source_paint_") {
         // Neutral stock paint also handles older assets with embedded artwork.
         material.base_color_texture = None;
@@ -192,7 +192,7 @@ mod tests {
     fn tyre_review(
         mut commands: Commands,
         mut session: ResMut<crate::Session>,
-        mut cameras: Query<(&mut Transform, &mut Projection), With<Camera3d>>,
+        mut cameras: Query<(&mut Transform, &mut Projection), With<bevy_egui::PrimaryEguiContext>>,
         surfaces: Query<
             (
                 &CarSurface,

@@ -45,7 +45,7 @@ download with `sha256sum --check --ignore-missing SHA256SUMS`.
 - Choose digital or analog instruments, full-circuit or nearby minimaps, and graphics presets.
 - Select V6 turbo hybrid, V8, or V12 procedural engine voices and adjust the sound mix.
 
-**Start here:** choose your car in Race setup, leave Beginner aids enabled, and
+**Start here:** choose your car in Game play → Car setup, leave Beginner aids enabled, and
 select Start race. Hold **W** to accelerate, use **A/D** to steer and **S** to brake.
 **Esc** opens the pause menu; **C** cycles cameras; **R** recovers the car;
 **F** (gamepad **B**) opens DRS when the badge above the dash is outlined green.
@@ -89,7 +89,7 @@ assets/
 
 `tools/track/convert_spa.py` converts the upstream Spa track; `tools/car/prepare_car.py` prepares car models through Blender. Their module docstrings describe the source formats and arguments. The game uses the glTF files directly through Bevy. Car scenes must contain `body`, `wheel_fl`, `wheel_fr`, `wheel_rl` and `wheel_rr` nodes, with wheel pivots at their centres. The simulation and assets use +Z forward, +Y up, +X left, in metres.
 
-Normal launches open Race setup. Choose the circuit, car, laps, AI field, grid slot, tyres and wings, then select Start race. The race waits for its scenes to load before starting the countdown. `--quick-race` skips the menu using the CLI configuration; `--frames` also skips it for capture/testing. GEN22 uses one shared stock car with neutral body paint. Custom team liveries are developed in a separate branch stacked on 2.0. Team and driver selections control race identities and HUD colours. Use `--car gen22 --team ferrari --driver leclerc` to choose a 2022 entry, or `--car rb6` for a legacy race. Team and driver default to the first team and its first driver in `teams.json`; `--car rb22` remains a deprecated alias for `gen22`. Run `cargo run -p f1-the-game -- --help` for the full CLI.
+Normal launches open Game play with the Track tab selected. Choose the circuit, laps, AI field, grid slot, tyres and wings there. Open its Car setup tab to choose the car, team and driver by name, then select Start race. Track and Car setup show the circuit outline with a live car preview beneath it. The race waits for its scenes to load before starting the countdown. `--quick-race` skips the menu using the CLI configuration; `--frames` also skips it for capture/testing. GEN22 uses one shared stock car with neutral body paint. Custom team liveries are developed in a separate branch stacked on 2.0. Team and driver selections control race identities and HUD colours. Use `--car gen22 --team ferrari --driver leclerc` to choose a 2022 entry, or `--car rb6` for a legacy race. Team and driver default to the first team and its first driver in `teams.json`; `--car rb22` remains a deprecated alias for `gen22`. Run `cargo run -p f1-the-game -- --help` for the full CLI.
 
 **Spa is the only supported circuit in normal builds.** Other track assets are hidden from the menu and rejected by `--track`. To enable unfinished circuits for development, build or run with the opt-in Cargo feature: `cargo run --release -p f1-the-game --features exp -- --assets ./assets`. Experimental builds discover converted circuits such as Silverstone, Bahrain and COTA; deferred Nürburgring assets remain unavailable until their conversion is repaired. The ignored `assets` symlink points at the original asset tree for convenient local launching.
 
@@ -148,7 +148,7 @@ reports, screenshot files and repeated drive hashes. It requires Weston and
 a Vulkan-capable GPU. Frame times can differ with GPU load and clock speed;
 the repeatability check compares the workload, not a performance threshold.
 
-`tools/verify_settings.sh ASSETS NEW_OUTPUT_DIRECTORY` checks all seven menu
+`tools/verify_settings.sh ASSETS NEW_OUTPUT_DIRECTORY` checks all ten menu
 tabs, pause and camera-editor layouts at 1920×1080, 958×1078 and 640×600. It
 clicks the Benchmark button on the wide layout, waits for the real child
 process and report, and checks that the original race stays paused and intact.
@@ -215,7 +215,7 @@ GEN22 retains original per-part UVs and baked ambient occlusion, with neutral bo
 
 The HUD includes the timing tower, lap times, countdown lights, race messages, shift lights, speed, pedals, tyre temperatures/wear, lock-up/sliding indicators, aero effects, minimap and results.
 
-Open **Interface** from Race setup or the pause menu to choose between **Digital cockpit**, with illuminated segments and a neutral gear aperture, and **Analog telemetry**, with separate metal-rimmed RPM, speed, pedal and G-force instruments. Tyre temperatures and live tow/wake effects use needle gauges in both layouts. The unboxed minimap supports Full circuit and Nearby track modes. Driving-aid buttons, camera shortcut strips and map headings are omitted while racing; their settings and keyboard shortcuts remain available. The G-force plot uses one G per ring. Both layouts use live simulation data and leave the physical cockpit wheel visible.
+Open **Interface** from the settings sidebar or the pause menu to choose between **Digital cockpit**, with illuminated segments and a neutral gear aperture, and **Analog telemetry**, with separate metal-rimmed RPM, speed, pedal and G-force instruments. Tyre temperatures and live tow/wake effects use needle gauges in both layouts. The unboxed minimap supports Full circuit and Nearby track modes. Driving-aid buttons, camera shortcut strips and map headings are omitted while racing; their settings and keyboard shortcuts remain available. The G-force plot uses one G per ring. Both layouts use live simulation data and leave the physical cockpit wheel visible.
 
 The minimap setting is independent: **Full circuit** shows the whole field; **Nearby track** magnifies the road around the car with the road ahead pointing up, while compressing distant sections to keep the complete circuit visible. Neither mode uses a rectangular background or crops the track. Both choices apply immediately, survive new races, and are saved with your other preferences. Automated capture runs use the defaults and never write your preferences.
 

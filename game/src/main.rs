@@ -231,7 +231,13 @@ fn build_app(mut options: Options) -> Result<App, String> {
         .init_resource::<assets::OpponentLodDistance>()
         .add_systems(
             Startup,
-            (assets::setup, hud::setup, audio::setup, wheel_dash::setup),
+            (
+                assets::setup,
+                hud::setup,
+                audio::setup,
+                wheel_dash::setup,
+                menu::car_preview::setup,
+            ),
         )
         .add_systems(PreUpdate, controls::update.after(bevy::input::InputSystems))
         .add_systems(Update, pause_on_focus_loss.before(menu::apply))
@@ -250,6 +256,7 @@ fn build_app(mut options: Options) -> Result<App, String> {
                 wheel_dash::attach,
                 wheel_dash::lights,
                 camera::update,
+                menu::car_preview::update,
                 assets::helmet_visibility,
                 audio::update,
                 driving::racing_line,

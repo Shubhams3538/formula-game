@@ -411,7 +411,7 @@ pub fn apply(
     frontend: Res<crate::menu::Frontend>,
     mut applied: Local<Option<(Video, bool)>>,
     mut windows: Query<&mut Window>,
-    cameras: Query<Entity, With<Camera3d>>,
+    cameras: Query<Entity, (With<Camera3d>, With<bevy_egui::PrimaryEguiContext>)>,
     mut lights: Query<(Entity, &mut DirectionalLight)>,
     mut shadow_map: ResMut<DirectionalLightShadowMap>,
     mut textures: ResMut<crate::textures::TextureDetail>,

@@ -292,7 +292,7 @@ fn snap_camera(mut session: ResMut<Session>, view: Res<ProbeCamera>) {
 fn spectator_camera(
     session: Res<Session>,
     view: Res<ProbeCamera>,
-    mut cameras: Query<(&mut Transform, &mut Projection), With<Camera3d>>,
+    mut cameras: Query<(&mut Transform, &mut Projection), With<bevy_egui::PrimaryEguiContext>>,
 ) {
     let ProbeCamera::Spectator(offset) = *view else {
         return;
