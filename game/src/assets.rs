@@ -19,6 +19,28 @@ pub const PLAYER_SHADOW_LAYER: usize = 1;
 #[derive(Component)]
 pub struct PlayerShadowProxy;
 
+/// How far the player's shadow proxy is pulled inside the visible body, metres.
+const PLAYER_SHADOW_INSET: f32 = 0.03;
+
+/// A copy of `mesh` with every vertex moved `distance` against its normal.
+fn inset_mesh(mesh: &Mesh, distance: f32) -> Option<Mesh> {
+    let VertexAttributeValues::Float32x3(normals) = mesh.attribute(Mesh::ATTRIBUTE_NORMAL)? else {
+        return None;
+    };
+    let normals = normals.clone();
+    let mut inset = mesh.clone();
+    let Some(VertexAttributeValues::Float32x3(positions)) =
+        inset.attribute_mut(Mesh::ATTRIBUTE_POSITION)
+    else {
+        return None;
+    };
+    for (position, normal) in positions.iter_mut().zip(&normals) {
+        let normal = Vec3::from_array(*normal).normalize_or_zero();
+        *position = (Vec3::from_array(*position) - normal * distance).to_array();
+    }
+    Some(inset)
+}
+
 /// Default distance at which opponent meshes crossfade (over ten metres).
 pub const OPPONENT_LOD_DISTANCE: f32 = 40.;
 const OPPONENT_LOD_MARGIN: f32 = 5.;
@@ -296,7 +318,7 @@ fn visual_ready(
     nodes: Query<(&Name, &Transform)>,
     material_names: Query<&bevy::gltf::GltfMaterialName>,
     mesh_handles: Query<&Mesh3d>,
-    meshes: Res<Assets<Mesh>>,
+    mut meshes: ResMut<Assets<Mesh>>,
     session: Res<Session>,
     lod_distance: Res<OpponentLodDistance>,
     mut exit: MessageWriter<AppExit>,
@@ -340,6 +362,17 @@ fn visual_ready(
                         ));
                     if car.entrant == session.player {
                         commands.entity(entity).insert(PlayerShadowProxy);
+                        // The proxy is the coarser opponent model. Where its facets
+                        // stand proud of the detailed body they shadow it in bands
+                        // across the cockpit, so the player's copy sits just inside.
+                        let inset = mesh_handles
+                            .get(entity)
+                            .ok()
+                            .and_then(|handle| meshes.get(&handle.0))
+                            .and_then(|mesh| inset_mesh(mesh, PLAYER_SHADOW_INSET));
+                        if let Some(inset) = inset {
+                            commands.entity(entity).insert(Mesh3d(meshes.add(inset)));
+                        }
                     }
                 } else if (car.entrant == session.player
                     && session.identities[car.entrant].is_some())
