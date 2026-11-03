@@ -15,7 +15,7 @@ permissions:
 
 env:
   ASSET_ARCHIVE_URL: https://fbs.jr4.in/s/f1-assets
-  ASSET_ARCHIVE_SHA256: fd4cc0b231967b18d628e2883686498cd676b7ffc0d599c211502e06f039dbf0
+  ASSET_ARCHIVE_SHA256: 68ae3a48b726ffa5789ca049ebc438e77db8aca6fa91a46755c1376ae4053e7d
 
 jobs:
   build-linux:
