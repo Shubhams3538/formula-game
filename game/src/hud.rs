@@ -382,17 +382,6 @@ fn draw_map(hud: &Hud, _style: &HudStyle, session: &Session, mode: MapMode, scal
             rect.top() + point.1 * rect.height(),
         )
     };
-    if mode == MapMode::Nearby {
-        // A smoked backdrop keeps the magnified road legible over scenery.
-        hud.fill_round(
-            mx,
-            my,
-            size,
-            size,
-            18. * scale,
-            Color::from_black_alpha(120),
-        );
-    }
     let points = &session.minimap.points;
     let ink = hud.finish.colors().ink;
     for index in 0..points.len() {

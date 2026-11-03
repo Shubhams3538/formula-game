@@ -263,7 +263,7 @@ impl AiDriver {
             // In a pack there is no room to give; the pack rules apply.
             let arriving = !packed
                 && rival.gap < 0.0
-                && rival.gap > -car.spec.length * 2.5
+                && rival.gap > -car.spec.length * 1.5
                 && rival.speed > speed + 1.0;
             let alongside = overlapping || arriving;
             // Only a car we are about to run into needs a lane change, and
@@ -368,6 +368,24 @@ impl AiDriver {
         // corners, little in slow ones where mechanical grip dominates.
         target_speed *=
             (1.0 - car.aero.dirty_air() * front_downforce_share(car, target_speed)).sqrt();
+        // A bend taken flat in clean air has no speed limit to scale, so cap
+        // it at what the car can corner with the downforce lost to the car
+        // ahead. Ordinary corners already plan for dirty air above.
+        if car.aero.dirty_air() > 0.01 {
+            let bend = (0..=6)
+                .map(|step| {
+                    track.racing_line.curvature[track.station_at(ahead + step as f64 * 8.0)].abs()
+                })
+                .fold(0.0, f64::max);
+            let clean = self.dirty_air_corner_limit(car, bend, 0.0);
+            let planned = self.target_speed(track, ahead);
+            // The plan asks for more than steady clean-air cornering gives:
+            // a flat-out bend. Scale it by what the dirty air takes away.
+            if planned > FAST_BEND && planned >= clean * 0.98 && clean.is_finite() {
+                let dirty = self.dirty_air_corner_limit(car, bend, car.aero.dirty_air());
+                target_speed = target_speed.min(planned * dirty / clean);
+            }
+        }
         // Running wide with the wheel already wound on: lift until the line comes back.
         let curvature = track.racing_line.curvature[track.station_at(s)];
         let wide = (car.track_position.lateral - lateral_target) * -curvature.signum();
@@ -389,7 +407,10 @@ impl AiDriver {
                 target_speed = target_speed.min(rival.speed - 1.0);
             }
             // Our lane now, or the one we are steering into.
-            let clear = car.spec.width + 0.3;
+            // A much slower car (crashed, spinning or rejoining) takes more
+            // room than its width, so give it a wider berth.
+            let crawling = rival.speed < speed * 0.6;
+            let clear = car.spec.width + if crawling { 1.8 } else { 0.3 };
             let in_line = (rival.lateral - car.track_position.lateral).abs() < clear
                 || (rival.lateral - lateral_target).abs() < clear;
             if in_line && rival.gap > 0.0 {
@@ -586,6 +607,10 @@ fn in_pack(car: &Car, rivals: &[Rival]) -> bool {
         >= 2
 }
 
+/// Planned speed (m/s, ~250 km/h) above which a bend counts as flat out
+/// for the dirty-air cap; slower corners plan for dirty air directly.
+const FAST_BEND: f64 = 70.0;
+
 /// Above this speed (m/s) drive torque no longer threatens rear grip, so
 /// steering lock stops trimming the throttle.
 const TRACTION_SPEED: f64 = 60.0;
@@ -627,6 +652,25 @@ fn speed_profile(profile: DriverProfile, car: &Car, line: &RacingLine, tyre_grip
 
 /// Share of the car's real grip a bend must fit within to be taken flat.
 const FLAT_MARGIN: f64 = 0.96;
+
+impl AiDriver {
+    /// Highest steady speed for `curvature` with this car's downforce cut by
+    /// `dirty` (0 = clean air), using the same grip the plan uses. Infinite
+    /// when downforce alone holds the bend at any speed.
+    fn dirty_air_corner_limit(&self, car: &Car, curvature: f64, dirty: f64) -> f64 {
+        let spec = &car.spec;
+        let grip = spec.tyre_friction * GRIP_MARGIN * self.profile.pace * self.planned_grip;
+        let lift = car.setup.front_lift_area(&spec.aero) * (1.0 - dirty)
+            + car.setup.rear_lift_area(&spec.aero) * (1.0 - dirty * 0.5);
+        let downforce = 0.5 * crate::car::AIR_DENSITY * lift / spec.mass;
+        let denominator = curvature - grip * downforce;
+        if denominator <= 1e-9 {
+            f64::INFINITY
+        } else {
+            (grip * crate::car::GRAVITY / denominator).sqrt()
+        }
+    }
+}
 
 /// Fraction of the front axle's load that comes from downforce at `speed`.
 fn front_downforce_share(car: &Car, speed: f64) -> f64 {

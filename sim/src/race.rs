@@ -66,7 +66,15 @@ pub struct Entrant {
     /// Last on-track pose and its centerline station, used to recover a car
     /// that is stuck or beached.
     safe_pose: (DVec3, f64, usize),
+    /// Seconds left in which a recovered car passes through other cars, so a
+    /// rejoin can never start a fresh pile-up.
+    pub ghost: f64,
 }
+
+/// Seconds a recovered car ignores car-to-car contact while it gets going.
+pub const RECOVERY_GHOST: f64 = 3.0;
+/// Metres behind a rejoin spot that must be free of cars in its lane.
+const REJOIN_CLEAR_BEHIND: f64 = 120.0;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Phase {
@@ -163,6 +171,7 @@ impl Race {
                     livery: config.livery,
                     drs: drs::Tracker::default(),
                     safe_pose: (position, yaw, track_station),
+                    ghost: 0.0,
                 }
             })
             .collect();
@@ -243,6 +252,9 @@ impl Race {
             entrant.car.step(&input, &self.track, dt);
         }
 
+        for entrant in &mut self.entrants {
+            entrant.ghost = (entrant.ghost - dt).max(0.0);
+        }
         self.resolve_wall_contacts();
         self.resolve_car_contacts();
         self.recover_stuck_cars();
@@ -387,6 +399,9 @@ impl Race {
         for first in 0..count {
             for second in first + 1..count {
                 let (left, right) = self.entrants.split_at_mut(second);
+                if left[first].ghost > 0.0 || right[0].ghost > 0.0 {
+                    continue;
+                }
                 let a = &mut left[first].car;
                 let b = &mut right[0].car;
                 let separation =
@@ -459,39 +474,47 @@ impl Race {
         }
     }
 
-    /// A pose on the racing line near `s` that no other car occupies, so
-    /// recovered cars never land inside a pile-up and get recovered again.
+    /// A rejoin pose near `s`: at the edge away from the racing line, clear of
+    /// other cars and of anyone coming up behind in that lane, so a recovered
+    /// car does not land in front of the traffic it just left.
     fn clear_spot(&self, index: usize, s: f64) -> (DVec3, f64) {
         let clearance = self.entrants[index].car.spec.length * 1.6;
-        let occupied = |point: DVec3| {
+        let blocked = |spot_s: f64, point: DVec3, lateral: f64| {
             self.entrants.iter().enumerate().any(|(other, entrant)| {
-                other != index
-                    && DVec2::new(
-                        entrant.car.position.x - point.x,
-                        entrant.car.position.z - point.z,
-                    )
-                    .length()
-                        < clearance
+                if other == index {
+                    return false;
+                }
+                let car = &entrant.car;
+                let near = DVec2::new(car.position.x - point.x, car.position.z - point.z).length()
+                    < clearance;
+                let behind = self.track.delta(car.track_position.s, spot_s);
+                let coming = (0.0..REJOIN_CLEAR_BEHIND).contains(&behind)
+                    && (car.track_position.lateral - lateral).abs() < car.spec.width + 1.5;
+                near || coming
             })
         };
         let pose = |along: f64, side: f64| {
-            let s = s + along;
+            let s = self.track.wrap(s + along);
             let frame = self.track.frame_at(s);
             let line = self.track.racing_line.offsets[self.track.station_at(s)];
             let limit = (frame.half_width - 1.5).max(0.0);
-            let position = frame.point_at((line + side).clamp(-limit, limit));
-            (position, frame.tangent.x.atan2(frame.tangent.y))
+            // Off the line: the edge on the side the line is not using.
+            let edge = if line >= 0.0 { -limit } else { limit };
+            let lateral = (edge + side).clamp(-limit, limit);
+            let position = frame.point_at(lateral);
+            (s, lateral, position, frame.tangent.x.atan2(frame.tangent.y))
         };
-        // Prefer a short step forward (out of the queue), then further back.
-        for along in [0.0, 12.0, 24.0, -12.0, 36.0, -24.0, 48.0, 60.0] {
-            for side in [0.0, 3.5, -3.5] {
-                let (position, yaw) = pose(along, side);
-                if !occupied(position) {
+        // Prefer staying put, then a little further back, then forward.
+        for along in [0.0, -15.0, -30.0, -45.0, 15.0, -60.0, -80.0, 30.0] {
+            for side in [0.0, 2.0, -2.0] {
+                let (spot_s, lateral, position, yaw) = pose(along, side);
+                if !blocked(spot_s, position, lateral) {
                     return (position, yaw);
                 }
             }
         }
-        pose(0.0, 0.0)
+        let (_, _, position, yaw) = pose(0.0, 0.0);
+        (position, yaw)
     }
 
     /// Moves a car to a new pose and keeps its race distance consistent.
@@ -500,8 +523,10 @@ impl Race {
         let entrant = &mut self.entrants[index];
         let before = entrant.car.track_position.s;
         reset_car(&mut entrant.car, &track, position, yaw, station);
-        // A recovered car gives up any DRS it had earned.
+        // A recovered car gives up any DRS it had earned, and passes through
+        // other cars until it is back up to speed.
         entrant.drs.reset();
+        entrant.ghost = RECOVERY_GHOST;
         entrant.timing.distance += track.delta(before, entrant.car.track_position.s);
     }
 
@@ -1179,6 +1204,229 @@ mod human_passing {
             );
             assert_eq!(contacts, 0, "side {side}: {contacts} contacts");
             let _ = (ai_toward, me, ai, gap);
+        }
+    }
+}
+
+/// Needs converted assets: `F1_ASSETS=assets cargo test -p racecraft-sim -- --ignored race_with`.
+#[cfg(test)]
+mod race_with_player {
+    use super::*;
+    use crate::car::spec::test_wheels;
+
+    pub(super) fn run(
+        seed: u64,
+        seconds: f64,
+        verbose: bool,
+    ) -> (usize, usize, usize, usize, usize) {
+        let root = std::env::var("F1_ASSETS").unwrap();
+        let track = Arc::new(Track::load(std::path::Path::new(&root).join("tracks/spa")).unwrap());
+        let spec = Arc::new(CarSpec::gen22(test_wheels(), 5.4, 1.9));
+        const PLAYER: usize = 9;
+        let entrants: Vec<_> = (0..22)
+            .map(|slot| EntrantConfig {
+                name: if slot == PLAYER {
+                    "You".into()
+                } else {
+                    format!("AI{slot}")
+                },
+                spec: spec.clone(),
+                setup: Setup::default(),
+                assists: Assists {
+                    automatic_gears: true,
+                    braking: 1.0,
+                    auto_drs: slot == PLAYER,
+                    ..Assists::default()
+                },
+                ai: (slot != PLAYER).then_some(DriverProfile {
+                    pace: 0.985 - 0.006 * slot as f64,
+                    aggression: 0.3 + 0.03 * (slot % 10) as f64,
+                    consistency: 0.97,
+                }),
+                human_slot: 0,
+                livery: [1.0; 3],
+            })
+            .collect();
+        let mut race = Race::new(track.clone(), entrants, 3, seed);
+        // A beginner on full guidance: the AI line and braking, no grid lane.
+        let mut you = AiDriver::new(
+            DriverProfile {
+                pace: 0.9,
+                aggression: 0.0,
+                consistency: 1.0,
+            },
+            &race.entrants[PLAYER].car,
+            &track,
+            99,
+        );
+        let (mut contacts, mut mine, mut heavy, mut recoveries, mut in_my_path) = (0, 0, 0, 0, 0);
+        let mut last: Vec<DVec3> = race.entrants.iter().map(|e| e.car.position).collect();
+        while race.phase != Phase::Racing || race.time < seconds {
+            let rivals = race.rivals_of(PLAYER);
+            let input = you.drive(
+                &race.entrants[PLAYER].car,
+                &track,
+                &rivals,
+                1.0 / PHYSICS_RATE,
+            );
+            race.step(&[input]);
+            for e in &race.events {
+                if let RaceEvent::Contact {
+                    a,
+                    b: Some(b),
+                    impulse,
+                } = e
+                {
+                    contacts += 1;
+                    if *a == PLAYER || *b == PLAYER {
+                        mine += 1;
+                    }
+                    if *impulse > 8000.0 {
+                        heavy += 1;
+                    }
+                    if verbose && (*impulse > 8000.0 || *a == PLAYER || *b == PLAYER) {
+                        let (ca, cb) = (&race.entrants[*a].car, &race.entrants[*b].car);
+                        let ahead = track.delta(ca.track_position.s, cb.track_position.s);
+                        print!("seed {seed} ahead(b-a) {ahead:+.1} ");
+                        println!("  contact t={:.1} s={:.0} {a}/{b} lat {:+.1}/{:+.1} v {:.0}/{:.0} imp {impulse:.0}", race.time, ca.track_position.s, ca.track_position.lateral, cb.track_position.lateral, ca.speed()*3.6, cb.speed()*3.6);
+                    }
+                }
+            }
+            race.events.clear();
+            for (index, entrant) in race.entrants.iter().enumerate() {
+                let jump = (entrant.car.position - last[index]).length();
+                if jump > 6.0 && index != PLAYER {
+                    recoveries += 1;
+                    let _ = verbose;
+                    let ahead = track.delta(
+                        race.entrants[PLAYER].car.track_position.s,
+                        entrant.car.track_position.s,
+                    );
+                    if (0.0..150.0).contains(&ahead) {
+                        in_my_path += 1;
+                    }
+                    if verbose {
+                        println!(
+                            "  recovery t={:.1} car {index} at s={:.0}, {ahead:+.0} m from you",
+                            race.time, entrant.car.track_position.s
+                        );
+                    }
+                }
+                last[index] = entrant.car.position;
+            }
+        }
+        (contacts, mine, heavy, recoveries, in_my_path)
+    }
+
+    #[test]
+    #[ignore]
+    fn race_with_a_player() {
+        if std::env::var("F1_ASSETS").is_err() {
+            return;
+        }
+        let mut total = [0usize; 5];
+        for seed in 1..=8 {
+            let r = run(seed, 150.0, false);
+            for (sum, value) in total.iter_mut().zip([r.0, r.1, r.2, r.3, r.4]) {
+                *sum += value;
+            }
+        }
+        println!(
+            "TOTAL 8 races: contacts {}, yours {}, heavy {}, recoveries {}, in your path {}",
+            total[0], total[1], total[2], total[3], total[4]
+        );
+    }
+}
+
+#[cfg(test)]
+mod tow_strength {
+    use super::*;
+    use crate::car::spec::test_wheels;
+    #[test]
+    #[ignore]
+    fn tow_gain_on_kemmel() {
+        let Ok(root) = std::env::var("F1_ASSETS") else {
+            return;
+        };
+        let track = Arc::new(Track::load(std::path::Path::new(&root).join("tracks/spa")).unwrap());
+        let spec = Arc::new(CarSpec::gen22(test_wheels(), 5.4, 1.9));
+        let speed_after = |gap: Option<f64>| {
+            let mut entrants = vec![EntrantConfig {
+                name: "You".into(),
+                spec: spec.clone(),
+                setup: Setup::default(),
+                assists: Assists {
+                    automatic_gears: true,
+                    ..Assists::default()
+                },
+                ai: None,
+                human_slot: 0,
+                livery: [1.0; 3],
+            }];
+            if gap.is_some() {
+                entrants.push(EntrantConfig {
+                    name: "Ahead".into(),
+                    spec: spec.clone(),
+                    setup: Setup::default(),
+                    assists: Assists {
+                        automatic_gears: true,
+                        ..Assists::default()
+                    },
+                    ai: Some(DriverProfile {
+                        pace: 0.95,
+                        aggression: 0.0,
+                        consistency: 1.0,
+                    }),
+                    human_slot: 1,
+                    livery: [1.0; 3],
+                });
+            }
+            let mut race = Race::new(track.clone(), entrants, 3, 7);
+            race.phase = Phase::Racing;
+            let line = track.racing_line.offsets[track.station_at(1500.0)];
+            let place = |car: &mut Car, s: f64| {
+                let frame = track.frame_at(s);
+                car.position = frame.point_at(line) + glam::DVec3::Y * 0.3;
+                car.yaw = frame.tangent.x.atan2(frame.tangent.y);
+                car.velocity = car.forward() * 75.0;
+                car.track_position = track.project(car.position, None);
+                car.powertrain.gear = 8;
+            };
+            place(&mut race.entrants[0].car, 1500.0);
+            if let Some(gap) = gap {
+                place(&mut race.entrants[1].car, 1500.0 + gap);
+            }
+            for e in &mut race.entrants {
+                e.timing.distance = e.car.track_position.s;
+                e.timing.laps_completed = 1;
+            }
+            for _ in 0..(6.0 * PHYSICS_RATE) as usize {
+                let follow = race
+                    .entrants
+                    .get(1)
+                    .map_or(line, |e| e.car.track_position.lateral);
+                let car = &race.entrants[0].car;
+                let frame = track.frame_at(car.track_position.s + 30.0);
+                let target = frame.point_at(follow);
+                let offset = DVec2::new(target.x - car.position.x, target.z - car.position.z);
+                let curvature = 2.0 * offset.dot(car.left()) / offset.length_squared().max(1.0);
+                let steer = ((car.spec.wheelbase() * curvature).atan()
+                    / car.steer_limit(car.speed()))
+                .clamp(-1.0, 1.0);
+                race.step(&[CarInput {
+                    steer,
+                    throttle: 1.0,
+                    ..CarInput::default()
+                }]);
+            }
+            race.entrants[0].car.speed() * 3.6
+        };
+        let alone = speed_after(None);
+        for gap in [15.0, 30.0, 60.0, 90.0] {
+            println!(
+                "tow at {gap:3} m: +{:.1} km/h after 6 s (alone {alone:.0})",
+                speed_after(Some(gap)) - alone
+            );
         }
     }
 }

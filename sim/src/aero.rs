@@ -12,12 +12,12 @@
 
 use crate::car::{AeroInfluence, Car};
 
-/// Wake length that still gives a tow, metres: about 1.2 s at 300 km/h.
-pub const SLIPSTREAM_RANGE: f64 = 100.0;
+/// Wake length that still gives a tow, metres: about 1.7 s at 300 km/h.
+pub const SLIPSTREAM_RANGE: f64 = 140.0;
 /// Range where dirty air costs downforce, metres.
 pub const DIRTY_AIR_RANGE: f64 = 40.0;
 /// Peak drag reduction right behind another car.
-pub const MAX_SLIPSTREAM: f64 = 0.24;
+pub const MAX_SLIPSTREAM: f64 = 0.3;
 /// Peak front downforce loss right behind another car.
 pub const MAX_DIRTY_AIR: f64 = 0.24;
 
@@ -52,13 +52,13 @@ pub fn influence(follower: &Car, leader: &Car, track_length: f64) -> AeroInfluen
     }
     let lateral = (follower.track_position.lateral - leader.track_position.lateral).abs();
     // The wake spreads to about two car widths across by the end of its range.
-    let half_width = 1.2 + behind * 0.025;
+    let half_width = 1.4 + behind * 0.03;
     let in_wake = (1.0 - (lateral / half_width).powi(2)).max(0.0);
     if in_wake == 0.0 {
         return AeroInfluence::default();
     }
-    // Gentle falloff: still ~40% of the peak tow at half range.
-    let tow = MAX_SLIPSTREAM * (1.0 - behind / SLIPSTREAM_RANGE).powf(1.3) * in_wake;
+    // Linear falloff: half the peak tow at half range.
+    let tow = MAX_SLIPSTREAM * (1.0 - behind / SLIPSTREAM_RANGE) * in_wake;
     // Dirty air matters for aerodynamic corners, not hairpins.
     let speed_factor = smoothstep(22.0, 55.0, follower.speed());
     let dirty = if behind < DIRTY_AIR_RANGE {
