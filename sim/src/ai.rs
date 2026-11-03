@@ -500,9 +500,9 @@ const LOAD_SENSITIVITY: f64 = 0.04;
 /// the physical car, rather than assuming optimal tyres for the whole race.
 fn speed_profile(profile: DriverProfile, car: &Car, track: &Track, tyre_grip: f64) -> Vec<f64> {
     let spec = &car.spec;
-    track.racing_line.speed_profile(&PerformanceEnvelope {
+    let envelope = |grip: f64, brake: f64| PerformanceEnvelope {
         mass: spec.mass,
-        grip: spec.tyre_friction * GRIP_MARGIN * profile.pace * tyre_grip,
+        grip,
         lift_area: car.setup.front_lift_area(&spec.aero) + car.setup.rear_lift_area(&spec.aero),
         drag_area: car.setup.drag_area(&spec.aero),
         // Slightly optimistic, so on straights and flat-out bends the car can
@@ -510,11 +510,23 @@ fn speed_profile(profile: DriverProfile, car: &Car, track: &Track, tyre_grip: f6
         // the curve. Braking points come from the backward pass and are
         // unaffected.
         power: spec.engine.max_power * 1.1,
-        // Leave headroom for axle brake bias, ABS trimming and turn-in loads.
-        brake_fraction: 0.76 * profile.pace,
+        brake_fraction: brake,
         load_sensitivity: LOAD_SENSITIVITY,
-    })
+    };
+    track.racing_line.speed_profile_keeping_flat(
+        &envelope(
+            spec.tyre_friction * GRIP_MARGIN * profile.pace * tyre_grip,
+            // Leave headroom for axle brake bias, ABS trimming and turn-in loads.
+            0.76 * profile.pace,
+        ),
+        // Every driver keeps flat the bends the car itself holds flat with a
+        // small margin, whatever their pace.
+        &envelope(spec.tyre_friction * FLAT_MARGIN * tyre_grip, 0.76),
+    )
 }
+
+/// Share of the car's real grip a bend must fit within to be taken flat.
+const FLAT_MARGIN: f64 = 0.96;
 
 /// Fraction of the front axle's load that comes from downforce at `speed`.
 fn front_downforce_share(car: &Car, speed: f64) -> f64 {
@@ -720,16 +732,22 @@ mod eau_rouge {
     #[ignore]
     fn plan_keeps_accelerating_through_eau_rouge() {
         let Some(track) = spa() else { return };
-        let speed = speed_profile(PROFILE, &car(&track), &track, 1.0);
-        let stations: Vec<usize> = (300..1400)
-            .map(|s| (s as f64 / STATION_SPACING) as usize)
-            .collect();
-        for pair in stations.windows(2) {
-            assert!(
-                speed[pair[1]] >= speed[pair[0]] - 1e-6,
-                "plan lifts at {:.0} m",
-                pair[1] as f64 * STATION_SPACING
-            );
+        let car = car(&track);
+        // Slowest grid pace, the player's guidance pace, a full-pace driver;
+        // warm race tyres sit around 92-95% of peak grip.
+        for pace in [0.85, 0.9, 1.0] {
+            let profile = DriverProfile { pace, ..PROFILE };
+            let speed = speed_profile(profile, &car, &track, 0.92);
+            let stations: Vec<usize> = (300..1400)
+                .map(|s| (s as f64 / STATION_SPACING) as usize)
+                .collect();
+            for pair in stations.windows(2) {
+                assert!(
+                    speed[pair[1]] >= speed[pair[0]] - 1e-6,
+                    "pace {pace}: plan lifts at {:.0} m",
+                    pair[1] as f64 * STATION_SPACING
+                );
+            }
         }
     }
 
@@ -737,14 +755,20 @@ mod eau_rouge {
     #[ignore]
     fn ai_never_brakes_through_eau_rouge_on_cold_or_warm_tyres() {
         let Some(track) = spa() else { return };
-        let mut car = car(&track);
-        let mut driver = AiDriver::new(PROFILE, &car, &track, 7);
+        for pace in [0.85, 1.0] {
+            drive_eau_rouge(&track, DriverProfile { pace, ..PROFILE });
+        }
+    }
+
+    fn drive_eau_rouge(track: &Track, profile: DriverProfile) {
+        let mut car = car(track);
+        let mut driver = AiDriver::new(profile, &car, track, 7);
         let dt = 1.0 / 360.0;
         let (mut lap, mut last_s) = (0, car.track_position.s);
         let mut worst = [(1.0_f64, 0.0_f64); 2];
         for _ in 0..(240.0 / dt) as usize {
-            let input = driver.drive(&car, &track, &[], dt);
-            car.step(&input, &track, dt);
+            let input = driver.drive(&car, track, &[], dt);
+            car.step(&input, track, dt);
             let s = car.track_position.s;
             if s + 1000.0 < last_s {
                 lap += 1;
@@ -762,7 +786,8 @@ mod eau_rouge {
         for (lap, (throttle, brake)) in worst.into_iter().enumerate() {
             assert!(
                 brake == 0.0 && throttle > 0.99,
-                "lap {}: throttle {throttle:.2}, brake {brake:.2}",
+                "pace {}, lap {}: throttle {throttle:.2}, brake {brake:.2}",
+                profile.pace,
                 lap + 1
             );
         }

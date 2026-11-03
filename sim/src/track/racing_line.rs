@@ -91,6 +91,30 @@ impl RacingLine {
 
     /// Target speed per station for a car with the given performance.
     pub fn speed_profile(&self, car: &PerformanceEnvelope) -> Vec<f64> {
+        self.passes(self.lateral_limits(car), car)
+    }
+
+    /// Like `speed_profile`, but bends that `capable` takes without lifting
+    /// stay flat: a cautious plan should cost time where braking is needed,
+    /// not invent a lift where the car has the grip.
+    pub fn speed_profile_keeping_flat(
+        &self,
+        car: &PerformanceEnvelope,
+        capable: &PerformanceEnvelope,
+    ) -> Vec<f64> {
+        let capable_limits = self.lateral_limits(capable);
+        let capable_speed = self.passes(capable_limits.clone(), capable);
+        let mut limits = self.lateral_limits(car);
+        for (index, limit) in limits.iter_mut().enumerate() {
+            if capable_limits[index] > capable_speed[index] * 1.001 {
+                *limit = limit.max(capable_speed[index]);
+            }
+        }
+        self.passes(limits, car)
+    }
+
+    /// Per-station cornering limit, before braking and acceleration passes.
+    fn lateral_limits(&self, car: &PerformanceEnvelope) -> Vec<f64> {
         let count = self.curvature.len();
         let downforce = 0.5 * AIR_DENSITY * car.lift_area;
         let drag = 0.5 * AIR_DENSITY * car.drag_area;
@@ -124,7 +148,22 @@ impl RacingLine {
             }
             v
         };
-        let mut speed: Vec<f64> = (0..count).map(lateral_limit).collect();
+        (0..count).map(lateral_limit).collect()
+    }
+
+    /// Braking (backward) and acceleration (forward) passes over `speed`.
+    fn passes(&self, mut speed: Vec<f64>, car: &PerformanceEnvelope) -> Vec<f64> {
+        let count = self.curvature.len();
+        let downforce = 0.5 * AIR_DENSITY * car.lift_area;
+        let drag = 0.5 * AIR_DENSITY * car.drag_area;
+        let vertical = |index: usize| self.vertical_curvature[index];
+        let normal = |v: f64, index: usize| {
+            (GRAVITY + downforce * v * v / car.mass + vertical(index) * v * v).max(GRAVITY * 0.3)
+        };
+        let grip = |v: f64, index: usize| {
+            let extra_load = normal(v, index) / GRAVITY - 1.0;
+            car.grip * (1.0 - car.load_sensitivity * extra_load).clamp(0.6, 1.0)
+        };
         let total_grip = |v: f64, index: usize| grip(v, index) * normal(v, index);
         let remaining = |v: f64, curvature: f64, index: usize| {
             let total = total_grip(v, index);
