@@ -266,6 +266,7 @@ pub fn apply(
     mut lights: Query<&mut Transform, With<DirectionalLight>>,
     mut windows: Query<&mut Window>,
     cameras: Query<(Entity, Option<&bevy::camera::visibility::RenderLayers>), With<Camera3d>>,
+    online: Option<Res<crate::online::Online>>,
 ) {
     // The benchmark window owns the GPU workload; keep the menu available
     // without also rendering a second race behind it.
@@ -302,8 +303,10 @@ pub fn apply(
         display: frontend.display,
         audio: frontend.audio,
     };
-    if let Err(error) = frontend.store.save(prefs) {
-        frontend.error = Some(error);
+    if !online.as_ref().is_some_and(|o| o.client.is_some()) {
+        if let Err(error) = frontend.store.save(prefs) {
+            frontend.error = Some(error);
+        }
     }
     if !frontend.pending {
         return;
@@ -368,7 +371,11 @@ pub fn apply(
             .looking_to(Vec3::new(sun.x as f32, sun.y as f32, sun.z as f32), Vec3::Y);
     }
     for mut window in &mut windows {
-        window.title = format!("F1 Racecraft - {}", race.track.name);
+        window.title = if selected.host.is_some() || selected.join.is_some() {
+            format!("F1 Racecraft - {} - {}", race.track.name, selected.name)
+        } else {
+            format!("F1 Racecraft - {}", race.track.name)
+        };
     }
     *session = Session {
         identities,
@@ -424,6 +431,7 @@ fn section(ui: &mut egui::Ui, text: &str) {
     );
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn ui(
     mut contexts: EguiContexts,
     mut frontend: ResMut<Frontend>,
@@ -432,6 +440,7 @@ pub fn ui(
     mut exit: MessageWriter<AppExit>,
     mut styled: Local<bool>,
     mut warmed: Local<u8>,
+    mut online: Option<ResMut<crate::online::Online>>,
 ) -> Result {
     frontend.benchmark.poll();
     let context = contexts.ctx_mut()?;
@@ -489,6 +498,11 @@ pub fn ui(
     }
     if *warmed < 2 {
         *warmed += 1;
+    }
+    if let Some(online) = online.as_mut() {
+        if online.ui(context, &mut frontend, &mut session, &options) {
+            return Ok(());
+        }
     }
     let mut viewport = egui::Ui::new(
         context.clone(),

@@ -70,7 +70,7 @@ pub struct Corner {
 }
 
 /// Where a point lies relative to the centerline.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct TrackPosition {
     pub station: usize,
     /// Distance along the lap in `[0, length)`.

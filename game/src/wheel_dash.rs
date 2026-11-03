@@ -463,7 +463,7 @@ fn split_uv_lamps(mesh: &Mesh) -> (Vec<(Lamp, Vec<u32>)>, Vec<u32>) {
     }
     let mut groups = vec![Vec::new(); REV_LAMPS];
     let mut rest = Vec::new();
-    for triangle in indices.chunks_exact(3) {
+    for triangle in indices.as_chunks::<3>().0.iter() {
         if !triangle.iter().all(|i| is_rev(&positions[*i as usize])) {
             rest.extend_from_slice(triangle);
             continue;

@@ -78,7 +78,7 @@ fn scale_normals(image: &mut Image, scale: f32) {
     let Some(data) = image.data.as_mut() else {
         return;
     };
-    for pixel in data.chunks_exact_mut(4) {
+    for pixel in data.as_chunks_mut::<4>().0 {
         let normal = Vec3::new(
             (pixel[0] as f32 / 255. * 2. - 1.) * scale,
             (pixel[1] as f32 / 255. * 2. - 1.) * scale,

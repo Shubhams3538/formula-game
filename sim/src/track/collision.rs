@@ -4,7 +4,7 @@
 use glam::{DVec2, DVec3};
 use std::collections::HashMap;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum Surface {
     Asphalt,
     Kerb,
@@ -115,7 +115,9 @@ impl CollisionWorld {
             });
         }
         let triangles = corners
-            .chunks_exact(3)
+            .as_chunks::<3>()
+            .0
+            .iter()
             .zip(surface_ids)
             .map(|(corner, id)| {
                 Ok(Triangle {

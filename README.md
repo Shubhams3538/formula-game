@@ -63,6 +63,17 @@ HUD and minimap settings:
 
 These are captures from the game, not concept renders.
 
+## Multiplayer
+
+The multiplayer branch adds 16-driver host/join rooms, owner-controlled rules,
+AI takeover, local prediction and a headless UDP server. See
+[setup, platform packages and verification limits](docs/multiplayer.md).
+
+```sh
+cargo run --release -p f1-the-game -- --assets ./assets --car rb6 --host 7777 --name Alice
+cargo run --release -p f1-the-game -- --assets ./assets --car rb6 --join 192.168.1.20:7777 --name Bob
+```
+
 ## Development
 
 A Bevy 0.20 racing game with a deterministic 360 Hz simcade simulation. Select a circuit, car and driving aids from the in-game menu, then race against up to 15 AI drivers. The default GEN22 field uses the 2022 teams and drivers; the legacy RB6 field matches the V8-era sound and proportions. The simulation includes manual gearing, tyre temperature and wear, wing setup, slipstream, dirty air, car contacts, track collisions, timing and results.
