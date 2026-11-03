@@ -1,10 +1,9 @@
+use crate::transport::ClientTransport;
 use crate::{codec::Encoded, *};
 use racecraft_sim::{Assists, CarInput, Race, PHYSICS_RATE};
 use renet::RenetClient;
-use renet_netcode::{ClientAuthentication, NetcodeClientTransport};
 use std::{
     collections::VecDeque,
-    net::{SocketAddr, UdpSocket},
     path::{Path, PathBuf},
     time::Duration,
 };
@@ -22,7 +21,7 @@ pub struct AuthorityObservation {
 }
 pub struct Client {
     net: RenetClient,
-    transport: NetcodeClientTransport,
+    transport: ClientTransport,
     root: PathBuf,
     name: String,
     assists: Assists,
@@ -61,31 +60,16 @@ pub struct Client {
     pub observation: Option<AuthorityObservation>,
 }
 impl Client {
+    /// Connect without blocking the render thread, including DNS and TLS for WSS.
     pub fn connect(
         root: &Path,
-        address: SocketAddr,
+        endpoint: Endpoint,
         name: String,
         assists: Assists,
         id: Option<u64>,
     ) -> Result<Self, String> {
         let id = id.unwrap_or_else(random_id);
-        let bind = if address.is_ipv4() {
-            "0.0.0.0:0"
-        } else {
-            "[::]:0"
-        };
-        let socket = UdpSocket::bind(bind).map_err(|e| e.to_string())?;
-        let transport = NetcodeClientTransport::new(
-            now(),
-            ClientAuthentication::Unsecure {
-                server_addr: address,
-                client_id: id,
-                user_data: None,
-                protocol_id: PROTOCOL_ID,
-            },
-            socket,
-        )
-        .map_err(|e| e.to_string())?;
+        let transport = ClientTransport::connect(endpoint, id)?;
         Ok(Self {
             net: RenetClient::new(connection_config()),
             transport,
@@ -281,9 +265,7 @@ impl Client {
                 samples,
             })?;
         }
-        self.transport
-            .send_packets(&mut self.net)
-            .map_err(|e| e.to_string())?;
+        self.transport.send_packets(&mut self.net)?;
         Ok(())
     }
     /// Apply the newest authoritative state.
@@ -395,7 +377,7 @@ impl Client {
         self.history.push_back((race.tick, encoded));
         Ok(())
     }
-    /// Physics input targets one explicit server tick. Commands travel reliably; held controls are redundant UDP.
+    /// Physics input targets one explicit server tick. Commands travel reliably; held controls use redundant samples.
     pub fn predict(&mut self, race: &mut Race, mut input: CarInput) -> Result<(), String> {
         let Some(authoritative) = self.authoritative_tick else {
             return Ok(());
@@ -457,12 +439,13 @@ impl Client {
         })
     }
     pub fn recover(&mut self, tick: u64) -> Result<(), String> {
+        if !matches!(self.stage(), Stage::Grid | Stage::Racing) {
+            return Ok(());
+        }
         self.command_at(tick, Command::Recover)
     }
     pub fn flush(&mut self) -> Result<(), String> {
-        self.transport
-            .send_packets(&mut self.net)
-            .map_err(|e| e.to_string())
+        self.transport.send_packets(&mut self.net)
     }
     pub fn rtt_ms(&self) -> f64 {
         self.net.rtt() * 1000.

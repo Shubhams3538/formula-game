@@ -1,6 +1,10 @@
-//! Headless authority, bounded UDP transport and prediction shared by all platforms.
+//! Headless authority, bounded UDP/WebSocket transports and shared prediction.
 pub mod client;
 pub mod codec;
+mod endpoint;
+mod transport;
+mod websocket;
+pub use endpoint::Endpoint;
 pub mod server;
 mod wire;
 pub use client::Client;

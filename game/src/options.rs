@@ -47,7 +47,7 @@ pub struct Options {
 impl Options {
     pub const USAGE: &'static str = "usage: f1-the-game [options]
   --host PORT         host a 16-player UDP room (default port: 7777)
-  --join IP:PORT      join a multiplayer room
+  --join ADDRESS      join IP:PORT or wss://server.onrender.com
   --name NAME         unique lobby driver name
   --ai-cars N         AI cars in a hosted room, 0-15 (default: 0)
   --test-driver       drive this online client with a scripted controller
@@ -289,12 +289,15 @@ impl Options {
             return Err("test drivers require --host or --join".into());
         }
         if options.host == Some(0) || options.host.is_some() && options.join.is_some() {
-            return Err("choose either --host PORT or --join IP:PORT".into());
+            return Err("choose either --host PORT or --join ADDRESS".into());
         }
         if (options.host.is_some() || options.join.is_some())
             && (options.frames.is_some() || options.benchmark.is_some())
         {
             return Err("online rooms cannot use capture or benchmark mode".into());
+        }
+        if let Some(address) = &options.join {
+            address.parse::<racecraft_net::Endpoint>()?;
         }
         if options.name.trim().is_empty()
             || options.name.len() > 32
@@ -346,6 +349,19 @@ mod tests {
 
     fn parse(args: &[&str]) -> Result<Options, String> {
         Options::parse(args.iter().map(|arg| (*arg).to_owned()))
+    }
+
+    #[test]
+    fn accepts_render_join_urls_and_rejects_http() {
+        assert_eq!(
+            parse(&["--join", "wss://race.onrender.com"])
+                .unwrap()
+                .join
+                .as_deref(),
+            Some("wss://race.onrender.com")
+        );
+        assert!(parse(&["--join", "https://race.onrender.com"]).is_err());
+        assert!(parse(&["--host", "7777", "--join", "wss://race.onrender.com"]).is_err());
     }
 
     #[test]

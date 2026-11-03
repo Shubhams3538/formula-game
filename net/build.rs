@@ -16,6 +16,7 @@ const LOCKED_CRATES: &[&str] = &[
     "renet",
     "renetcode",
     "renet_netcode",
+    "tungstenite",
 ];
 
 fn sources(dir: &Path, files: &mut Vec<PathBuf>) {

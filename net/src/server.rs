@@ -1,4 +1,5 @@
 use crate::{codec::Encoded, *};
+use crate::{transport::ServerTransport, websocket::WsServer};
 use racecraft_sim::{CarInput, Phase, Race, RaceEvent, PHYSICS_RATE};
 use renet::RenetServer;
 use renet_netcode::{NetcodeServerTransport, ServerAuthentication, ServerConfig};
@@ -35,7 +36,7 @@ const REJECT_GRACE: Duration = Duration::from_millis(500);
 /// Main-thread independent server. `update` is also usable by deterministic test harnesses.
 pub struct Server {
     net: RenetServer,
-    transport: NetcodeServerTransport,
+    transport: ServerTransport,
     root: PathBuf,
     pub lobby: Lobby,
     pub race: Option<Race>,
@@ -83,6 +84,31 @@ impl Server {
             socket,
         )
         .map_err(|e| e.to_string())?;
+        Self::with_transport(
+            root,
+            settings,
+            owner,
+            content,
+            ServerTransport::Udp(Box::new(transport)),
+        )
+    }
+    /// Serve WebSockets and HTTP /health on one port, with TLS at the reverse proxy.
+    pub fn bind_websocket(
+        root: &Path,
+        address: SocketAddr,
+        settings: RaceSettings,
+    ) -> Result<Self, String> {
+        let content = fingerprint(root, &settings)?;
+        let transport = ServerTransport::WebSocket(WsServer::bind(address)?);
+        Self::with_transport(root, settings, None, content, transport)
+    }
+    fn with_transport(
+        root: &Path,
+        settings: RaceSettings,
+        owner: Option<u64>,
+        content: [u8; 32],
+        transport: ServerTransport,
+    ) -> Result<Self, String> {
         Ok(Self {
             net: RenetServer::new(connection_config()),
             transport,
@@ -116,7 +142,7 @@ impl Server {
         })
     }
     pub fn address(&self) -> SocketAddr {
-        self.transport.addresses()[0]
+        self.transport.address()
     }
     fn send(&mut self, id: u64, channel: u8, msg: &ServerMessage) {
         if let Ok(bytes) = encode(msg) {
@@ -442,9 +468,7 @@ impl Server {
     pub fn update(&mut self, dt: Duration) -> Result<(), String> {
         self.time += dt;
         self.net.update(dt);
-        self.transport
-            .update(dt, &mut self.net)
-            .map_err(|e| e.to_string())?;
+        self.transport.update(dt, &mut self.net)?;
         while self.net.get_event().is_some() {} // transport state below is the source of connection truth.
         self.budgets.retain(|id, _| self.net.is_connected(*id));
         self.admission_deadlines

@@ -8,7 +8,7 @@ use crate::{
 use bevy::prelude::*;
 use bevy_egui::egui;
 use racecraft_net::{
-    Client, ClientMessage, Lobby, RaceSettings, Server, ServerHandle, Stage, MAX_PLAYERS,
+    Client, ClientMessage, Endpoint, Lobby, RaceSettings, Server, ServerHandle, Stage, MAX_PLAYERS,
 };
 use std::{net::SocketAddr, time::Duration};
 
@@ -22,6 +22,7 @@ pub struct Online {
     address: String,
     port: u16,
     settings: RaceSettings,
+    draft_owner: Option<u64>,
     pub error: Option<String>,
     install: Option<Lobby>,
     loading: Option<u64>,
@@ -52,6 +53,7 @@ impl Online {
                 .clone()
                 .unwrap_or_else(|| "127.0.0.1:7777".into()),
             port: options.host.unwrap_or(7777),
+            draft_owner: None,
             settings: RaceSettings {
                 track: options.track.clone(),
                 car: options.car.clone(),
@@ -97,11 +99,9 @@ impl Online {
             )))
             .or_else(|_| bind(SocketAddr::from(([0, 0, 0, 0], self.port))))?;
             self.host = Some(ServerHandle::spawn(server));
-            SocketAddr::from(([127, 0, 0, 1], self.port))
+            Endpoint::Udp(SocketAddr::from(([127, 0, 0, 1], self.port)))
         } else {
-            self.address
-                .parse()
-                .map_err(|_| "Enter a numeric IP and port, such as 192.168.1.20:7777")?
+            self.address.parse::<Endpoint>()?
         };
         match Client::connect(
             &options.assets,
@@ -129,6 +129,7 @@ impl Online {
         self.test_started = false;
         self.client = None;
         self.host = None;
+        self.draft_owner = None;
         self.install = None;
         self.loading = None;
         session.paused = true;
@@ -184,6 +185,10 @@ impl Online {
                         self.error = Some(error);
                     }
                     if let Some(lobby) = client.lobby.clone() {
+                        if self.draft_owner != Some(lobby.owner) {
+                            self.settings = lobby.settings.clone();
+                            self.draft_owner = Some(lobby.owner);
+                        }
                         ui.label(format!(
                             "{} humans + {} AI / {} cars · {:?} · {:.0} ms",
                             lobby.players.len(),
@@ -368,7 +373,7 @@ impl Online {
                                 }
                             });
                     }
-                    ui.label("Join address (IP:port)");
+                    ui.label("Join address (LAN IP:port or wss://server.onrender.com)");
                     ui.text_edit_singleline(&mut self.address);
                     if ui.button("Join room").clicked() {
                         start = Some(false);

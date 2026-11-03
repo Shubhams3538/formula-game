@@ -66,7 +66,8 @@ These are captures from the game, not concept renders.
 ## Multiplayer
 
 The multiplayer branch adds 16-driver host/join rooms, owner-controlled rules,
-AI takeover, local prediction and a headless UDP server. See
+AI takeover, local prediction and a headless UDP/WebSocket server.
+[Host on Render](docs/render.md) and join with `wss://your-service.onrender.com`. See
 [setup, platform packages and verification limits](docs/multiplayer.md).
 
 ```sh
