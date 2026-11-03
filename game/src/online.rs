@@ -273,18 +273,33 @@ impl Online {
                                     };
                                     action = Some(ClientMessage::Settings(settings.clone()));
                                 }
-                                if settings != before
-                                    && ui
-                                        .button("Apply race settings (clears readiness)")
-                                        .clicked()
-                                {
-                                    action = Some(ClientMessage::Settings(settings.clone()));
+                                // The controls above edit a draft; the room changes only on Apply.
+                                // Starting with unapplied edits would race with rules the
+                                // controls no longer show, so require Apply or Discard first.
+                                let unapplied = settings != before && action.is_none();
+                                if unapplied {
+                                    ui.colored_label(
+                                        egui::Color32::YELLOW,
+                                        "Rule changes are not applied to the room yet.",
+                                    );
+                                    ui.horizontal(|ui| {
+                                        if ui
+                                            .button("Apply race settings (clears readiness)")
+                                            .clicked()
+                                        {
+                                            action =
+                                                Some(ClientMessage::Settings(settings.clone()));
+                                        }
+                                        if ui.button("Discard changes").clicked() {
+                                            settings = before.clone();
+                                        }
+                                    });
                                 }
                                 // Keep the draft across frames without mutating server settings on a slider drag.
                                 self.settings = settings;
                                 if ui
                                     .add_enabled(
-                                        lobby.players.iter().all(|p| p.ready),
+                                        can_start(&lobby, unapplied),
                                         egui::Button::new("Start race"),
                                     )
                                     .clicked()
@@ -408,6 +423,10 @@ impl Online {
         }
         self.client.is_some()
     }
+}
+/// The owner may start once every driver is ready and the rules shown are the room's rules.
+fn can_start(lobby: &Lobby, unapplied: bool) -> bool {
+    !unapplied && lobby.players.iter().all(|p| p.ready)
 }
 fn aids_panel(ui: &mut egui::Ui, settings: &mut RaceSettings) {
     ui.collapsing("Custom shared rules", |ui| {
@@ -724,6 +743,27 @@ mod tests {
         app.update();
         assert_eq!(app.world().resource::<Session>().race.tick, 1);
     }
+    #[test]
+    fn start_waits_for_unapplied_rule_changes() {
+        let lobby = Lobby {
+            settings: RaceSettings::default(),
+            players: vec![Player {
+                id: 1,
+                name: "Owner".into(),
+                ready: true,
+                connected: true,
+                identity: None,
+                assists: racecraft_sim::Assists::default(),
+            }],
+            owner: 1,
+            epoch: 0,
+            stage: Stage::Lobby,
+        };
+        assert!(can_start(&lobby, false));
+        // e.g. AI cars moved to 0 on the slider but not applied yet.
+        assert!(!can_start(&lobby, true));
+    }
+
     #[test]
     fn host_join_panel_renders_with_existing_frontend() {
         let options = Options::parse(std::iter::empty()).unwrap();
