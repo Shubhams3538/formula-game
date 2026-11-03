@@ -868,8 +868,8 @@ fn tyre_display(hud: &Hud, style: &HudStyle, session: &Session, scale: f32) {
 
 /// Tyre gauge: the temperature scale sweeps the top of the face, with the
 /// front pointer outside its band and the rear pointer inside. Beneath it a
-/// top-down tyre map colours each tyre by its thermal band and carries each
-/// axle's temperature and wear between its pair; tow and wake sit below.
+/// top-down car shows each tyre's thermal band and tread life, and tow and
+/// wake fill the arc gap below like the rev dial's pedal arcs.
 fn tyre_dials(hud: &Hud, style: &HudStyle, session: &Session, scale: f32) {
     const MIN: f32 = 40.;
     const MAX: f32 = 160.;
@@ -929,110 +929,131 @@ fn tyre_dials(hud: &Hud, style: &HudStyle, session: &Session, scale: f32) {
     hud.text_mid(
         &style.bold,
         0.09 * r,
-        at(0., -0.5),
+        at(0., -0.53),
         Align::Center,
         colors.muted,
         &format!("{} °C", compound.label()),
     );
 
-    // Tyre map: fronts narrower than rears, each pair around its readout.
-    let tyre_w = [0.16 * r, 0.18 * r];
-    let tyre_h = 0.3 * r;
-    let axle_y = [-0.08, 0.36];
-    let half_track = [0.35, 0.36];
+    // Top-down car: wings, body and wishbones in outline. Each tyre fills
+    // with its thermal band colour to the tread life left, edged white for
+    // the front and amber for the rear to match the pointers.
+    let p = |x: f32, y: f32| egui::pos2(c.0 + x * r, c.1 + y * r);
+    let frame = Color::from_gray(120);
+    let line = egui::Stroke::new(1.2 * scale, frame);
+    let body = [
+        (0.0, -0.36),
+        (0.05, -0.16),
+        (0.16, 0.02),
+        (0.16, 0.26),
+        (0.08, 0.4),
+        (-0.08, 0.4),
+        (-0.16, 0.26),
+        (-0.16, 0.02),
+        (-0.05, -0.16),
+    ];
+    hud.painter.add(egui::Shape::convex_polygon(
+        body.iter().map(|&(x, y)| p(x, y)).collect(),
+        Color::from_rgb(24, 26, 27),
+        line,
+    ));
+    hud.circle((c.0, c.1 - 0.02 * r), 0.045 * r, Color::from_gray(60));
+    for (y, half, h) in [(-0.42, 0.26, 0.045), (0.44, 0.19, 0.06)] {
+        hud.fill_rect(c.0 - half * r, c.1 + y * r, 2. * half * r, h * r, frame);
+    }
+    let tyre_w = [0.12 * r, 0.14 * r];
+    let tyre_h = [0.22 * r, 0.24 * r];
+    let axle_y = [-0.22, 0.3];
+    let half_track = [0.3, 0.31];
     for axle in 0..2 {
         let tyre = car.tyres[axle];
         let temperature = session.telemetry.temperatures[axle].value(tyre.temperature);
         let band = TyreBand::of(temperature, compound).color();
+        let life = (1. - session.telemetry.wear[axle].value(tyre.wear)).clamp(0., 1.) as f32;
+        let key = if axle == 0 { ink } else { AMBER };
+        let y = c.1 + axle_y[axle] * r;
+        for sign in [-1., 1.] {
+            // Wishbones from the body to the hub.
+            hud.painter.line_segment(
+                [
+                    p(sign * 0.08, axle_y[axle] - 0.04),
+                    p(sign * (half_track[axle] - 0.06), axle_y[axle]),
+                ],
+                line,
+            );
+            hud.painter.line_segment(
+                [
+                    p(sign * 0.08, axle_y[axle] + 0.04),
+                    p(sign * (half_track[axle] - 0.06), axle_y[axle]),
+                ],
+                line,
+            );
+        }
         for side in 0..2 {
             let wheel = &car.wheels[axle * 2 + side];
             let sign = if side == 0 { -1. } else { 1. };
-            let (x, y) = at(sign * half_track[axle], axle_y[axle]);
-            let (left, top) = (x - tyre_w[axle] * 0.5, y - tyre_h * 0.5);
-            hud.fill_round(left, top, tyre_w[axle], tyre_h, 3. * scale, band);
-            if wheel.locked || wheel.sliding > 0.3 {
-                hud.stroke_round(
-                    left - 1.5 * scale,
-                    top - 1.5 * scale,
-                    tyre_w[axle] + 3. * scale,
-                    tyre_h + 3. * scale,
-                    4. * scale,
-                    2. * scale,
-                    WHITE,
-                );
-            }
-        }
-        // Pointer colour keys the axle: white front, amber rear.
-        let key = if axle == 0 { ink } else { AMBER };
-        hud.fill_rect(
-            c.0 - 0.14 * r,
-            c.1 + (axle_y[axle] - 0.16) * r,
-            0.28 * r,
-            1.5 * scale,
-            key,
-        );
-        hud.text_mid(
-            &style.bold,
-            0.2 * r,
-            at(0., axle_y[axle] - 0.02),
-            Align::Center,
-            band,
-            &format!("{temperature:.0}"),
-        );
-        hud.text_mid(
-            &style.regular,
-            0.09 * r,
-            at(0., axle_y[axle] + 0.12),
-            Align::Center,
-            colors.muted,
-            &format!(
-                "{:.0}% WEAR",
-                session.telemetry.wear[axle].value(tyre.wear) * 100.
-            ),
-        );
-    }
-
-    let (w, h) = (0.3 * r, 0.12 * r);
-    for (x, label, value, color) in [
-        (
-            -0.17,
-            "TOW",
-            session.telemetry.tow.value(car.aero.slipstream()),
-            BLUE,
-        ),
-        (
-            0.17,
-            "WAKE",
-            session.telemetry.wake.value(car.aero.dirty_air()),
-            AMBER,
-        ),
-    ] {
-        let value = value.clamp(0., 1.) as f32;
-        let (x, y) = at(x, 0.74);
-        let lit = value > 0.05;
-        let (left, top) = (x - w * 0.5, y - h * 0.5);
-        if lit {
-            hud.fill_round(
+            let (w, h) = (tyre_w[axle], tyre_h[axle]);
+            let left = c.0 + sign * half_track[axle] * r - w * 0.5;
+            let top = y - h * 0.5;
+            let radius = 3. * scale;
+            hud.fill_round(left, top, w, h, radius, band.gamma_multiply(0.28));
+            hud.fill_round(left, top + h * (1. - life), w, h * life, radius, band);
+            let warning = wheel.locked || wheel.sliding > 0.3;
+            hud.stroke_round(
                 left,
                 top,
                 w,
                 h,
-                h * 0.25,
-                color.gamma_multiply(0.3 + 0.7 * value),
+                radius,
+                if warning { 2. } else { 1. } * scale,
+                if warning { ACCENT } else { key },
             );
-        } else {
-            hud.stroke_round(left, top, w, h, h * 0.25, scale, Color::from_gray(60));
+        }
+    }
+
+    // Tow and wake fill the arc gap under the car from its ends inward.
+    for (start, direction, value, color, label) in [
+        (
+            160.,
+            -1.,
+            session.telemetry.tow.value(car.aero.slipstream()),
+            BLUE,
+            "TOW",
+        ),
+        (
+            20.,
+            1.,
+            session.telemetry.wake.value(car.aero.dirty_air()),
+            AMBER,
+            "WAKE",
+        ),
+    ] {
+        let span = 60.;
+        let value = value.clamp(0., 1.) as f32;
+        arc(
+            hud,
+            c,
+            r * 0.8,
+            (start, start + direction * span),
+            r * 0.06,
+            Color::from_rgb(8, 9, 10),
+        );
+        if value > 0.005 {
+            arc(
+                hud,
+                c,
+                r * 0.8,
+                (start, start + direction * span * value),
+                r * 0.06,
+                color,
+            );
         }
         hud.text_mid(
             &style.bold,
             0.085 * r,
-            (x, y),
+            polar(c, r * 0.68, start + direction * span * 0.25),
             Align::Center,
-            if lit {
-                Color::from_rgb(8, 9, 10)
-            } else {
-                Color::from_gray(115)
-            },
+            colors.muted,
             label,
         );
     }
