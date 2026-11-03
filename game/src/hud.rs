@@ -427,7 +427,7 @@ fn draw_map(hud: &Hud, _style: &HudStyle, session: &Session, mode: MapMode, scal
 #[derive(Default)]
 pub struct Messages {
     active: Vec<(String, Color, f32)>,
-    seen_events: usize,
+    pub(crate) seen_events: usize,
 }
 
 impl Messages {

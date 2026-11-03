@@ -7,7 +7,7 @@ pub const NEUTRAL: i32 = 0;
 pub const REVERSE: i32 = -1;
 
 /// Why a shift request did not happen as asked.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum ShiftRefusal {
     /// The downshift would over-rev the engine; the gearbox protected itself.
     OverRev,
@@ -15,7 +15,7 @@ pub enum ShiftRefusal {
     TooFast,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Powertrain {
     /// -1 reverse, 0 neutral, 1.. forward gears.
     pub gear: i32,

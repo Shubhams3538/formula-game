@@ -7,7 +7,7 @@ pub const AMBIENT_TEMPERATURE: f64 = 26.0;
 pub const START_TEMPERATURE: f64 = 78.0;
 
 /// Thermal and wear state of one axle's pair of tyres.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct AxleTyres {
     /// Representative tread temperature, °C.
     pub temperature: f64,

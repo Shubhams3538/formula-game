@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["sim", "game"]
+members = ["sim", "game", "net"]
 exclude = ["archive/custom-engine"]
 
 [workspace.package]

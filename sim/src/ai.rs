@@ -9,7 +9,7 @@ use glam::DVec2;
 const PLAN_INTERVAL: f64 = 0.25;
 
 /// Personality of a computer driver.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct DriverProfile {
     /// Fraction of the car's grip the driver dares to use, ~0.9..1.0.
     pub pace: f64,
@@ -34,7 +34,7 @@ struct CornerPlan {
 /// Approach speed over apex speed that makes a corner a passing place.
 const PASSING_SPEED_DROP: f64 = 1.4;
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum Intent {
     /// Drive the racing line.
     Line,
@@ -70,6 +70,18 @@ pub struct AiDriver {
     line_offset: f64,
     /// Tyre grip the current speed profile was planned for.
     planned_grip: f64,
+    /// The plan this driver used before the current one. Network rollback can
+    /// move a driver back and forth across a replanning threshold; swapping to
+    /// this copy avoids rebuilding the whole-lap profile each time.
+    previous_plan: Option<Box<Plan>>,
+}
+
+#[derive(Clone, Debug)]
+struct Plan {
+    profile: DriverProfile,
+    grip: f64,
+    speed_profile: Vec<f64>,
+    corners: Vec<CornerPlan>,
 }
 
 impl AiDriver {
@@ -92,7 +104,39 @@ impl AiDriver {
             stuck_timer: 0.0,
             line_offset: 0.0,
             planned_grip,
+            previous_plan: None,
         }
+    }
+
+    /// Switch to the lap plan for `profile` and `grip`, reusing the previous plan when it matches.
+    fn set_plan(&mut self, profile: DriverProfile, grip: f64, car: &Car, track: &Track) {
+        if self.profile == profile && self.planned_grip == grip {
+            return;
+        }
+        let current = Plan {
+            profile: self.profile,
+            grip: self.planned_grip,
+            speed_profile: std::mem::take(&mut self.speed_profile),
+            corners: std::mem::take(&mut self.corners),
+        };
+        let next = match self.previous_plan.take() {
+            Some(plan) if plan.profile == profile && plan.grip == grip => *plan,
+            _ => {
+                let speed_profile = speed_profile(profile, car, track, grip);
+                let corners = find_corners(track, &speed_profile);
+                Plan {
+                    profile,
+                    grip,
+                    speed_profile,
+                    corners,
+                }
+            }
+        };
+        self.profile = next.profile;
+        self.planned_grip = next.grip;
+        self.speed_profile = next.speed_profile;
+        self.corners = next.corners;
+        self.previous_plan = Some(Box::new(current));
     }
 
     /// Target speed the driver wants at lap distance `s`.
@@ -351,9 +395,7 @@ impl AiDriver {
         // The whole-lap profile only needs rebuilding once the tyres have changed.
         let grip = tyre_grip(car);
         if (grip - self.planned_grip).abs() > self.planned_grip * 0.004 {
-            self.planned_grip = grip;
-            self.speed_profile = speed_profile(self.profile, car, track, grip);
-            self.corners = find_corners(track, &self.speed_profile);
+            self.set_plan(self.profile, grip, car, track);
         }
         let s = car.track_position.s;
         // Forget a plan once its corner is behind us.
@@ -596,6 +638,20 @@ mod tests {
     }
 
     #[test]
+    fn restoring_a_previous_grip_reuses_its_plan_instead_of_rebuilding() {
+        let track = oval_track();
+        let (mut driver, car) = driver_and_car(&track);
+        let before = driver.snapshot();
+        let original = driver.speed_profile.as_ptr();
+        driver.set_plan(driver.profile, driver.planned_grip * 0.9, &car, &track);
+        assert_ne!(driver.speed_profile.as_ptr(), original);
+        // A rollback to the authoritative state swaps the cached plan back.
+        driver.restore(&before, &car, &track);
+        assert_eq!(driver.speed_profile.as_ptr(), original);
+        assert_eq!(driver.planned_grip, before.planned_grip);
+    }
+
+    #[test]
     fn finds_both_ends_of_the_oval_as_corners() {
         let track = oval_track();
         let (driver, _) = driver_and_car(&track);
@@ -664,5 +720,45 @@ mod tests {
             "only {distance} m in a minute"
         );
         assert!(worst_lateral < 6.5, "left the track: {worst_lateral} m");
+    }
+}
+
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+pub struct AiState {
+    #[serde(with = "crate::exact")]
+    profile: DriverProfile,
+    intent: Intent,
+    rng: Rng,
+    mistake: f64,
+    mistake_corner: Option<f64>,
+    plan_timer: f64,
+    stuck_timer: f64,
+    line_offset: f64,
+    #[serde(with = "crate::exact")]
+    planned_grip: f64,
+}
+impl AiDriver {
+    pub fn snapshot(&self) -> AiState {
+        AiState {
+            profile: self.profile,
+            intent: self.intent,
+            rng: self.rng.clone(),
+            mistake: self.mistake,
+            mistake_corner: self.mistake_corner,
+            plan_timer: self.plan_timer,
+            stuck_timer: self.stuck_timer,
+            line_offset: self.line_offset,
+            planned_grip: self.planned_grip,
+        }
+    }
+    pub fn restore(&mut self, state: &AiState, car: &Car, track: &Track) {
+        self.set_plan(state.profile, state.planned_grip, car, track);
+        self.intent = state.intent;
+        self.rng = state.rng.clone();
+        self.mistake = state.mistake;
+        self.mistake_corner = state.mistake_corner;
+        self.plan_timer = state.plan_timer;
+        self.stuck_timer = state.stuck_timer;
+        self.line_offset = state.line_offset;
     }
 }

@@ -56,6 +56,7 @@ pub fn update(
     time: Res<Time>,
     mut session: ResMut<Session>,
     benchmark: Option<Res<crate::benchmark::Run>>,
+    mut online: Option<ResMut<crate::online::Online>>,
 ) {
     if benchmark.is_some() {
         session.controls = Controls::default();
@@ -77,7 +78,10 @@ pub fn update(
     if keys.just_pressed(KeyCode::F3) {
         session.show_performance ^= true;
     }
-    if keys.just_pressed(KeyCode::F4) && session.ready {
+    if keys.just_pressed(KeyCode::F4)
+        && session.ready
+        && !online.as_ref().is_some_and(|o| o.client.is_some())
+    {
         if session.screen == Screen::CameraEditor {
             menu::resume(&mut session);
         } else if matches!(session.screen, Screen::Racing | Screen::Paused) {
@@ -103,7 +107,14 @@ pub fn update(
     }
     if actions.reset {
         let player = session.player;
-        session.race.recover(player);
+        if let Some(client) = online.as_mut().and_then(|o| o.client.as_mut()) {
+            let tick = session.race.tick + 1;
+            if let Err(error) = client.recover(tick) {
+                client.error = Some(error);
+            }
+        } else {
+            session.race.recover(player);
+        }
         session.recover_hud();
     }
 }

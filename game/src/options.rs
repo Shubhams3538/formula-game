@@ -7,6 +7,12 @@ use std::path::PathBuf;
 #[derive(Clone, bevy::prelude::Resource)]
 pub struct Options {
     pub assets: PathBuf,
+    pub host: Option<u16>,
+    pub join: Option<String>,
+    pub name: String,
+    pub ai_cars: usize,
+    pub test_driver: bool,
+    pub test_lobby: Option<usize>,
     pub track: String,
     pub car: String,
     pub team: String,
@@ -40,6 +46,12 @@ pub struct Options {
 
 impl Options {
     pub const USAGE: &'static str = "usage: f1-the-game [options]
+  --host PORT         host a 16-player UDP room (default port: 7777)
+  --join IP:PORT      join a multiplayer room
+  --name NAME         unique lobby driver name
+  --ai-cars N         AI cars in a hosted room, 0-15 (default: 0)
+  --test-driver       drive this online client with a scripted controller
+  --test-lobby N      automatically ready/start once N test clients join
   --assets DIR        asset directory (default: ./assets)
   --track NAME        circuit (default: spa; other circuits require an exp build)
   --car gen22|rb6     car (default: gen22; rb22 is a deprecated alias)
@@ -70,6 +82,12 @@ impl Options {
     pub fn parse(mut args: impl Iterator<Item = String>) -> Result<Self, String> {
         let mut options = Self {
             assets: PathBuf::from("assets"),
+            test_driver: false,
+            test_lobby: None,
+            host: None,
+            join: None,
+            name: format!("Driver-{:04x}", racecraft_net::random_id() as u16),
+            ai_cars: 0,
             track: "spa".to_string(),
             car: "gen22".to_string(),
             team: String::new(),
@@ -109,6 +127,28 @@ impl Options {
                     .ok_or_else(|| format!("bad number: {text}"))
             };
             match flag.as_str() {
+                "--test-driver" => options.test_driver = true,
+                "--test-lobby" => {
+                    options.test_lobby = Some(
+                        value()?
+                            .parse::<usize>()
+                            .map_err(|_| "test lobby size must be 1–16")?,
+                    )
+                }
+                "--host" => {
+                    options.host = Some(
+                        value()?
+                            .parse::<u16>()
+                            .map_err(|_| "host port must be 1–65535")?,
+                    )
+                }
+                "--join" => options.join = Some(value()?),
+                "--name" => options.name = value()?,
+                "--ai-cars" => {
+                    options.ai_cars = value()?
+                        .parse::<usize>()
+                        .map_err(|_| "AI cars must be an integer from 0 to 15")?;
+                }
                 "--assets" => options.assets = PathBuf::from(value()?),
                 "--track" => options.track = value()?,
                 "--car" => {
@@ -236,6 +276,32 @@ impl Options {
             options.quick_race = true;
             options.vsync = false;
         }
+        if options.test_lobby.is_some_and(|n| !(1..=16).contains(&n)) {
+            return Err("test lobby size must be 1–16".into());
+        }
+        if options.ai_cars >= racecraft_net::MAX_PLAYERS {
+            return Err("AI cars must be 0–15".into());
+        }
+        if (options.test_driver || options.test_lobby.is_some())
+            && options.host.is_none()
+            && options.join.is_none()
+        {
+            return Err("test drivers require --host or --join".into());
+        }
+        if options.host == Some(0) || options.host.is_some() && options.join.is_some() {
+            return Err("choose either --host PORT or --join IP:PORT".into());
+        }
+        if (options.host.is_some() || options.join.is_some())
+            && (options.frames.is_some() || options.benchmark.is_some())
+        {
+            return Err("online rooms cannot use capture or benchmark mode".into());
+        }
+        if options.name.trim().is_empty()
+            || options.name.len() > 32
+            || options.name.chars().any(char::is_control)
+        {
+            return Err("driver name must be 1–32 bytes without control characters".into());
+        }
         options.setup = options.setup.clamped();
         options.grid_slot = options.grid_slot.min(options.opponents + 1);
         if options.capture.is_some() && options.frames.is_none() {
@@ -334,6 +400,17 @@ mod tests {
     }
 
     #[test]
+    fn hosted_room_accepts_a_bounded_explicit_ai_count() {
+        assert_eq!(
+            parse(&["--host", "7777", "--ai-cars", "6"])
+                .unwrap()
+                .ai_cars,
+            6
+        );
+        assert!(parse(&["--host", "7777", "--ai-cars", "16"]).is_err());
+    }
+
+    #[test]
     fn rejects_unusable_window_capture_and_nonfinite_setup() {
         for args in [
             vec!["--size", "0x900"],
@@ -406,5 +483,28 @@ mod tests {
         // The command-line DRS mode applies on top of saved aids.
         let options = parse(&["--drs-anywhere"]).unwrap();
         assert!(options.player_assists().drs_anywhere && !options.aids_explicit);
+    }
+}
+
+#[cfg(test)]
+mod multiplayer_test_options {
+    use super::*;
+    #[test]
+    fn test_automation_is_explicit_and_requires_an_online_session() {
+        assert!(Options::parse(["--test-driver"].into_iter().map(String::from)).is_err());
+        assert!(Options::parse(
+            ["--host", "7777", "--test-lobby", "17"]
+                .into_iter()
+                .map(String::from)
+        )
+        .is_err());
+        let options = Options::parse(
+            ["--host", "7777", "--test-driver", "--test-lobby", "4"]
+                .into_iter()
+                .map(String::from),
+        )
+        .unwrap();
+        assert!(options.test_driver);
+        assert_eq!(options.test_lobby, Some(4));
     }
 }

@@ -141,7 +141,7 @@ fn ends_in_braking(track: &Track, end: f64) -> bool {
 }
 
 /// Per-car eligibility, earned at detection and spent at the end of a zone.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
 pub struct Tracker {
     eligible: Vec<bool>,
     last_s: Option<f64>,
