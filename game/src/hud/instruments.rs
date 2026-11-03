@@ -866,14 +866,16 @@ fn tyre_display(hud: &Hud, style: &HudStyle, session: &Session, scale: f32) {
     }
 }
 
-/// Twin tyre gauge, like a twin-engine temperature instrument: the left half
-/// is the front axle, the right half the rear, each with its own banded scale
-/// rising from the bottom and its own needle from a shared hub. Needles stay
-/// in their half, so readouts live in the top and bottom gaps untouched.
+/// Tyre gauge: the temperature scale sweeps the top of the face, with the
+/// front pointer outside its band and the rear pointer inside. Beneath it a
+/// top-down tyre map colours each tyre by its thermal band and carries each
+/// axle's temperature and wear between its pair; tow and wake sit below.
 fn tyre_dials(hud: &Hud, style: &HudStyle, session: &Session, scale: f32) {
     const MIN: f32 = 40.;
     const MAX: f32 = 160.;
-    const SWEEP: f32 = 100.;
+    // Screen angles (y down): 200° is left of centre, 340° right, over the top.
+    const FROM: f32 = 200.;
+    const SWEEP: f32 = 140.;
     let car = &session.race.entrants[session.player].car;
     let colors = hud.finish.colors();
     let compound = car.setup.compound;
@@ -882,115 +884,114 @@ fn tyre_dials(hud: &Hud, style: &HudStyle, session: &Session, scale: f32) {
     let r = 104. * scale;
     let c = (24. * scale + r, hud.height() - 24. * scale - r);
     let at = |x: f32, y: f32| (c.0 + x * r, c.1 + y * r);
-    // Screen angles (y down): front climbs 130°→230° up the left side,
-    // rear climbs 50°→-50° up the right side.
-    let angle = |axle: usize, value: f32| {
-        let f = ((value - MIN) / (MAX - MIN)).clamp(0., 1.);
-        if axle == 0 {
-            130. + f * SWEEP
-        } else {
-            50. - f * SWEEP
-        }
-    };
-    bezel(hud, c, r, scale);
+    let angle = |value: f32| FROM + ((value - MIN) / (MAX - MIN)).clamp(0., 1.) * SWEEP;
     let ink = colors.ink;
-    for axle in 0..2 {
-        let span = |low: f32, high: f32| {
-            let (a, b) = (angle(axle, low.max(MIN)), angle(axle, high.min(MAX)));
-            (a, b)
-        };
-        for (low, high, color) in [
-            (MIN, optimal - window, BLUE),
-            (optimal - window, optimal + window, GREEN),
-            (optimal + window, optimal + 2. * window, TYRE_YELLOW),
-            (optimal + 2. * window, MAX, ACCENT),
-        ] {
-            if high > low {
-                arc(
-                    hud,
-                    c,
-                    r * 0.86,
-                    span(low, high),
-                    r * 0.07,
-                    color.gamma_multiply(0.85),
-                );
-            }
-        }
-        for step in 0..=12 {
-            let value = MIN + step as f32 * 10.;
-            let major = step % 4 == 0;
-            let theta = angle(axle, value);
-            hud.line(
-                polar(c, r * if major { 0.66 } else { 0.72 }, theta),
-                polar(c, r * 0.79, theta),
-                if major { 1.8 } else { 0.8 } * scale,
-                ink,
+    bezel(hud, c, r, scale);
+
+    for (low, high, color) in [
+        (MIN, optimal - window, BLUE),
+        (optimal - window, optimal + window, GREEN),
+        (optimal + window, optimal + 2. * window, TYRE_YELLOW),
+        (optimal + 2. * window, MAX, ACCENT),
+    ] {
+        let (low, high) = (low.max(MIN), high.min(MAX));
+        if high > low {
+            arc(
+                hud,
+                c,
+                r * 0.8,
+                (angle(low), angle(high)),
+                r * 0.06,
+                color.gamma_multiply(0.85),
             );
         }
     }
-    // Axle letters at the hot end of each scale.
-    for (axle, label) in [(0, "F"), (1, "R")] {
-        let warning = (0..2).any(|side| {
-            let wheel = &car.wheels[axle * 2 + side];
-            wheel.locked || wheel.sliding > 0.3
-        });
+    for step in 0..=12 {
+        let value = MIN + step as f32 * 10.;
+        let major = step % 3 == 0;
+        hud.line(
+            polar(c, r * if major { 0.64 } else { 0.68 }, angle(value)),
+            polar(c, r * 0.73, angle(value)),
+            if major { 1.6 } else { 0.8 } * scale,
+            Color::from_gray(150),
+        );
+    }
+    for (value, x) in [(MIN, -0.72), (MAX, 0.72)] {
         hud.text_mid(
-            &style.bold,
-            0.13 * r,
-            polar(
-                c,
-                r * 0.56,
-                angle(axle, MAX) + if axle == 0 { 12. } else { -12. },
-            ),
+            &style.regular,
+            0.09 * r,
+            at(x, -0.12),
             Align::Center,
-            if warning { ACCENT } else { colors.muted },
-            label,
+            colors.muted,
+            &format!("{value:.0}"),
         );
     }
     hud.text_mid(
         &style.bold,
-        0.1 * r,
-        at(0., -0.36),
+        0.09 * r,
+        at(0., -0.5),
         Align::Center,
         colors.muted,
         &format!("{} °C", compound.label()),
     );
 
-    // Readouts in the bottom gap: temperature in its band colour, wear below.
+    // Tyre map: fronts narrower than rears, each pair around its readout.
+    let tyre_w = [0.16 * r, 0.18 * r];
+    let tyre_h = 0.3 * r;
+    let axle_y = [-0.08, 0.36];
+    let half_track = [0.35, 0.36];
     for axle in 0..2 {
         let tyre = car.tyres[axle];
-        let x = if axle == 0 { -0.2 } else { 0.2 };
+        let temperature = session.telemetry.temperatures[axle].value(tyre.temperature);
+        let band = TyreBand::of(temperature, compound).color();
+        for side in 0..2 {
+            let wheel = &car.wheels[axle * 2 + side];
+            let sign = if side == 0 { -1. } else { 1. };
+            let (x, y) = at(sign * half_track[axle], axle_y[axle]);
+            let (left, top) = (x - tyre_w[axle] * 0.5, y - tyre_h * 0.5);
+            hud.fill_round(left, top, tyre_w[axle], tyre_h, 3. * scale, band);
+            if wheel.locked || wheel.sliding > 0.3 {
+                hud.stroke_round(
+                    left - 1.5 * scale,
+                    top - 1.5 * scale,
+                    tyre_w[axle] + 3. * scale,
+                    tyre_h + 3. * scale,
+                    4. * scale,
+                    2. * scale,
+                    WHITE,
+                );
+            }
+        }
+        // Pointer colour keys the axle: white front, amber rear.
+        let key = if axle == 0 { ink } else { AMBER };
+        hud.fill_rect(
+            c.0 - 0.14 * r,
+            c.1 + (axle_y[axle] - 0.16) * r,
+            0.28 * r,
+            1.5 * scale,
+            key,
+        );
         hud.text_mid(
             &style.bold,
-            0.17 * r,
-            at(x, 0.4),
+            0.2 * r,
+            at(0., axle_y[axle] - 0.02),
             Align::Center,
-            TyreBand::of(tyre.temperature, compound).color(),
-            &format!(
-                "{:.0}",
-                session.telemetry.temperatures[axle].value(tyre.temperature)
-            ),
+            band,
+            &format!("{temperature:.0}"),
         );
         hud.text_mid(
             &style.regular,
             0.09 * r,
-            at(x, 0.55),
+            at(0., axle_y[axle] + 0.12),
             Align::Center,
             colors.muted,
             &format!(
-                "{:.0}%",
+                "{:.0}% WEAR",
                 session.telemetry.wear[axle].value(tyre.wear) * 100.
             ),
         );
     }
-    hud.text_mid(
-        &style.bold,
-        0.075 * r,
-        at(0., 0.55),
-        Align::Center,
-        colors.muted,
-        "WEAR",
-    );
+
     let (w, h) = (0.3 * r, 0.12 * r);
     for (x, label, value, color) in [
         (
@@ -1036,24 +1037,27 @@ fn tyre_dials(hud: &Hud, style: &HudStyle, session: &Session, scale: f32) {
         );
     }
 
-    // Needles: rear first so the front reads on top at the hub.
+    // Front pointer outside the band pointing in, rear inside pointing out;
+    // rear first so the front reads on top.
     for axle in [1, 0] {
         let value = session.telemetry.temperatures[axle].value(car.tyres[axle].temperature) as f32;
-        let theta = angle(axle, value);
+        let theta = angle(value);
+        let (base, tip) = if axle == 0 {
+            (0.93, 0.83)
+        } else {
+            (0.66, 0.77)
+        };
         let points = [
-            polar(c, r * 0.1, theta + 180.),
-            polar(c, 2.2 * scale, theta + 90.),
-            polar(c, r * 0.84, theta),
-            polar(c, 2.2 * scale, theta - 90.),
+            polar(c, r * base, theta - 5.),
+            polar(c, r * tip, theta),
+            polar(c, r * base, theta + 5.),
         ];
         hud.painter.add(egui::Shape::convex_polygon(
             points.into_iter().map(|p| egui::pos2(p.0, p.1)).collect(),
             if axle == 0 { ink } else { AMBER },
-            egui::Stroke::NONE,
+            egui::Stroke::new(scale, Color::from_rgb(8, 9, 10)),
         ));
     }
-    hud.disc(c, 6. * scale, Color::from_gray(111), Color::from_gray(21));
-    hud.circle(c, 2. * scale, Color::from_gray(12));
 }
 
 #[cfg(test)]
