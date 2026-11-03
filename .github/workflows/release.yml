@@ -83,7 +83,6 @@ jobs:
     env:
       CARGO_BUILD_JOBS: "2"
       CARGO_PROFILE_RELEASE_DEBUG: "0"
-      F1_PACKAGE_ASSETS: ${{ runner.temp }}/game-assets/assets
     steps:
       - uses: actions/checkout@v7
         with:
@@ -130,6 +129,7 @@ jobs:
         shell: pwsh
         env:
           MSYS2_LOCATION: ${{ steps.msys2.outputs.msys2-location }}
+          F1_PACKAGE_ASSETS: ${{ runner.temp }}/game-assets/assets
         run: |
           $env:PATH = "$env:MSYS2_LOCATION\mingw64\bin;$env:PATH"
           python tools/package/build_windows.py
@@ -167,7 +167,7 @@ jobs:
             F1-Racecraft-*-linux-x86_64.AppImage \
             F1-Racecraft-*-windows-x86_64.exe > SHA256SUMS
 
-      - name: Create or update the GitHub Release
+      - name: Publish verified release assets
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ github.ref_name }}
