@@ -1057,3 +1057,128 @@ mod spa_opening_lap {
         assert_eq!(spun, 0, "{spun} cars stranded at the first corner");
     }
 }
+
+/// Needs converted assets: `F1_ASSETS=assets cargo test -p racecraft-sim -- --ignored room`.
+#[cfg(test)]
+mod human_passing {
+    use super::*;
+    use crate::car::spec::test_wheels;
+
+    /// Steer the human car toward a fixed lateral offset, flat out.
+    fn hold_lane(car: &Car, track: &Track, lateral: f64) -> CarInput {
+        let frame = track.frame_at(car.track_position.s + 30.0);
+        let target = frame.point_at(lateral);
+        let offset = DVec2::new(target.x - car.position.x, target.z - car.position.z);
+        let local_left = offset.dot(car.left());
+        let distance = offset.length().max(1.0);
+        let curvature = 2.0 * local_left / (distance * distance);
+        let wheel = (car.spec.wheelbase() * curvature).atan();
+        CarInput {
+            steer: (wheel / car.steer_limit(car.speed())).clamp(-1.0, 1.0),
+            throttle: 1.0,
+            drs: true,
+            ..CarInput::default()
+        }
+    }
+
+    #[test]
+    #[ignore]
+    fn the_ai_leaves_room_for_a_faster_car_coming_alongside() {
+        let Ok(root) = std::env::var("F1_ASSETS") else {
+            return;
+        };
+        let track = Arc::new(Track::load(std::path::Path::new(&root).join("tracks/spa")).unwrap());
+        let spec = Arc::new(CarSpec::gen22(test_wheels(), 5.4, 1.9));
+        for side in [1.0, -1.0] {
+            let entrants = vec![
+                EntrantConfig {
+                    name: "You".into(),
+                    spec: spec.clone(),
+                    setup: Setup::default(),
+                    assists: Assists {
+                        automatic_gears: true,
+                        drs_anywhere: true,
+                        auto_drs: true,
+                        ..Assists::default()
+                    },
+                    ai: None,
+                    human_slot: 0,
+                    livery: [1.0; 3],
+                },
+                EntrantConfig {
+                    name: "Ahead".into(),
+                    spec: spec.clone(),
+                    setup: Setup::default(),
+                    assists: Assists {
+                        automatic_gears: true,
+                        ..Assists::default()
+                    },
+                    ai: Some(DriverProfile {
+                        pace: 0.95,
+                        aggression: 0.6,
+                        consistency: 1.0,
+                    }),
+                    human_slot: 1,
+                    livery: [1.0; 3],
+                },
+            ];
+            let mut race = Race::new(track.clone(), entrants, 3, 7);
+            race.phase = Phase::Racing;
+            let place = |car: &mut Car, s: f64, lateral: f64, speed: f64| {
+                let frame = track.frame_at(s);
+                car.position = frame.point_at(lateral) + glam::DVec3::Y * 0.3;
+                car.yaw = frame.tangent.x.atan2(frame.tangent.y);
+                car.velocity = car.forward() * speed;
+                car.yaw_rate = 0.0;
+                car.track_position = track.project(car.position, None);
+                car.powertrain.gear = 8;
+            };
+            let line = track.racing_line.offsets[track.station_at(1500.0)];
+            place(&mut race.entrants[1].car, 1500.0, line, 75.0);
+            let lane = (line + side * 3.3).clamp(-4.8, 4.8);
+            place(&mut race.entrants[0].car, 1475.0, lane, 82.0);
+            for e in &mut race.entrants {
+                e.timing.distance = e.car.track_position.s;
+                e.timing.laps_completed = 1;
+            }
+            let (mut min_sep, mut contacts, mut ai_toward) = (99.0_f64, 0, 0.0_f64);
+            let ai_start = race.entrants[1].car.track_position.lateral;
+            for _ in 0..(7.0 * PHYSICS_RATE) as usize {
+                // Aim a car width beside the AI, kept on the road.
+                let ai_lat = race.entrants[1].car.track_position.lateral;
+                let width = track
+                    .frame_at(race.entrants[0].car.track_position.s + 30.0)
+                    .half_width;
+                let input = hold_lane(
+                    &race.entrants[0].car,
+                    &track,
+                    (ai_lat + side * 3.3).clamp(-(width - 1.2), width - 1.2),
+                );
+                race.step(&[input]);
+                contacts += race
+                    .events
+                    .iter()
+                    .filter(|e| matches!(e, RaceEvent::Contact { b: Some(_), .. }))
+                    .count();
+                race.events.clear();
+                let (me, ai) = (&race.entrants[0].car, &race.entrants[1].car);
+                let gap = track.delta(me.track_position.s, ai.track_position.s);
+                let sep = (me.track_position.lateral - ai.track_position.lateral).abs();
+                if gap.abs() < 6.0 {
+                    min_sep = min_sep.min(sep);
+                }
+                ai_toward = ai_toward.max((ai.track_position.lateral - ai_start) * side);
+            }
+            let (me, ai) = (&race.entrants[0].car, &race.entrants[1].car);
+            let gap = track.delta(me.track_position.s, ai.track_position.s);
+            // A car width (1.9 m) plus margin: never squeezed into the
+            // wall or chopped as the racing line swings across.
+            assert!(
+                min_sep > 2.6,
+                "side {side}: squeezed to {min_sep:.2} m alongside"
+            );
+            assert_eq!(contacts, 0, "side {side}: {contacts} contacts");
+            let _ = (ai_toward, me, ai, gap);
+        }
+    }
+}

@@ -253,16 +253,26 @@ impl AiDriver {
         };
         let mut lane_min = -limit;
         let mut lane_max = limit;
+        let packed = in_pack(car, rivals);
         for rival in rivals {
             // Centres one car length apart is nose to tail, not alongside.
             let overlapping = rival.gap.abs() < car.spec.length + 0.5;
+            // A quicker car closing from just behind and off to one side is
+            // about to be alongside: leave it room now instead of following
+            // the line across into it. This is what lets a human pass.
+            // In a pack there is no room to give; the pack rules apply.
+            let arriving = !packed
+                && rival.gap < 0.0
+                && rival.gap > -car.spec.length * 2.5
+                && rival.speed > speed + 1.0;
+            let alongside = overlapping || arriving;
             // Only a car we are about to run into needs a lane change, and
             // only when we mean to pass it; otherwise follow it on the line
             // and let the traffic speed limit below hold us back.
             let closing = (speed - rival.speed).max(0.0);
             let attacking = matches!(self.intent, Intent::Attack { .. });
             let close_behind_them = attacking && rival.gap > 0.0 && rival.gap < 6.0 + closing * 1.5;
-            if !(overlapping || close_behind_them) {
+            if !(alongside || close_behind_them) {
                 continue;
             }
             let separation = rival.lateral - car.track_position.lateral;
@@ -271,18 +281,20 @@ impl AiDriver {
             if separation.abs() < car.spec.width * 0.5 {
                 continue;
             }
-            let needed = car.spec.width + if overlapping { 1.1 } else { 0.6 };
-            if separation.abs() < needed + 1.5 {
-                // Keep a car's width (plus margin) away on the side we are on.
-                let side = if separation > 0.0 { -1.0 } else { 1.0 };
-                let bound = rival.lateral + side * needed;
-                if overlapping {
-                    if side < 0.0 {
-                        lane_max = lane_max.min(bound);
-                    } else {
-                        lane_min = lane_min.max(bound);
-                    }
+            let needed = car.spec.width + if alongside { 1.1 } else { 0.6 };
+            // Keep a car's width (plus margin) away on the side we are on.
+            let side = if separation > 0.0 { -1.0 } else { 1.0 };
+            let bound = rival.lateral + side * needed;
+            if alongside {
+                // A hard boundary however far apart we are now, so the line
+                // cannot drift into the car beside us.
+                if side < 0.0 {
+                    lane_max = lane_max.min(bound);
+                } else {
+                    lane_min = lane_min.max(bound);
                 }
+            }
+            if separation.abs() < needed + 1.5 {
                 lateral = if side < 0.0 {
                     lateral.min(bound)
                 } else {
