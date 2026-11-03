@@ -13,6 +13,9 @@ use spec::{CarSpec, Setup};
 use std::sync::Arc;
 use tyre::{lateral_shape, load_sensitivity, AxleTyres};
 
+/// Share of rear grip ABS keeps free of braking for cornering stability.
+const REAR_ABS_HEADROOM: f64 = 0.35;
+
 pub const AIR_DENSITY: f64 = 1.225;
 pub const GRAVITY: f64 = 9.81;
 
@@ -497,12 +500,24 @@ impl Car {
 
             // Partial ABS trims a locking demand to slightly under the limit, so
             // it never beats a driver who brakes right at the limit.
+            // Full ABS never lets a wheel lock: one locked front tyre loses its
+            // cornering force while the other three keep theirs, and the car
+            // spins toward it with the lightest steering under braking.
             let mut locked = false;
+            let abs = self.assists.braking.clamp(0.0, 1.0);
+            let lock_margin = if abs >= 0.999 {
+                f64::INFINITY
+            } else {
+                1.0 + 0.5 * abs / (1.0 - abs)
+            };
             if brake_force > room {
-                if brake_force > room * (1.0 + 0.5 * self.assists.braking) + 50.0 {
+                if brake_force > room * lock_margin + 50.0 {
                     locked = wheel_long.abs() > 0.5;
                 } else {
-                    brake_force = room * (1.0 - 0.06 * self.assists.braking);
+                    // The rear is held further below its limit so it keeps
+                    // cornering grip as weight comes off it under braking.
+                    let headroom = if front { 0.06 } else { REAR_ABS_HEADROOM };
+                    brake_force = room * (1.0 - headroom * abs);
                 }
             }
             // Traction smoothing, strongest at low speed.
@@ -1092,6 +1107,59 @@ mod debug_probe {
                     car.wheels.iter().map(|w| w.spinning).collect::<Vec<_>>(), car.wheels[0].load, car.wheels[2].load,
                     car.acceleration.x, car.position.y, car.track_position.s, car.track_position.lateral);
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod abs_stability {
+    use super::*;
+    use crate::track::oval_track;
+    use spec::test_wheels;
+
+    /// Heading change over 1.2 s with a touch of lock, braking or coasting.
+    fn heading_change(kmh: f64, brake: f64) -> f64 {
+        let track = oval_track();
+        let (position, yaw) = track.grid_slot(0);
+        let mut car = Car::new(
+            Arc::new(CarSpec::gen22(test_wheels(), 5.4, 1.9)),
+            Setup::default(),
+            Assists {
+                automatic_gears: true,
+                braking: 1.0,
+                ..Assists::default()
+            },
+            &track,
+            position,
+            yaw,
+        );
+        car.velocity = car.forward() * (kmh / 3.6);
+        car.powertrain.gear = 7;
+        let dt = 1.0 / 360.0;
+        let start = car.yaw;
+        for _ in 0..(1.2 / dt) as usize {
+            car.step(
+                &CarInput {
+                    brake,
+                    steer: 0.05,
+                    ..CarInput::default()
+                },
+                &track,
+                dt,
+            );
+        }
+        (car.yaw - start).to_degrees().abs()
+    }
+
+    #[test]
+    fn abs_braking_with_a_little_lock_does_not_spin_the_car() {
+        for kmh in [300.0, 150.0, 90.0] {
+            let coasting = heading_change(kmh, 0.0);
+            let braking = heading_change(kmh, 1.0);
+            assert!(
+                braking < coasting * 2.0 + 3.0,
+                "{kmh} km/h: braking turned {braking:.1} deg, coasting {coasting:.1} deg"
+            );
         }
     }
 }
