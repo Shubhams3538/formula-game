@@ -109,7 +109,7 @@ pub(super) fn strip(
         &delta,
     );
     for sector in 0..3 {
-        let top = y + (160. + sector as f32 * 28.) * s;
+        let top = y + (157. + sector as f32 * 24.) * s;
         let active = running && timing.distance >= 0. && timing.sector == sector;
         let split = session.telemetry.splits[sector];
         let fresh = split.is_some_and(|split| split.lap == timing.laps_completed);
@@ -117,13 +117,13 @@ pub(super) fn strip(
         if active {
             hud.fill_rect(
                 x + 5. * s,
-                top,
+                top + 1. * s,
                 w - 10. * s,
-                26. * s,
+                22. * s,
                 Color::from_rgb(16, 30, 45).gamma_multiply(0.78),
             );
         }
-        let mid = top + 13. * s;
+        let mid = top + 12. * s;
         hud.text_mid(
             &style.bold,
             (14. * s).max(11.),
@@ -134,10 +134,10 @@ pub(super) fn strip(
         );
         minisectors(
             hud,
-            x + 72. * s,
-            top + 8. * s,
-            72. * s,
-            10. * s,
+            x + 50. * s,
+            top + 6. * s,
+            108. * s,
+            12. * s,
             MinisectorState {
                 sector,
                 active,
@@ -155,38 +155,11 @@ pub(super) fn strip(
         readout(
             hud,
             style,
-            (17. * s).max(12.),
-            (x + 156. * s, mid),
-            Align::Right,
-            color,
-            &value,
-        );
-        let (status, color) = if active {
-            ("LIVE".into(), BLUE)
-        } else if let Some(split) = split {
-            if !fresh && timing.finish_time.is_none() {
-                ("LAST".into(), colors.muted)
-            } else {
-                split.delta.map_or_else(
-                    || ("FIRST".into(), colors.muted),
-                    |delta| {
-                        (
-                            format!("{delta:+.2}"),
-                            if delta <= 0. { PURPLE } else { AMBER },
-                        )
-                    },
-                )
-            }
-        } else {
-            ("--".into(), colors.muted)
-        };
-        hud.text_mid(
-            &style.regular,
-            (14. * s).max(11.),
+            (16. * s).max(12.),
             (value_x, mid),
             Align::Right,
             color,
-            &status,
+            &value,
         );
     }
 }
