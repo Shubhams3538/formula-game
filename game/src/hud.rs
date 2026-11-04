@@ -671,6 +671,72 @@ fn follow_events(session: &mut Session) {
     }
 }
 
+/// Width of the online ping column in the timing tower, in logical units.
+const PING_COLUMN: f32 = 62.0;
+
+/// Connection quality for a round-trip time, using the shared semantic colours.
+pub fn ping_color(ms: u16) -> Color {
+    match ms {
+        0..=59 => GREEN,
+        60..=119 => AMBER,
+        _ => ACCENT,
+    }
+}
+
+/// Signal bars plus the round-trip time, right-aligned in the tower's ping column.
+fn ping_cell(
+    hud: &mut Hud,
+    style: &HudStyle,
+    (x, y): (f32, f32),
+    (w, h): (f32, f32),
+    ms: u16,
+    ink: Color,
+    scale: f32,
+) {
+    // A hairline separates the ping column from the race gaps.
+    hud.fill_rect(
+        x,
+        y + 5. * scale,
+        scale.max(1.),
+        h - 10. * scale,
+        Color::from_white_alpha(28),
+    );
+    let color = ping_color(ms);
+    let lit = match ms {
+        0..=59 => 3,
+        60..=119 => 2,
+        _ => 1,
+    };
+    let bar_w = 4. * scale;
+    let base = y + h * 0.5 + 6. * scale;
+    for bar in 0..3 {
+        let bar_h = (5. + 3.5 * bar as f32) * scale;
+        hud.fill_rect(
+            x + 8. * scale + bar as f32 * (bar_w + 2. * scale),
+            base - bar_h,
+            bar_w,
+            bar_h,
+            if bar < lit {
+                color
+            } else if ink.r() < 100 {
+                // The player's inverted analog row is pale.
+                Color::from_black_alpha(60)
+            } else {
+                Color::from_white_alpha(40)
+            },
+        );
+    }
+    readout(
+        hud,
+        style,
+        15. * scale,
+        (x + w - 12. * scale, y + h * 0.5),
+        Align::Right,
+        ink,
+        &ms.min(999).to_string(),
+    );
+}
+
 pub fn draw(hud: &mut Hud, style: &HudStyle, session: &mut Session, display: Settings, dt: f32) {
     if hud.width() <= 0.0 || hud.height() <= 0.0 {
         return;
@@ -697,11 +763,15 @@ pub fn draw(hud: &mut Hud, style: &HudStyle, session: &mut Session, display: Set
     let lap = (player.timing.laps_completed + 1).min(race.laps);
     // Broadcast timing strip; instrument chrome belongs to the physical dials.
     let tower_x = 24.0 * scale;
-    let tower_w = 278.0 * scale;
+    // Online races add a fixed ping column to the right of the gaps.
+    let online = !session.pings.is_empty();
+    let ping_w = if online { PING_COLUMN * scale } else { 0.0 };
+    let tower_w = 278.0 * scale + ping_w;
     let mut y = 24.0 * scale;
     let row = 28.0 * scale;
     // The LCD tower is opaque so unlit segments read as glass, not scenery.
-    let smoke = |alpha: u8| match hud.finish {
+    let finish = hud.finish;
+    let smoke = move |alpha: u8| match finish {
         Finish::Digital => Color::from_rgb(6, 10, 11),
         Finish::Analog => Color::from_black_alpha(alpha),
     };
@@ -853,11 +923,24 @@ pub fn draw(hud: &mut Hud, style: &HudStyle, session: &mut Session, display: Set
             hud,
             style,
             15.0 * scale,
-            (tower_x + tower_w - 14.0 * scale, mid),
+            (tower_x + tower_w - ping_w - 14.0 * scale, mid),
             Align::Right,
             dim,
             &gap,
         );
+        if online {
+            if let Some(ms) = session.pings.get(index).copied().flatten() {
+                ping_cell(
+                    hud,
+                    style,
+                    (tower_x + tower_w - ping_w, y),
+                    (ping_w, row - scale),
+                    ms,
+                    if mine { ink } else { dim },
+                    scale,
+                );
+            }
+        }
         y += row;
     }
     y += 8. * scale;

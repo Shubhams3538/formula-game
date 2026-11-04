@@ -451,6 +451,7 @@ pub fn apply(
         delta: default(),
         telemetry: default(),
         ready: false,
+        pings: Vec::new(),
         screen: Screen::Loading,
     };
     *options = selected;
@@ -459,17 +460,17 @@ pub fn apply(
     assets::spawn_visuals(&mut commands, &server, &options, &session);
 }
 
-const RED: Color32 = Color32::from_rgb(230, 35, 48);
-const DIM: Color32 = Color32::from_rgb(160, 166, 178);
-const LABEL: Color32 = Color32::from_rgb(120, 125, 136);
-const BACKDROP: Color32 = Color32::from_rgb(20, 21, 24);
-const HOUSING: Color32 = Color32::from_rgb(37, 38, 42);
-const HOUSING_EDGE: Color32 = Color32::from_rgb(74, 76, 83);
-const WELL: Color32 = Color32::from_rgb(9, 10, 12);
-const WELL_RIM: Color32 = Color32::from_rgb(56, 58, 64);
+pub(crate) const RED: Color32 = Color32::from_rgb(230, 35, 48);
+pub(crate) const DIM: Color32 = Color32::from_rgb(160, 166, 178);
+pub(crate) const LABEL: Color32 = Color32::from_rgb(120, 125, 136);
+pub(crate) const BACKDROP: Color32 = Color32::from_rgb(20, 21, 24);
+pub(crate) const HOUSING: Color32 = Color32::from_rgb(37, 38, 42);
+pub(crate) const HOUSING_EDGE: Color32 = Color32::from_rgb(74, 76, 83);
+pub(crate) const WELL: Color32 = Color32::from_rgb(9, 10, 12);
+pub(crate) const WELL_RIM: Color32 = Color32::from_rgb(56, 58, 64);
 
 /// Raised charcoal panel matching the race HUD's instrument housings.
-fn housing() -> egui::Frame {
+pub(crate) fn housing() -> egui::Frame {
     egui::Frame::new()
         .fill(HOUSING)
         .stroke(egui::Stroke::new(1.5, HOUSING_EDGE))
@@ -478,7 +479,7 @@ fn housing() -> egui::Frame {
 }
 
 /// Spaced uppercase section label, printed like a dash caption.
-fn section(ui: &mut egui::Ui, text: &str) {
+pub(crate) fn section(ui: &mut egui::Ui, text: &str) {
     ui.label(
         RichText::new(text.to_uppercase())
             .size(15.)
@@ -488,7 +489,7 @@ fn section(ui: &mut egui::Ui, text: &str) {
 }
 
 /// Form rows keep labels, dropdowns, sliders, and value boxes on shared axes.
-fn setting_row(ui: &mut egui::Ui, label: &str, add_control: impl FnOnce(&mut egui::Ui)) {
+pub(crate) fn setting_row(ui: &mut egui::Ui, label: &str, add_control: impl FnOnce(&mut egui::Ui)) {
     let width = ui.available_width();
     let label_width = (width * 0.38).clamp(96., 190.);
     let row_height = if width < 440. { 40. } else { 32. };
@@ -656,7 +657,7 @@ pub fn ui(
 
     // Every footer action shares one size.
     let action = egui::vec2(
-        ((content_max_width.min(size.x) - margin * 2. - 24.) / 3.).clamp(120., 190.),
+        ((content_max_width.min(size.x) - margin * 2. - 36.) / 4.).clamp(120., 190.),
         44.,
     );
     egui::Panel::bottom("settings-actions")
@@ -711,6 +712,19 @@ pub fn ui(
                                     frontend.widgets.insert("start", start.rect);
                                     if start.clicked() {
                                         frontend.pending = true;
+                                    }
+                                    if let Some(online) = online.as_mut() {
+                                        let multiplayer = ui.add_enabled(
+                                            frontend.benchmark.child.is_none(),
+                                            egui::Button::new(
+                                                RichText::new("Multiplayer").strong(),
+                                            )
+                                            .fill(HOUSING)
+                                            .min_size(action),
+                                        );
+                                        if multiplayer.clicked() {
+                                            online.show();
+                                        }
                                     }
                                     let quit = ui.add(
                                         egui::Button::new(RichText::new("Quit game").strong())

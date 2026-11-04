@@ -56,6 +56,8 @@ pub struct Session {
     pub show_racing_line: bool,
     pub show_performance: bool,
     pub poses: pose::Poses,
+    /// Round-trip time per entrant slot in an online race; empty offline.
+    pub pings: Vec<Option<u16>>,
 }
 
 fn main() -> ExitCode {
@@ -160,6 +162,7 @@ fn build_app(mut options: Options) -> Result<App, String> {
         delta: default(),
         telemetry: default(),
         ready: false,
+        pings: Vec::new(),
         screen: if quick_race {
             menu::Screen::Racing
         } else {

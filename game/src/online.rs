@@ -1,12 +1,15 @@
 //! Graphical lobby and the bridge from authoritative networking into the existing Session.
 use crate::{
-    menu::{Frontend, Screen},
+    menu::{
+        housing, section, setting_row, Frontend, Screen, BACKDROP, DIM, HOUSING, LABEL, RED, WELL,
+        WELL_RIM,
+    },
     options::Options,
     pose::Poses,
     Session,
 };
 use bevy::prelude::*;
-use bevy_egui::egui;
+use bevy_egui::egui::{self, Color32, RichText};
 use racecraft_net::{
     Client, ClientMessage, Endpoint, Lobby, RaceSettings, Server, ServerHandle, Stage, MAX_PLAYERS,
 };
@@ -135,8 +138,14 @@ impl Online {
         session.paused = true;
         session.screen = Screen::Main;
         session.controls = default();
+        session.pings.clear();
     }
-    /// Returns true while this panel owns race/session controls.
+    /// Open the multiplayer screens from the main menu.
+    pub fn show(&mut self) {
+        self.open = true;
+    }
+    /// Draws the multiplayer screens. Returns true while they own the frame, so
+    /// the offline menu stays hidden behind them.
     pub fn ui(
         &mut self,
         context: &egui::Context,
@@ -144,328 +153,1064 @@ impl Online {
         session: &mut Session,
         options: &Options,
     ) -> bool {
-        if self.client.is_none() && !self.open {
-            egui::Area::new("multiplayer-open".into())
-                .anchor(egui::Align2::RIGHT_TOP, [-16., 16.])
-                .show(context, |ui| {
-                    if ui.button("Multiplayer").clicked() {
-                        self.open = true;
-                    }
-                });
-            return false;
-        }
-        if self
-            .client
-            .as_ref()
-            .is_some_and(|c| c.active() && c.stage() != Stage::Results)
-            && session.screen == Screen::Racing
-        {
-            egui::Area::new("online-status".into())
-                .anchor(egui::Align2::CENTER_TOP, [0., 8.])
-                .show(context, |ui| {
-                    let client = self.client.as_ref().unwrap();
-                    ui.label(format!("ONLINE · {:.0} ms · Esc for room", client.rtt_ms()));
-                });
+        // Driving: the timing tower carries everyone's ping, so nothing overlays the road.
+        if self.client.as_ref().is_some_and(|c| {
+            c.active() && c.stage() != Stage::Results && session.screen == Screen::Racing
+        }) {
             return true;
         }
-        let mut leave = false;
-        let mut start = None;
-        let mut action = None;
-        egui::Window::new("Multiplayer · 16 drivers")
-            .default_width(430.)
-            .collapsible(false)
-            .vscroll(true)
-            .max_height((context.viewport_rect().height() - 60.).max(200.))
-            .show(context, |ui| {
-                if let Some(error) = &self.error {
-                    ui.colored_label(egui::Color32::LIGHT_RED, error);
-                }
-                if let Some(client) = &mut self.client {
-                    if let Some(error) = client.error.take() {
-                        self.error = Some(error);
-                    }
-                    if let Some(lobby) = client.lobby.clone() {
-                        if self.draft_owner != Some(lobby.owner) {
-                            self.settings = lobby.settings.clone();
-                            self.draft_owner = Some(lobby.owner);
-                        }
-                        ui.label(format!(
-                            "{} humans + {} AI / {} cars · {:?} · {:.0} ms",
-                            lobby.players.len(),
-                            lobby.settings.ai_cars,
-                            MAX_PLAYERS,
-                            lobby.stage,
-                            client.rtt_ms()
-                        ));
-                        ui.label(format!(
-                            "{} · {} · {} laps",
-                            lobby.settings.track, lobby.settings.car, lobby.settings.laps
-                        ));
-                        if self.host.is_some() {
-                            ui.label(format!(
-                                "Hosting on UDP port {}. Share your LAN/VPN IP.",
-                                self.port
-                            ));
-                        }
-                        for (slot, player) in lobby.players.iter().enumerate() {
-                            ui.horizontal(|ui| {
-                                ui.label(format!(
-                                    "{}  {}{}  {}",
-                                    slot + 1,
-                                    player.name,
-                                    if player.id == lobby.owner {
-                                        " (owner)"
-                                    } else {
-                                        ""
-                                    },
-                                    if !player.connected {
-                                        "AI takeover"
-                                    } else if player.ready {
-                                        "Ready"
-                                    } else {
-                                        "Waiting"
-                                    }
-                                ));
-                                if lobby.stage == Stage::Lobby && client.owner() {
-                                    let mut ids: Vec<_> =
-                                        lobby.players.iter().map(|p| p.id).collect();
-                                    if ui.add_enabled(slot > 0, egui::Button::new("↑")).clicked()
-                                    {
-                                        ids.swap(slot, slot - 1);
-                                        action = Some(ClientMessage::Grid(ids.clone()));
-                                    }
-                                    if ui
-                                        .add_enabled(slot + 1 < ids.len(), egui::Button::new("↓"))
-                                        .clicked()
-                                    {
-                                        ids.swap(slot, slot + 1);
-                                        action = Some(ClientMessage::Grid(ids));
-                                    }
-                                }
-                            });
-                        }
-                        if lobby.stage == Stage::Lobby {
-                            let ready = lobby
-                                .players
-                                .iter()
-                                .find(|p| p.id == client.id)
-                                .is_some_and(|p| p.ready);
-                            if ui
-                                .button(if ready { "Not ready" } else { "Ready" })
-                                .clicked()
-                            {
-                                action = Some(ClientMessage::Ready(!ready));
-                            }
-                            if client.owner() {
-                                let mut settings = self.settings.clone();
-                                let before = lobby.settings.clone();
-                                ui.add(egui::Slider::new(&mut settings.laps, 1..=100).text("Laps"));
-                                let max_ai = MAX_PLAYERS - lobby.players.len();
-                                ui.add(
-                                    egui::Slider::new(&mut settings.ai_cars, 0..=max_ai)
-                                        .text("AI cars"),
-                                );
-                                ui.checkbox(
-                                    &mut settings.lock_aids,
-                                    "Everyone uses the owner's aids",
-                                );
-                                aids_panel(ui, &mut settings);
-                                if ui.button("Reset shared rules to defaults").clicked() {
-                                    settings = RaceSettings {
-                                        car: lobby.settings.car.clone(),
-                                        track: lobby.settings.track.clone(),
-                                        ..RaceSettings::default()
-                                    };
-                                    action = Some(ClientMessage::Settings(settings.clone()));
-                                }
-                                // The controls above edit a draft; the room changes only on Apply.
-                                // Starting with unapplied edits would race with rules the
-                                // controls no longer show, so require Apply or Discard first.
-                                let unapplied = settings != before && action.is_none();
-                                if unapplied {
-                                    ui.colored_label(
-                                        egui::Color32::YELLOW,
-                                        "Rule changes are not applied to the room yet.",
-                                    );
-                                    ui.horizontal(|ui| {
-                                        if ui
-                                            .button("Apply race settings (clears readiness)")
-                                            .clicked()
-                                        {
-                                            action =
-                                                Some(ClientMessage::Settings(settings.clone()));
-                                        }
-                                        if ui.button("Discard changes").clicked() {
-                                            settings = before.clone();
-                                        }
-                                    });
-                                }
-                                // Keep the draft across frames without mutating server settings on a slider drag.
-                                self.settings = settings;
-                                if ui
-                                    .add_enabled(
-                                        can_start(&lobby, unapplied),
-                                        egui::Button::new("Start race"),
-                                    )
-                                    .clicked()
-                                {
-                                    action = Some(ClientMessage::Start);
-                                }
-                            }
-                        } else if lobby.stage == Stage::Loading {
-                            ui.label("Loading track and cars. Waiting for every driver…");
-                        } else if lobby.stage == Stage::Results {
-                            for &slot in session.race.order() {
-                                ui.label(format!(
-                                    "P{}  {}",
-                                    session.race.position_of(slot),
-                                    session.race.entrants[slot].name
-                                ));
-                            }
-                            if client.owner() && ui.button("Return everyone to lobby").clicked() {
-                                action = Some(ClientMessage::Return);
-                            }
-                        } else {
-                            if session.screen != Screen::Racing
-                                && ui.button("Resume driving").clicked()
-                            {
-                                crate::menu::resume(session);
-                            }
-                            ui.label("Opening this menu does not pause the shared race.");
-                            ui.add(
-                                egui::Slider::new(&mut frontend.audio.master, 0. ..=1.)
-                                    .text("Local audio"),
-                            );
-                            ui.checkbox(&mut frontend.muted, "Mute");
-                        }
-                    } else {
-                        ui.label("Connecting and checking matching assets…");
-                    }
-                    if ui.button("Leave room").clicked() {
-                        leave = true;
-                    }
-                } else {
-                    ui.label("Driver name");
-                    ui.text_edit_singleline(&mut self.name);
-                    if !frontend.teams.teams.is_empty() {
-                        egui::ComboBox::from_label("GEN22 driver identity")
-                            .selected_text(self.identity.as_ref().map_or_else(
-                                || "Assign a free driver".to_owned(),
-                                |i| format!("{} / {}", i.team, i.driver),
-                            ))
-                            .show_ui(ui, |ui| {
-                                ui.selectable_value(
-                                    &mut self.identity,
-                                    None,
-                                    "Assign a free driver",
-                                );
-                                for team in &frontend.teams.teams {
-                                    for driver in &team.drivers {
-                                        ui.selectable_value(
-                                            &mut self.identity,
-                                            Some(racecraft_net::DriverIdentity {
-                                                team: team.id.clone(),
-                                                driver: driver.id.clone(),
-                                            }),
-                                            format!("{} · {}", team.name, driver.name),
-                                        );
-                                    }
-                                }
-                            });
-                    }
-                    ui.label("Join address (LAN IP:port or wss://server.onrender.com)");
-                    ui.text_edit_singleline(&mut self.address);
-                    if ui.button("Join room").clicked() {
-                        start = Some(false);
-                    }
-                    ui.separator();
-                    ui.label("Create a room");
-                    ui.add(
-                        egui::DragValue::new(&mut self.port)
-                            .range(1024..=65535)
-                            .prefix("UDP port "),
-                    );
-                    egui::ComboBox::from_label("Car")
-                        .selected_text(&self.settings.car)
-                        .show_ui(ui, |ui| {
-                            ui.selectable_value(&mut self.settings.car, "rb6".into(), "RB6");
-                            ui.selectable_value(&mut self.settings.car, "gen22".into(), "GEN22");
-                        });
-                    ui.label(format!(
-                        "Circuit: {} (select another circuit in Race setup)",
-                        frontend.draft.track
-                    ));
-                    self.settings.track = frontend.draft.track.clone();
-                    ui.add(egui::Slider::new(&mut self.settings.laps, 1..=100).text("Laps"));
-                    ui.add(
-                        egui::Slider::new(&mut self.settings.ai_cars, 0..=MAX_PLAYERS - 1)
-                            .text("AI cars"),
-                    );
-                    ui.checkbox(&mut self.settings.lock_aids, "Lock aids for everyone");
-                    aids_panel(ui, &mut self.settings);
-                    if ui.button("Host room").clicked() {
-                        start = Some(true);
-                    }
-                    if ui.button("Back to offline").clicked() {
-                        self.open = false;
-                    }
-                }
+        if self.client.is_none() && !self.open {
+            return false;
+        }
+        if let Some(error) = self.client.as_mut().and_then(|c| c.error.take()) {
+            self.error = Some(error);
+        }
+        let page = match &self.client {
+            None => Page::Connect,
+            Some(client) => match &client.lobby {
+                None => Page::Connecting,
+                Some(lobby) => match lobby.stage {
+                    Stage::Lobby => Page::Lobby(lobby.clone()),
+                    Stage::Loading => Page::Loading(lobby.clone()),
+                    Stage::Grid | Stage::Racing => Page::Live(lobby.clone()),
+                    Stage::Results | Stage::Closed => Page::Results(lobby.clone()),
+                },
+            },
+        };
+        if let Page::Lobby(lobby) = &page {
+            let owner = self.client.as_ref().is_some_and(|c| c.owner());
+            // Owners edit a draft; everyone else always sees the room's rules.
+            if self.draft_owner != Some(lobby.owner) || !owner {
+                self.settings = lobby.settings.clone();
+                self.draft_owner = Some(lobby.owner);
+            }
+        }
+        let size = context.content_rect().size();
+        let margin = (size.x * 0.018).clamp(10., 24.);
+        let content_width = (size.x * 0.94).clamp(300., 1280.);
+        let mut viewport = egui::Ui::new(
+            context.clone(),
+            "online-viewport".into(),
+            egui::UiBuilder::new()
+                .layer_id(egui::LayerId::background())
+                .max_rect(context.viewport_rect()),
+        );
+        let mut intent = Intent::default();
+
+        // ---- Footer actions, the same bar the offline menu uses.
+        let footer_height = if size.y < 520. { 56. } else { 72. };
+        let button = egui::vec2(((content_width - 24.) / 3.).clamp(110., 200.), 44.);
+        let translucent = matches!(page, Page::Live(_)) && session.ready;
+        let backdrop = if translucent {
+            BACKDROP.gamma_multiply(0.82)
+        } else {
+            BACKDROP
+        };
+        egui::Panel::bottom("online-actions")
+            .exact_size(footer_height)
+            .show_separator_line(false)
+            .frame(
+                egui::Frame::new()
+                    .fill(backdrop)
+                    .inner_margin(egui::Margin::symmetric(margin as i8, 8)),
+            )
+            .show(&mut viewport, |ui| {
+                centered(ui, content_width, |ui| {
+                    ui.horizontal_wrapped(|ui| {
+                        ui.spacing_mut().item_spacing.x = 12.;
+                        self.footer(ui, &page, session, button, &mut intent);
+                    });
+                });
             });
-        if let Some(host) = start {
+
+        // ---- Page body.
+        egui::CentralPanel::default()
+            .frame(
+                egui::Frame::new()
+                    .fill(backdrop)
+                    .inner_margin(margin as i8),
+            )
+            .show(&mut viewport, |ui| {
+                centered(ui, content_width, |ui| {
+                    let (title, subtitle) = page.heading(self.host.is_some());
+                    ui.label(
+                        RichText::new(title)
+                            .size(if size.x < 700. { 28. } else { 36. })
+                            .strong(),
+                    );
+                    ui.label(RichText::new(subtitle).color(DIM));
+                    if let Some(error) = &self.error {
+                        ui.add_space(4.);
+                        notice(ui, error, ERROR);
+                    }
+                    ui.add_space(10.);
+                    egui::ScrollArea::vertical()
+                        .id_salt("online-body")
+                        .auto_shrink([false, false])
+                        .show(ui, |ui| match &page {
+                            Page::Connect => self.connect_page(ui, frontend, &mut intent),
+                            Page::Connecting => {
+                                housing().show(ui, |ui| {
+                                    ui.set_width(ui.available_width());
+                                    ui.horizontal(|ui| {
+                                        ui.spinner();
+                                        ui.label("Connecting and checking that your assets match the room…");
+                                    });
+                                });
+                            }
+                            Page::Lobby(lobby) => {
+                                self.lobby_page(ui, lobby, frontend, &mut intent)
+                            }
+                            Page::Loading(lobby) => {
+                                housing().show(ui, |ui| {
+                                    ui.set_width(ui.available_width());
+                                    ui.horizontal(|ui| {
+                                        ui.spinner();
+                                        ui.label("Loading the circuit and cars. The race starts when every driver is ready.");
+                                    });
+                                });
+                                ui.add_space(12.);
+                                self.roster(ui, lobby, frontend, false, &mut intent);
+                            }
+                            Page::Live(lobby) => self.live_page(ui, lobby, frontend, session),
+                            Page::Results(_) => self.results_page(ui, session),
+                        });
+                });
+            });
+
+        if let Some(host) = intent.start {
             if let Err(error) = self.begin(host, options, frontend.aids) {
                 self.error = Some(error);
             }
         }
-        if let Some(action) = action {
+        if let Some(message) = intent.send {
             if let Some(client) = &mut self.client {
-                if let Err(error) = client.send(action) {
+                if let Err(error) = client.send(message) {
                     self.error = Some(error);
                 }
             }
         }
-        if leave {
+        if intent.resume {
+            crate::menu::resume(session);
+        }
+        if intent.close {
+            self.open = false;
+            self.error = None;
+        }
+        if intent.leave {
             self.leave(session);
         }
-        self.client.is_some()
+        self.client.is_some() || self.open
     }
-}
-/// The owner may start once every driver is ready and the rules shown are the room's rules.
-fn can_start(lobby: &Lobby, unapplied: bool) -> bool {
-    !unapplied && lobby.players.iter().all(|p| p.ready)
-}
-fn aids_panel(ui: &mut egui::Ui, settings: &mut RaceSettings) {
-    ui.collapsing("Custom shared rules", |ui| {
-        let mut level = settings.assists.steering;
-        if ui
-            .add(egui::Slider::new(&mut level, 0. ..=1.).text("Driving aids"))
-            .changed()
-        {
-            settings.assists.steering = level;
-            settings.assists.braking = level;
-            settings.assists.traction = level;
-            settings.assists.stability = level;
-            settings.corner_braking = level;
+
+    fn footer(
+        &mut self,
+        ui: &mut egui::Ui,
+        page: &Page,
+        session: &Session,
+        size: egui::Vec2,
+        intent: &mut Intent,
+    ) {
+        let primary = |ui: &mut egui::Ui, text: &str, enabled: bool| {
+            ui.add_enabled(
+                enabled,
+                egui::Button::new(RichText::new(text).strong())
+                    .fill(RED)
+                    .min_size(size),
+            )
+            .clicked()
+        };
+        let secondary = |ui: &mut egui::Ui, text: &str| {
+            ui.add(
+                egui::Button::new(RichText::new(text).strong())
+                    .fill(HOUSING)
+                    .min_size(size),
+            )
+            .clicked()
+        };
+        match page {
+            Page::Connect => {
+                if secondary(ui, "Back to menu") {
+                    intent.close = true;
+                }
+            }
+            Page::Lobby(lobby) => {
+                let Some(client) = &self.client else { return };
+                let ready = lobby
+                    .players
+                    .iter()
+                    .find(|p| p.id == client.id)
+                    .is_some_and(|p| p.ready);
+                let toggle = ui.add(
+                    egui::Button::new(
+                        RichText::new(if ready { "Not ready" } else { "Ready" }).strong(),
+                    )
+                    .fill(if ready { HOUSING } else { RED })
+                    .min_size(size),
+                );
+                if toggle.clicked() {
+                    intent.send = Some(ClientMessage::Ready(!ready));
+                }
+                if client.owner() {
+                    let unapplied = self.settings != lobby.settings;
+                    if primary(ui, "Start race", can_start(lobby, unapplied)) {
+                        intent.send = Some(ClientMessage::Start);
+                    }
+                }
+                if secondary(ui, "Leave room") {
+                    intent.leave = true;
+                }
+            }
+            Page::Live(_) => {
+                if session.screen != Screen::Racing && primary(ui, "Resume driving", session.ready)
+                {
+                    intent.resume = true;
+                }
+                if secondary(ui, "Leave race") {
+                    intent.leave = true;
+                }
+            }
+            Page::Results(_) => {
+                if self.client.as_ref().is_some_and(|c| c.owner())
+                    && primary(ui, "Back to lobby", true)
+                {
+                    intent.send = Some(ClientMessage::Return);
+                }
+                if secondary(ui, "Leave room") {
+                    intent.leave = true;
+                }
+            }
+            Page::Connecting | Page::Loading(_) => {
+                if secondary(ui, "Leave room") {
+                    intent.leave = true;
+                }
+            }
         }
-        ui.checkbox(&mut settings.assists.automatic_gears, "Automatic gears");
-        ui.checkbox(&mut settings.assists.drs_anywhere, "DRS anywhere");
-        ui.add(egui::Slider::new(&mut settings.setup.front_wing, 0. ..=10.).text("Front wing"));
-        ui.add(egui::Slider::new(&mut settings.setup.rear_wing, 0. ..=10.).text("Rear wing"));
-        egui::ComboBox::from_label("Tyres")
-            .selected_text(format!("{:?}", settings.setup.compound))
-            .show_ui(ui, |ui| {
-                for compound in [
-                    racecraft_sim::Compound::Soft,
-                    racecraft_sim::Compound::Medium,
-                    racecraft_sim::Compound::Hard,
-                ] {
-                    ui.selectable_value(
-                        &mut settings.setup.compound,
-                        compound,
-                        format!("{compound:?}"),
+    }
+
+    fn connect_page(&mut self, ui: &mut egui::Ui, frontend: &Frontend, intent: &mut Intent) {
+        card(ui, "Your driver", |ui| {
+            field(ui, "Driver name", |ui| {
+                ui.add(
+                    egui::TextEdit::singleline(&mut self.name)
+                        .char_limit(32)
+                        .hint_text("Name shown to other drivers")
+                        .desired_width(ui.available_width()),
+                );
+            });
+            if !frontend.teams.teams.is_empty() {
+                field(ui, "GEN22 identity", |ui| {
+                    egui::ComboBox::from_id_salt("online-identity")
+                        .width(ui.available_width())
+                        .selected_text(self.identity.as_ref().map_or_else(
+                            || "Assign a free driver".to_owned(),
+                            |i| identity_label(frontend, i),
+                        ))
+                        .show_ui(ui, |ui| {
+                            ui.selectable_value(&mut self.identity, None, "Assign a free driver");
+                            for team in &frontend.teams.teams {
+                                for driver in &team.drivers {
+                                    ui.selectable_value(
+                                        &mut self.identity,
+                                        Some(racecraft_net::DriverIdentity {
+                                            team: team.id.clone(),
+                                            driver: driver.id.clone(),
+                                        }),
+                                        format!("{} · {}", team.name, driver.name),
+                                    );
+                                }
+                            }
+                        });
+                });
+            }
+        });
+        ui.add_space(12.);
+        let join = |ui: &mut egui::Ui, this: &mut Self, intent: &mut Intent| {
+            card(ui, "Join a room", |ui| {
+                ui.label(
+                    RichText::new("Enter the host's LAN or VPN address, or a hosted server URL.")
+                        .color(DIM),
+                );
+                ui.add_space(4.);
+                field(ui, "Address", |ui| {
+                    ui.add(
+                        egui::TextEdit::singleline(&mut this.address)
+                            .hint_text("192.168.1.20:7777 or wss://…")
+                            .desired_width(ui.available_width()),
+                    );
+                });
+                ui.add_space(6.);
+                if ui
+                    .add(
+                        egui::Button::new(RichText::new("Join room").strong())
+                            .fill(RED)
+                            .min_size(egui::vec2(ui.available_width(), 42.)),
+                    )
+                    .clicked()
+                {
+                    intent.start = Some(false);
+                }
+            });
+        };
+        let host = |ui: &mut egui::Ui,
+                    this: &mut Self,
+                    frontend: &Frontend,
+                    intent: &mut Intent| {
+            card(ui, "Host a room", |ui| {
+                this.settings.track = frontend.draft.track.clone();
+                field(ui, "Circuit", |ui| {
+                    ui.label(RichText::new(circuit_name(frontend, &this.settings.track)).strong());
+                });
+                ui.label(
+                    RichText::new("Pick another circuit on the Track page of the main menu.")
+                        .size(14.)
+                        .color(LABEL),
+                );
+                field(ui, "Car", |ui| {
+                    egui::ComboBox::from_id_salt("online-car")
+                        .width(ui.available_width())
+                        .selected_text(car_name(&this.settings.car))
+                        .show_ui(ui, |ui| {
+                            ui.selectable_value(&mut this.settings.car, "rb6".into(), "RB6");
+                            ui.selectable_value(&mut this.settings.car, "gen22".into(), "GEN22");
+                        });
+                });
+                field(ui, "UDP port", |ui| {
+                    ui.add(egui::DragValue::new(&mut this.port).range(1024..=65535));
+                });
+                rules(ui, &mut this.settings, MAX_PLAYERS - 1);
+                ui.add_space(6.);
+                if ui
+                    .add(
+                        egui::Button::new(RichText::new("Host room").strong())
+                            .fill(RED)
+                            .min_size(egui::vec2(ui.available_width(), 42.)),
+                    )
+                    .clicked()
+                {
+                    intent.start = Some(true);
+                }
+            });
+        };
+        if ui.available_width() >= 860. {
+            ui.columns(2, |columns| {
+                join(&mut columns[0], self, intent);
+                host(&mut columns[1], self, frontend, intent);
+            });
+        } else {
+            join(ui, self, intent);
+            ui.add_space(12.);
+            host(ui, self, frontend, intent);
+        }
+    }
+
+    fn lobby_page(
+        &mut self,
+        ui: &mut egui::Ui,
+        lobby: &Lobby,
+        frontend: &Frontend,
+        intent: &mut Intent,
+    ) {
+        let owner = self.client.as_ref().is_some_and(|c| c.owner());
+        let wide = ui.available_width() >= 900.;
+        let draw_rules = |ui: &mut egui::Ui, this: &mut Self, intent: &mut Intent| {
+            card(ui, "Race rules", |ui| {
+                if owner {
+                    let before = lobby.settings.clone();
+                    let mut settings = this.settings.clone();
+                    rules(ui, &mut settings, MAX_PLAYERS - lobby.players.len());
+                    ui.add_space(4.);
+                    if ui.button("Reset to defaults").clicked() {
+                        settings = RaceSettings {
+                            car: lobby.settings.car.clone(),
+                            track: lobby.settings.track.clone(),
+                            ..RaceSettings::default()
+                        };
+                        intent.send = Some(ClientMessage::Settings(settings.clone()));
+                    }
+                    // The controls edit a draft; the room changes only on Apply.
+                    if settings != before && intent.send.is_none() {
+                        ui.add_space(6.);
+                        notice(
+                            ui,
+                            "Changes are not applied yet. Applying clears everyone's ready state.",
+                            AMBER,
+                        );
+                        ui.horizontal_wrapped(|ui| {
+                            if ui
+                                .add(egui::Button::new(RichText::new("Apply").strong()).fill(RED))
+                                .clicked()
+                            {
+                                intent.send = Some(ClientMessage::Settings(settings.clone()));
+                            }
+                            if ui.button("Discard").clicked() {
+                                settings = before.clone();
+                            }
+                        });
+                    }
+                    this.settings = settings;
+                } else {
+                    let s = &lobby.settings;
+                    egui::Grid::new("online-rules-summary")
+                        .num_columns(2)
+                        .spacing([24., 10.])
+                        .show(ui, |ui| {
+                            summary(ui, "Laps", s.laps.to_string());
+                            summary(ui, "AI drivers", s.ai_cars.to_string());
+                            summary(
+                                ui,
+                                "Driving aids",
+                                if s.lock_aids {
+                                    format!("Host's · {:.0}%", s.assists.steering * 100.)
+                                } else {
+                                    "Each driver's own".into()
+                                },
+                            );
+                            summary(ui, "Automatic gears", yes(s.assists.automatic_gears));
+                            summary(ui, "DRS anywhere", yes(s.assists.drs_anywhere));
+                            summary(ui, "Tyres", format!("{:?}", s.setup.compound));
+                            summary(
+                                ui,
+                                "Wings F / R",
+                                format!("{:.1} / {:.1}", s.setup.front_wing, s.setup.rear_wing),
+                            );
+                        });
+                    ui.add_space(8.);
+                    ui.label(
+                        RichText::new("Only the room owner can change the rules.").color(LABEL),
                     );
                 }
             });
+        };
+        let address = self.host.is_some().then_some(self.port);
+        let draw_grid = |ui: &mut egui::Ui, this: &mut Self, intent: &mut Intent| {
+            if let Some(port) = address {
+                notice(
+                    ui,
+                    &format!(
+                        "You are hosting on UDP port {port}. Share your LAN or VPN IP address with other drivers."
+                    ),
+                    DIM,
+                );
+                ui.add_space(8.);
+            }
+            this.roster(ui, lobby, frontend, owner, intent);
+        };
+        if wide {
+            ui.columns(2, |columns| {
+                draw_grid(&mut columns[0], self, intent);
+                draw_rules(&mut columns[1], self, intent);
+            });
+        } else {
+            draw_grid(ui, self, intent);
+            ui.add_space(12.);
+            draw_rules(ui, self, intent);
+        }
+    }
+
+    /// The room's drivers in grid order, with readiness and ping.
+    fn roster(
+        &self,
+        ui: &mut egui::Ui,
+        lobby: &Lobby,
+        frontend: &Frontend,
+        reorder: bool,
+        intent: &mut Intent,
+    ) {
+        let Some(client) = &self.client else { return };
+        let ready = lobby.players.iter().filter(|p| p.ready).count();
+        card(
+            ui,
+            &format!(
+                "Grid · {} of {} ready · {} cars",
+                ready,
+                lobby.players.len(),
+                lobby.players.len() + lobby.settings.ai_cars
+            ),
+            |ui| {
+                ui.spacing_mut().item_spacing.y = 6.;
+                let ids: Vec<_> = lobby.players.iter().map(|p| p.id).collect();
+                for (slot, player) in lobby.players.iter().enumerate() {
+                    let status = if !player.connected {
+                        ("AI TAKEOVER", AMBER)
+                    } else if lobby.stage != Stage::Lobby {
+                        ("IN ROOM", DIM)
+                    } else if player.ready {
+                        ("READY", GREEN)
+                    } else {
+                        ("WAITING", LABEL)
+                    };
+                    let mut badges = Vec::new();
+                    if player.id == lobby.owner {
+                        badges.push(("HOST", RED));
+                    }
+                    if player.id == client.id {
+                        badges.push(("YOU", DIM));
+                    }
+                    let row = Row {
+                        position: slot + 1,
+                        name: &player.name,
+                        subtitle: player
+                            .identity
+                            .as_ref()
+                            .map(|i| identity_label(frontend, i)),
+                        team: player
+                            .identity
+                            .as_ref()
+                            .and_then(|i| team_color(frontend, &i.team))
+                            .unwrap_or(LABEL),
+                        badges,
+                        status: Some(status),
+                        detail: None,
+                        ping: Some(client.ping_ms(player.id).filter(|_| player.connected)),
+                        mine: player.id == client.id,
+                    };
+                    driver_row(ui, &row, |ui| {
+                        if !reorder {
+                            return;
+                        }
+                        if arrow(ui, false, slot + 1 < ids.len()) {
+                            let mut ids = ids.clone();
+                            ids.swap(slot, slot + 1);
+                            intent.send = Some(ClientMessage::Grid(ids));
+                        }
+                        if arrow(ui, true, slot > 0) {
+                            let mut ids = ids.clone();
+                            ids.swap(slot, slot - 1);
+                            intent.send = Some(ClientMessage::Grid(ids));
+                        }
+                    });
+                }
+                if lobby.settings.ai_cars > 0 {
+                    egui::Frame::new()
+                        .stroke(egui::Stroke::new(1., WELL_RIM))
+                        .corner_radius(6)
+                        .inner_margin(egui::Margin::symmetric(12, 8))
+                        .show(ui, |ui| {
+                            ui.set_width(ui.available_width());
+                            ui.label(
+                                RichText::new(format!(
+                                    "+ {} AI driver{} fill the rest of the grid",
+                                    lobby.settings.ai_cars,
+                                    if lobby.settings.ai_cars == 1 { "" } else { "s" }
+                                ))
+                                .color(LABEL),
+                            );
+                        });
+                }
+            },
+        );
+    }
+
+    /// Esc during an online race: live standings with ping. The race keeps running.
+    fn live_page(
+        &self,
+        ui: &mut egui::Ui,
+        lobby: &Lobby,
+        frontend: &mut Frontend,
+        session: &Session,
+    ) {
+        let wide = ui.available_width() >= 900.;
+        let standings = |ui: &mut egui::Ui| self.standings(ui, session, lobby, false);
+        let mut local = |ui: &mut egui::Ui| {
+            card(ui, "This computer", |ui| {
+                field(ui, "Volume", |ui| {
+                    ui.add(
+                        egui::Slider::new(&mut frontend.audio.master, 0. ..=1.)
+                            .custom_formatter(|v, _| format!("{:.0}%", v * 100.))
+                            .custom_parser(|s| {
+                                s.trim_end_matches('%')
+                                    .trim()
+                                    .parse::<f64>()
+                                    .ok()
+                                    .map(|v| v / 100.)
+                            }),
+                    );
+                });
+                field(ui, "Sound", |ui| {
+                    ui.checkbox(&mut frontend.muted, "Mute all sound");
+                });
+                ui.add_space(4.);
+                ui.label(
+                    RichText::new("Opening this menu does not pause the shared race.").color(LABEL),
+                );
+            });
+        };
+        if wide {
+            ui.columns(2, |columns| {
+                standings(&mut columns[0]);
+                local(&mut columns[1]);
+            });
+        } else {
+            standings(ui);
+            ui.add_space(12.);
+            local(ui);
+        }
+    }
+
+    fn results_page(&self, ui: &mut egui::Ui, session: &Session) {
+        let Some(lobby) = self.client.as_ref().and_then(|c| c.lobby.as_ref()) else {
+            return;
+        };
+        self.standings(ui, session, lobby, true);
+    }
+
+    /// Race order with gaps (or final times) and each human driver's ping.
+    fn standings(&self, ui: &mut egui::Ui, session: &Session, lobby: &Lobby, results: bool) {
+        let Some(client) = &self.client else { return };
+        let race = &session.race;
+        let order = race.order();
+        let leader = order.first().map(|&i| &race.entrants[i].timing);
+        card(
+            ui,
+            if results {
+                "Classification"
+            } else {
+                "Standings"
+            },
+            |ui| {
+                ui.spacing_mut().item_spacing.y = 6.;
+                for (rank, &index) in order.iter().enumerate() {
+                    let entrant = &race.entrants[index];
+                    let player = lobby.players.get(index);
+                    let identity = session.identities.get(index).and_then(Option::as_ref);
+                    let detail = if let Some(time) = entrant.timing.finish_time {
+                        match leader.and_then(|l| l.finish_time) {
+                            Some(first) if rank > 0 => format!("+{:.3}", time - first),
+                            _ => crate::hud::format_time(time),
+                        }
+                    } else if rank == 0 {
+                        format!("Lap {}", (entrant.timing.laps_completed + 1).min(race.laps))
+                    } else {
+                        let behind = leader.map_or(0., |l| l.distance) - entrant.timing.distance;
+                        if behind > race.track.length {
+                            format!("+{} lap", (behind / race.track.length) as u32)
+                        } else {
+                            format!("+{:.1}", behind / entrant.car.speed().max(30.))
+                        }
+                    };
+                    let mut badges = Vec::new();
+                    if player.is_none() {
+                        badges.push(("AI", LABEL));
+                    } else if player.is_some_and(|p| !p.connected) {
+                        badges.push(("AI TAKEOVER", AMBER));
+                    }
+                    // Humans by their lobby name; AI cars by the driver they represent.
+                    let name = match (player, identity) {
+                        (Some(p), _) => p.name.as_str(),
+                        (None, Some(identity)) => identity.name.as_str(),
+                        (None, None) => entrant.name.as_str(),
+                    };
+                    let row = Row {
+                        position: rank + 1,
+                        name,
+                        subtitle: player.and(identity).map(|i| i.name.clone()),
+                        team: identity.map_or(LABEL, |i| {
+                            let [r, g, b] = i.primary;
+                            Color32::from_rgb(r, g, b)
+                        }),
+                        badges,
+                        status: None,
+                        detail: Some(detail),
+                        ping: player.map(|p| client.ping_ms(p.id).filter(|_| p.connected)),
+                        mine: index == session.player,
+                    };
+                    driver_row(ui, &row, |_| {});
+                }
+            },
+        );
+    }
+}
+
+enum Page {
+    Connect,
+    Connecting,
+    Lobby(Lobby),
+    Loading(Lobby),
+    Live(Lobby),
+    Results(Lobby),
+}
+impl Page {
+    fn heading(&self, hosting: bool) -> (&'static str, String) {
+        let room = |lobby: &Lobby| {
+            format!(
+                "{} · {} · {} lap{}",
+                lobby.settings.track.to_uppercase(),
+                car_name(&lobby.settings.car),
+                lobby.settings.laps,
+                if lobby.settings.laps == 1 { "" } else { "s" }
+            )
+        };
+        match self {
+            Self::Connect => (
+                "MULTIPLAYER",
+                format!("Race up to {MAX_PLAYERS} drivers over LAN, VPN or a hosted server."),
+            ),
+            Self::Connecting => ("JOINING ROOM", "Waiting for the room to answer.".into()),
+            Self::Lobby(lobby) => (
+                if hosting { "YOUR ROOM" } else { "ROOM LOBBY" },
+                room(lobby),
+            ),
+            Self::Loading(lobby) => ("LOADING RACE", room(lobby)),
+            Self::Live(lobby) => ("LIVE RACE", room(lobby)),
+            Self::Results(lobby) => ("RACE RESULTS", room(lobby)),
+        }
+    }
+}
+
+#[derive(Default)]
+struct Intent {
+    start: Option<bool>,
+    send: Option<ClientMessage>,
+    leave: bool,
+    resume: bool,
+    close: bool,
+}
+
+const GREEN: Color32 = Color32::from_rgb(64, 230, 115);
+const AMBER: Color32 = Color32::from_rgb(255, 184, 38);
+const ERROR: Color32 = Color32::from_rgb(255, 150, 150);
+
+/// A column of at most `width`, centred in the available space.
+fn centered(ui: &mut egui::Ui, width: f32, add: impl FnOnce(&mut egui::Ui)) {
+    let width = ui.available_width().min(width);
+    ui.vertical_centered(|ui| {
+        ui.allocate_ui_with_layout(
+            egui::vec2(width, ui.available_height()),
+            egui::Layout::top_down(egui::Align::Min),
+            add,
+        );
     });
+}
+
+/// A titled charcoal panel that fills its column.
+fn card(ui: &mut egui::Ui, title: &str, add: impl FnOnce(&mut egui::Ui)) {
+    housing().inner_margin(16).show(ui, |ui| {
+        ui.set_width(ui.available_width());
+        section(ui, title);
+        ui.add_space(6.);
+        add(ui);
+    });
+}
+
+fn notice(ui: &mut egui::Ui, text: &str, color: Color32) {
+    egui::Frame::new()
+        .fill(WELL)
+        .stroke(egui::Stroke::new(1., color.gamma_multiply(0.6)))
+        .corner_radius(6)
+        .inner_margin(egui::Margin::symmetric(12, 8))
+        .show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            ui.add(egui::Label::new(RichText::new(text).color(color)).wrap());
+        });
+}
+
+/// A settings row in a fixed-height box. Centre-aligned layouts otherwise
+/// centre in all of a scroll area's height.
+fn field(ui: &mut egui::Ui, label: &str, add: impl FnOnce(&mut egui::Ui)) {
+    let height = if ui.available_width() < 440. {
+        46.
+    } else {
+        38.
+    };
+    ui.allocate_ui_with_layout(
+        egui::vec2(ui.available_width(), height),
+        egui::Layout::top_down(egui::Align::Min),
+        |ui| setting_row(ui, label, add),
+    );
+}
+
+/// One read-only rule as a two-column grid row.
+fn summary(ui: &mut egui::Ui, label: &str, value: String) {
+    ui.label(RichText::new(label).color(DIM));
+    ui.label(RichText::new(value).strong());
+    ui.end_row();
+}
+
+fn yes(on: bool) -> String {
+    if on { "On" } else { "Off" }.into()
+}
+
+fn car_name(car: &str) -> &'static str {
+    match car {
+        "gen22" => "GEN22",
+        "rb6" => "RB6",
+        _ => "Car",
+    }
+}
+
+fn circuit_name(frontend: &Frontend, track: &str) -> String {
+    frontend
+        .catalog
+        .circuits
+        .iter()
+        .find(|c| c.id == track)
+        .map_or_else(|| track.to_owned(), |c| c.name.clone())
+}
+
+fn team_color(frontend: &Frontend, team: &str) -> Option<Color32> {
+    let team = frontend.teams.teams.iter().find(|t| t.id == team)?;
+    let [r, g, b] = crate::teams::rgb(&team.colors.primary)?;
+    Some(Color32::from_rgb(r, g, b))
+}
+
+fn identity_label(frontend: &Frontend, identity: &racecraft_net::DriverIdentity) -> String {
+    frontend
+        .teams
+        .teams
+        .iter()
+        .find(|t| t.id == identity.team)
+        .and_then(|team| {
+            let driver = team.drivers.iter().find(|d| d.id == identity.driver)?;
+            Some(format!("{} · {}", team.name, driver.name))
+        })
+        .unwrap_or_else(|| format!("{} · {}", identity.team, identity.driver))
+}
+
+/// Laps, AI field size and the shared aids, as setting rows.
+fn rules(ui: &mut egui::Ui, settings: &mut RaceSettings, max_ai: usize) {
+    field(ui, "Laps", |ui| {
+        ui.add(egui::Slider::new(&mut settings.laps, 1..=100));
+    });
+    settings.ai_cars = settings.ai_cars.min(max_ai);
+    field(ui, "AI drivers", |ui| {
+        ui.add(egui::Slider::new(&mut settings.ai_cars, 0..=max_ai));
+    });
+    field(ui, "Lock aids", |ui| {
+        ui.checkbox(&mut settings.lock_aids, "Everyone uses the host's aids");
+    });
+    egui::CollapsingHeader::new(RichText::new("Shared aids and setup").color(DIM))
+        .id_salt("online-shared-rules")
+        .show(ui, |ui| {
+            let mut level = settings.assists.steering;
+            field(ui, "Driving aids", |ui| {
+                if ui.add(egui::Slider::new(&mut level, 0. ..=1.)).changed() {
+                    settings.assists.steering = level;
+                    settings.assists.braking = level;
+                    settings.assists.traction = level;
+                    settings.assists.stability = level;
+                    settings.corner_braking = level;
+                }
+            });
+            field(ui, "Automatic gears", |ui| {
+                ui.checkbox(&mut settings.assists.automatic_gears, "");
+            });
+            field(ui, "DRS anywhere", |ui| {
+                ui.checkbox(&mut settings.assists.drs_anywhere, "");
+            });
+            field(ui, "Front wing", |ui| {
+                ui.add(egui::Slider::new(&mut settings.setup.front_wing, 0. ..=10.));
+            });
+            field(ui, "Rear wing", |ui| {
+                ui.add(egui::Slider::new(&mut settings.setup.rear_wing, 0. ..=10.));
+            });
+            field(ui, "Tyres", |ui| {
+                egui::ComboBox::from_id_salt("online-tyres")
+                    .width(ui.available_width())
+                    .selected_text(format!("{:?}", settings.setup.compound))
+                    .show_ui(ui, |ui| {
+                        for compound in [
+                            racecraft_sim::Compound::Soft,
+                            racecraft_sim::Compound::Medium,
+                            racecraft_sim::Compound::Hard,
+                        ] {
+                            ui.selectable_value(
+                                &mut settings.setup.compound,
+                                compound,
+                                format!("{compound:?}"),
+                            );
+                        }
+                    });
+            });
+        });
+}
+
+struct Row<'a> {
+    position: usize,
+    name: &'a str,
+    subtitle: Option<String>,
+    team: Color32,
+    badges: Vec<(&'static str, Color32)>,
+    status: Option<(&'static str, Color32)>,
+    detail: Option<String>,
+    /// `None`: not a human driver. `Some(None)`: human with no measurement yet.
+    ping: Option<Option<u16>>,
+    mine: bool,
+}
+
+/// One driver as an inset row: position, team stripe and name on the left;
+/// status, timing and ping in fixed right-hand columns.
+fn driver_row(ui: &mut egui::Ui, row: &Row, controls: impl FnOnce(&mut egui::Ui)) {
+    egui::Frame::new()
+        .fill(if row.mine {
+            Color32::from_rgb(30, 33, 36)
+        } else {
+            WELL
+        })
+        .stroke(egui::Stroke::new(
+            1.,
+            if row.mine {
+                RED.gamma_multiply(0.8)
+            } else {
+                WELL_RIM
+            },
+        ))
+        .corner_radius(6)
+        .inner_margin(egui::Margin::symmetric(10, 6))
+        .show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            let narrow = ui.available_width() < 340.;
+            let height = if row.subtitle.is_some() && !narrow {
+                38.
+            } else {
+                28.
+            };
+            let size = egui::vec2(ui.available_width(), height);
+            ui.allocate_ui_with_layout(
+                size,
+                egui::Layout::right_to_left(egui::Align::Center),
+                |ui| {
+                    ui.spacing_mut().item_spacing.x = 10.;
+                    ping_cell(ui, row.ping);
+                    if let Some(detail) = &row.detail {
+                        ui.add_sized(
+                            egui::vec2(if narrow { 64. } else { 86. }, 24.),
+                            egui::Label::new(
+                                RichText::new(detail)
+                                    .strong()
+                                    .color(egui::Color32::from_gray(225)),
+                            ),
+                        );
+                    }
+                    if let Some((text, color)) = row.status {
+                        if !narrow {
+                            pill(ui, text, color);
+                        } else {
+                            let (rect, _) =
+                                ui.allocate_exact_size(egui::vec2(10., 10.), egui::Sense::hover());
+                            ui.painter().circle_filled(rect.center(), 4., color);
+                        }
+                    }
+                    controls(ui);
+                    ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                        ui.spacing_mut().item_spacing.x = 8.;
+                        ui.add_sized(
+                            egui::vec2(24., 24.),
+                            egui::Label::new(
+                                RichText::new(row.position.to_string())
+                                    .size(18.)
+                                    .strong()
+                                    .color(if row.mine { Color32::WHITE } else { DIM }),
+                            ),
+                        );
+                        let (rect, _) =
+                            ui.allocate_exact_size(egui::vec2(4., 26.), egui::Sense::hover());
+                        ui.painter().rect_filled(rect, 2., row.team);
+                        ui.vertical(|ui| {
+                            ui.spacing_mut().item_spacing.y = 0.;
+                            ui.horizontal(|ui| {
+                                ui.spacing_mut().item_spacing.x = 6.;
+                                ui.add(
+                                    egui::Label::new(
+                                        RichText::new(row.name).strong().color(Color32::WHITE),
+                                    )
+                                    .truncate(),
+                                );
+                                for &(text, color) in &row.badges {
+                                    pill(ui, text, color);
+                                }
+                            });
+                            if let Some(subtitle) = row.subtitle.as_deref().filter(|_| !narrow) {
+                                ui.add(
+                                    egui::Label::new(
+                                        RichText::new(subtitle).size(13.).color(LABEL),
+                                    )
+                                    .truncate(),
+                                );
+                            }
+                        });
+                    });
+                },
+            );
+        });
+}
+
+fn pill(ui: &mut egui::Ui, text: &str, color: Color32) {
+    egui::Frame::new()
+        .stroke(egui::Stroke::new(1., color.gamma_multiply(0.7)))
+        .corner_radius(4)
+        .inner_margin(egui::Margin::symmetric(6, 1))
+        .show(ui, |ui| {
+            ui.label(RichText::new(text).size(12.).strong().color(color));
+        });
+}
+
+/// Signal bars and milliseconds in a fixed-width column; blank for AI cars.
+fn ping_cell(ui: &mut egui::Ui, ping: Option<Option<u16>>) {
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(74., 24.), egui::Sense::hover());
+    let Some(ping) = ping else { return };
+    let painter = ui.painter_at(rect);
+    let (color, lit, text) = match ping {
+        Some(ms) => (
+            crate::hud::ping_color(ms),
+            match ms {
+                0..=59 => 3,
+                60..=119 => 2,
+                _ => 1,
+            },
+            format!("{} ms", ms.min(999)),
+        ),
+        None => (LABEL, 0, "– ms".into()),
+    };
+    for bar in 0..3 {
+        let height = 5. + 4. * bar as f32;
+        let x = rect.left() + 2. + bar as f32 * 5.;
+        painter.rect_filled(
+            egui::Rect::from_min_max(
+                egui::pos2(x, rect.center().y + 7. - height),
+                egui::pos2(x + 3., rect.center().y + 7.),
+            ),
+            1.,
+            if bar < lit { color } else { WELL_RIM },
+        );
+    }
+    painter.text(
+        egui::pos2(rect.right(), rect.center().y),
+        egui::Align2::RIGHT_CENTER,
+        text,
+        egui::FontId::proportional(15.),
+        if ping.is_some() { color } else { LABEL },
+    );
+}
+
+/// A small painted up/down button; the bundled font has no arrow glyphs.
+fn arrow(ui: &mut egui::Ui, up: bool, enabled: bool) -> bool {
+    let response = ui.add_enabled(
+        enabled,
+        egui::Button::new("").min_size(egui::vec2(26., 24.)),
+    );
+    let color = if enabled {
+        Color32::from_gray(220)
+    } else {
+        WELL_RIM
+    };
+    let c = response.rect.center();
+    let (tip, base) = if up { (-4., 3.) } else { (4., -3.) };
+    ui.painter().add(egui::Shape::convex_polygon(
+        vec![
+            egui::pos2(c.x, c.y + tip),
+            egui::pos2(c.x + 5., c.y + base),
+            egui::pos2(c.x - 5., c.y + base),
+        ],
+        color,
+        egui::Stroke::NONE,
+    ));
+    response.clicked()
+}
+
+/// The owner may start once every driver is ready and the rules shown are the room's rules.
+fn can_start(lobby: &Lobby, unapplied: bool) -> bool {
+    !unapplied && lobby.players.iter().all(|p| p.ready)
 }
 /// Poll on real display time; loading and opening menus never stops the network.
 pub fn poll(
@@ -489,6 +1234,20 @@ pub fn poll(
         client.error = Some(error);
         client.closed = true;
     }
+    // Grid slots match the room's player order; AI and dropped drivers have no ping.
+    session.pings = match &client.lobby {
+        Some(lobby) if matches!(lobby.stage, Stage::Grid | Stage::Racing | Stage::Results) => (0
+            ..session.race.entrants.len())
+            .map(|slot| {
+                lobby
+                    .players
+                    .get(slot)
+                    .filter(|p| p.connected)
+                    .and_then(|p| client.ping_ms(p.id))
+            })
+            .collect(),
+        _ => Vec::new(),
+    };
     if let Some(lobby) = &client.lobby {
         if *log_stage != Some((lobby.stage, lobby.players.len())) {
             info!(

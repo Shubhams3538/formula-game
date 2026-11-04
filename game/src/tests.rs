@@ -71,6 +71,7 @@ pub(super) fn session() -> Session {
         delta: default(),
         telemetry: default(),
         ready: false,
+        pings: Vec::new(),
         screen: menu::Screen::Racing,
     }
 }
