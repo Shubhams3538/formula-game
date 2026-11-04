@@ -68,8 +68,12 @@ mod tests {
             optimize(&mut mesh);
             let result: Vec<_> = mesh.indices().unwrap().iter().map(|i| i as u32).collect();
             let triangles = |values: &[u32]| {
-                let mut triangles: Vec<_> =
-                    values.chunks_exact(3).map(|t| [t[0], t[1], t[2]]).collect();
+                let mut triangles: Vec<_> = values
+                    .as_chunks::<3>()
+                    .0
+                    .iter()
+                    .map(|t| [t[0], t[1], t[2]])
+                    .collect();
                 triangles.sort_unstable();
                 triangles
             };

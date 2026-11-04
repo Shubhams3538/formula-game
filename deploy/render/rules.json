@@ -1,0 +1,21 @@
+{
+  "track": "spa",
+  "car": "rb6",
+  "laps": 3,
+  "ai_cars": 0,
+  "lock_aids": true,
+  "assists": {
+    "automatic_gears": true,
+    "steering": 0,
+    "braking": 0,
+    "traction": 0,
+    "stability": 0,
+    "drs_anywhere": false
+  },
+  "corner_braking": 1,
+  "setup": {
+    "front_wing": 5,
+    "rear_wing": 5,
+    "compound": "Medium"
+  }
+}

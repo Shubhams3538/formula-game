@@ -34,6 +34,9 @@ pub enum Screen {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) enum Tab {
+    Join,
+    Host,
+    Room,
     Track,
     Car,
     Driver,
@@ -62,8 +65,38 @@ impl Tab {
         Self::Benchmark,
     ];
 
+    /// The pages in the navigation: the solo list, or the room tabs followed
+    /// by the settings that apply to an online race.
+    fn nav(online: Option<&crate::online::Online>) -> Vec<Self> {
+        match online.filter(|o| o.active()) {
+            None => Self::ALL.to_vec(),
+            Some(online) => {
+                let mut tabs = if online.in_room() {
+                    vec![Self::Room]
+                } else {
+                    vec![Self::Join, Self::Host]
+                };
+                tabs.extend(
+                    Self::ALL
+                        .into_iter()
+                        .filter(|tab| !matches!(tab.group(), "GAMEPLAY" | "TOOLS")),
+                );
+                tabs
+            }
+        }
+    }
+
+    /// Heading and description shown above the page.
+    fn text(self, online: Option<&crate::online::Online>) -> (String, String) {
+        match (self, online) {
+            (Self::Join | Self::Host | Self::Room, Some(online)) => online.heading(self),
+            _ => (self.label().into(), self.description().into()),
+        }
+    }
+
     fn group(self) -> &'static str {
         match self {
+            Self::Join | Self::Host | Self::Room => "MULTIPLAYER",
             Self::Track | Self::Car | Self::Driver => "GAMEPLAY",
             Self::Camera | Self::Controls | Self::Aids => "DRIVING",
             Self::Graphics | Self::Effects | Self::Hud => "VISUALS",
@@ -74,6 +107,9 @@ impl Tab {
 
     fn label(self) -> &'static str {
         match self {
+            Self::Join => "Join room",
+            Self::Host => "Host room",
+            Self::Room => "Room",
             Self::Track => "Track",
             Self::Car => "Car",
             Self::Driver => "Driver",
@@ -90,6 +126,7 @@ impl Tab {
 
     fn description(self) -> &'static str {
         match self {
+            Self::Join | Self::Host | Self::Room => "",
             Self::Track => "Choose a circuit, race length and grid.",
             Self::Car => "Choose your car, tyres and wing levels.",
             Self::Driver => "Choose your team and driver.",
@@ -321,6 +358,7 @@ pub fn apply(
         (Entity, Option<&bevy::camera::visibility::RenderLayers>),
         With<bevy_egui::PrimaryEguiContext>,
     >,
+    online: Option<Res<crate::online::Online>>,
 ) {
     // The benchmark window owns the GPU workload; keep the menu available
     // without also rendering a second race behind it.
@@ -358,8 +396,10 @@ pub fn apply(
         display: frontend.display,
         audio: frontend.audio,
     };
-    if let Err(error) = frontend.store.save(prefs) {
-        frontend.error = Some(error);
+    if !online.as_ref().is_some_and(|o| o.client.is_some()) {
+        if let Err(error) = frontend.store.save(prefs) {
+            frontend.error = Some(error);
+        }
     }
     if !frontend.pending {
         return;
@@ -424,7 +464,11 @@ pub fn apply(
             .looking_to(Vec3::new(sun.x as f32, sun.y as f32, sun.z as f32), Vec3::Y);
     }
     for mut window in &mut windows {
-        window.title = format!("F1 Racecraft - {}", race.track.name);
+        window.title = if selected.host.is_some() || selected.join.is_some() {
+            format!("F1 Racecraft - {} - {}", race.track.name, selected.name)
+        } else {
+            format!("F1 Racecraft - {}", race.track.name)
+        };
     }
     *session = Session {
         identities,
@@ -444,6 +488,7 @@ pub fn apply(
         delta: default(),
         telemetry: default(),
         ready: false,
+        pings: Vec::new(),
         screen: Screen::Loading,
     };
     *options = selected;
@@ -452,17 +497,17 @@ pub fn apply(
     assets::spawn_visuals(&mut commands, &server, &options, &session);
 }
 
-const RED: Color32 = Color32::from_rgb(230, 35, 48);
-const DIM: Color32 = Color32::from_rgb(160, 166, 178);
-const LABEL: Color32 = Color32::from_rgb(120, 125, 136);
-const BACKDROP: Color32 = Color32::from_rgb(20, 21, 24);
-const HOUSING: Color32 = Color32::from_rgb(37, 38, 42);
-const HOUSING_EDGE: Color32 = Color32::from_rgb(74, 76, 83);
-const WELL: Color32 = Color32::from_rgb(9, 10, 12);
-const WELL_RIM: Color32 = Color32::from_rgb(56, 58, 64);
+pub(crate) const RED: Color32 = Color32::from_rgb(230, 35, 48);
+pub(crate) const DIM: Color32 = Color32::from_rgb(160, 166, 178);
+pub(crate) const LABEL: Color32 = Color32::from_rgb(120, 125, 136);
+pub(crate) const BACKDROP: Color32 = Color32::from_rgb(20, 21, 24);
+pub(crate) const HOUSING: Color32 = Color32::from_rgb(37, 38, 42);
+pub(crate) const HOUSING_EDGE: Color32 = Color32::from_rgb(74, 76, 83);
+pub(crate) const WELL: Color32 = Color32::from_rgb(9, 10, 12);
+pub(crate) const WELL_RIM: Color32 = Color32::from_rgb(56, 58, 64);
 
 /// Raised charcoal panel matching the race HUD's instrument housings.
-fn housing() -> egui::Frame {
+pub(crate) fn housing() -> egui::Frame {
     egui::Frame::new()
         .fill(HOUSING)
         .stroke(egui::Stroke::new(1.5, HOUSING_EDGE))
@@ -471,7 +516,7 @@ fn housing() -> egui::Frame {
 }
 
 /// Spaced uppercase section label, printed like a dash caption.
-fn section(ui: &mut egui::Ui, text: &str) {
+pub(crate) fn section(ui: &mut egui::Ui, text: &str) {
     ui.label(
         RichText::new(text.to_uppercase())
             .size(15.)
@@ -480,8 +525,132 @@ fn section(ui: &mut egui::Ui, text: &str) {
     );
 }
 
+/// Sizes shared by every full-screen menu, offline and online.
+pub(crate) struct Chrome {
+    pub margin: f32,
+    pub content_max_width: f32,
+    pub footer_height: f32,
+    pub action: egui::Vec2,
+}
+impl Chrome {
+    pub(crate) fn new(size: egui::Vec2) -> Self {
+        let margin = (size.x * 0.018).clamp(10., 24.);
+        let content_max_width = (size.x * 0.94).clamp(720., 1600.);
+        let footer_height = if size.y < 520. {
+            56.
+        } else if size.x < 720. || size.y < 640. {
+            66.
+        } else {
+            82.
+        };
+        let action = egui::vec2(
+            ((content_max_width.min(size.x) - margin * 2. - 24.) / 3.).clamp(120., 190.),
+            44.,
+        );
+        Self {
+            margin,
+            content_max_width,
+            footer_height,
+            action,
+        }
+    }
+}
+
+/// The screen title, followed by the Solo / Multiplayer switch when `mode` is
+/// `Some((multiplayer, enabled))`. Returns the newly chosen mode on a click.
+pub(crate) fn title_bar(
+    ui: &mut egui::Ui,
+    title: &str,
+    width: f32,
+    mode: Option<(bool, bool)>,
+) -> Option<bool> {
+    let mut chosen = None;
+    ui.horizontal(|ui| {
+        ui.label(
+            RichText::new(title)
+                .size(if width < 700. { 28. } else { 36. })
+                .strong(),
+        );
+        if let Some((multiplayer, enabled)) = mode {
+            ui.add_space(12.);
+            chosen = mode_switch(ui, multiplayer, enabled);
+        }
+    });
+    chosen
+}
+
+/// A two-position slider switch: a red knob slides under the active mode.
+fn mode_switch(ui: &mut egui::Ui, multiplayer: bool, enabled: bool) -> Option<bool> {
+    const LABELS: [&str; 2] = ["Solo", "Multiplayer"];
+    let font = egui::FontId::proportional(16.);
+    let widths = LABELS.map(|text| {
+        ui.fonts_mut(|f| {
+            f.layout_no_wrap(text.into(), font.clone(), Color32::WHITE)
+                .size()
+                .x
+        }) + 36.
+    });
+    let half = widths[0].max(widths[1]).max(90.);
+    let size = egui::vec2(half * 2. + 8., 38.);
+    let sense = if enabled {
+        egui::Sense::click()
+    } else {
+        egui::Sense::hover()
+    };
+    let (rect, response) = ui.allocate_exact_size(size, sense);
+    let t = ui
+        .ctx()
+        .animate_bool_with_time(response.id, multiplayer, 0.16);
+    if ui.is_rect_visible(rect) {
+        let painter = ui.painter();
+        let rim = if response.hovered() && enabled {
+            Color32::from_rgb(120, 124, 134)
+        } else {
+            WELL_RIM
+        };
+        painter.rect(
+            rect,
+            6,
+            WELL,
+            egui::Stroke::new(1., rim),
+            egui::StrokeKind::Inside,
+        );
+        let inner = rect.shrink(4.);
+        let knob = egui::Rect::from_min_size(
+            inner.min + egui::vec2(t * half, 0.),
+            egui::vec2(half, inner.height()),
+        );
+        let fill = if enabled {
+            RED
+        } else {
+            RED.gamma_multiply(0.55)
+        };
+        painter.rect_filled(knob, 4, fill);
+        for (i, text) in LABELS.into_iter().enumerate() {
+            let on = (i == 1) == multiplayer;
+            let centre = egui::pos2(inner.min.x + half * (i as f32 + 0.5), inner.center().y);
+            painter.text(
+                centre,
+                egui::Align2::CENTER_CENTER,
+                text,
+                egui::FontId::new(16., egui::FontFamily::Proportional),
+                if on { Color32::WHITE } else { DIM },
+            );
+        }
+    }
+    let response = if enabled {
+        response
+    } else {
+        response.on_hover_text("Leave the room to race solo")
+    };
+    if response.clicked() {
+        return Some(!multiplayer);
+    }
+    None
+}
+
 /// Form rows keep labels, dropdowns, sliders, and value boxes on shared axes.
-fn setting_row(ui: &mut egui::Ui, label: &str, add_control: impl FnOnce(&mut egui::Ui)) {
+pub(crate) fn setting_row(ui: &mut egui::Ui, label: &str, add_control: impl FnOnce(&mut egui::Ui)) {
     let width = ui.available_width();
     let label_width = (width * 0.38).clamp(96., 190.);
     let row_height = if width < 440. { 40. } else { 32. };
@@ -490,7 +659,10 @@ fn setting_row(ui: &mut egui::Ui, label: &str, add_control: impl FnOnce(&mut egu
     } else {
         egui::Layout::left_to_right(egui::Align::Center)
     };
-    let response = ui.with_layout(layout, |row| {
+    // A fixed-height box: a centred row layout would otherwise centre itself
+    // in all of a scroll area's remaining height.
+    let height = if width < 300. { 0. } else { row_height };
+    let response = ui.allocate_ui_with_layout(egui::vec2(width, height), layout, |row| {
         row.spacing_mut().item_spacing.x = 8.;
         row.add_sized(
             egui::vec2(if width < 300. { width } else { label_width }, row_height),
@@ -530,6 +702,7 @@ pub fn ui(
     mut warmed: Local<u8>,
     car_preview: Res<car_preview::CarPreview>,
     mut exit: MessageWriter<AppExit>,
+    mut online: Option<ResMut<crate::online::Online>>,
 ) -> Result {
     frontend.benchmark.poll();
     let context = contexts.ctx_mut()?;
@@ -588,6 +761,14 @@ pub fn ui(
     if *warmed < 2 {
         *warmed += 1;
     }
+    if let Some(online) = online.as_mut() {
+        online.prepare();
+    }
+    let multiplayer = online.as_ref().is_some_and(|o| o.active());
+    let nav = Tab::nav(online.as_deref());
+    if !nav.contains(&frontend.tab) {
+        frontend.tab = nav[0];
+    }
     let mut viewport = egui::Ui::new(
         context.clone(),
         "menu-viewport".into(),
@@ -595,7 +776,8 @@ pub fn ui(
             .layer_id(egui::LayerId::background())
             .max_rect(context.viewport_rect()),
     );
-    if session.screen == Screen::Racing {
+    if session.screen == Screen::Racing && !online.as_ref().is_some_and(|o| o.owns_racing_screen())
+    {
         frontend.draft.camera = session.camera.mode;
         return Ok(());
     }
@@ -603,7 +785,8 @@ pub fn ui(
         camera_editor(&viewport, &mut session, &options.car);
         return Ok(());
     }
-    if session.screen == Screen::Loading {
+    // Online loading stays on the Room page, where the roster and Leave live.
+    if session.screen == Screen::Loading && !multiplayer {
         egui::CentralPanel::default()
             .frame(egui::Frame::new().fill(BACKDROP.gamma_multiply(0.9)))
             .show(&mut viewport, |ui| {
@@ -624,16 +807,12 @@ pub fn ui(
         return Ok(());
     }
     let size = context.content_rect().size();
-    let margin = (size.x * 0.018).clamp(10., 24.);
-    let content_max_width = (size.x * 0.94).clamp(720., 1600.);
-    let compact_footer = size.x < 720. || size.y < 640.;
-    let footer_height = if size.y < 520. {
-        56.
-    } else if compact_footer {
-        66.
-    } else {
-        82.
-    };
+    let chrome = Chrome::new(size);
+    let (margin, content_max_width, footer_height) = (
+        chrome.margin,
+        chrome.content_max_width,
+        chrome.footer_height,
+    );
     let available = frontend
         .catalog
         .circuits
@@ -642,10 +821,7 @@ pub fn ui(
         && frontend.catalog.car_available(&frontend.draft);
 
     // Every footer action shares one size.
-    let action = egui::vec2(
-        ((content_max_width.min(size.x) - margin * 2. - 24.) / 3.).clamp(120., 190.),
-        44.,
-    );
+    let action = chrome.action;
     egui::Panel::bottom("settings-actions")
         .exact_size(footer_height)
         .show_separator_line(false)
@@ -666,38 +842,42 @@ pub fn ui(
                             .show(ui, |ui| {
                                 ui.horizontal_wrapped(|ui| {
                                     ui.spacing_mut().item_spacing.x = 12.;
-                                    if frontend.race_started && session.ready {
-                                        let resume_button = ui.add_enabled(
-                                            frontend.benchmark.child.is_none(),
+                                    if let Some(online) = online.as_mut().filter(|o| o.active()) {
+                                        online.actions(ui, frontend.tab, &session, action);
+                                    } else {
+                                        if frontend.race_started && session.ready {
+                                            let resume_button = ui.add_enabled(
+                                                frontend.benchmark.child.is_none(),
+                                                egui::Button::new(
+                                                    RichText::new("Resume race").strong(),
+                                                )
+                                                .fill(RED)
+                                                .min_size(action),
+                                            );
+                                            if resume_button.clicked() {
+                                                resume(&mut session);
+                                            }
+                                        }
+                                        let start = ui.add_enabled(
+                                            available
+                                                && !frontend.pending
+                                                && frontend.benchmark.child.is_none(),
                                             egui::Button::new(
-                                                RichText::new("Resume race").strong(),
+                                                RichText::new(if frontend.race_started {
+                                                    "Start new race"
+                                                } else {
+                                                    "Start race"
+                                                })
+                                                .strong(),
                                             )
-                                            .fill(RED)
+                                            .fill(if frontend.race_started { HOUSING } else { RED })
                                             .min_size(action),
                                         );
-                                        if resume_button.clicked() {
-                                            resume(&mut session);
+                                        #[cfg(test)]
+                                        frontend.widgets.insert("start", start.rect);
+                                        if start.clicked() {
+                                            frontend.pending = true;
                                         }
-                                    }
-                                    let start = ui.add_enabled(
-                                        available
-                                            && !frontend.pending
-                                            && frontend.benchmark.child.is_none(),
-                                        egui::Button::new(
-                                            RichText::new(if frontend.race_started {
-                                                "Start new race"
-                                            } else {
-                                                "Start race"
-                                            })
-                                            .strong(),
-                                        )
-                                        .fill(if frontend.race_started { HOUSING } else { RED })
-                                        .min_size(action),
-                                    );
-                                    #[cfg(test)]
-                                    frontend.widgets.insert("start", start.rect);
-                                    if start.clicked() {
-                                        frontend.pending = true;
                                     }
                                     let quit = ui.add(
                                         egui::Button::new(RichText::new("Quit game").strong())
@@ -727,19 +907,32 @@ pub fn ui(
                     egui::vec2(width, ui.available_height()),
                     egui::Layout::top_down(egui::Align::Min),
                     |ui| {
-                        ui.label(
-                            RichText::new(if session.screen == Screen::Paused {
-                                "RACE PAUSED"
+                        let title = if session.screen == Screen::Paused {
+                            "RACE PAUSED"
+                        } else {
+                            "F1 RACECRAFT"
+                        };
+                        let title = if multiplayer { "F1 RACECRAFT" } else { title };
+                        let toggle = online.as_ref().map(|o| (multiplayer, !o.in_room()));
+                        if let (Some(choice), Some(online)) =
+                            (title_bar(ui, title, size.x, toggle), online.as_mut())
+                        {
+                            if choice {
+                                online.show();
+                                frontend.tab = Tab::Join;
                             } else {
-                                "F1 RACECRAFT"
-                            })
-                            .size(if size.x < 700. { 28. } else { 36. })
-                            .strong(),
-                        );
+                                online.close();
+                                frontend.tab = Tab::Track;
+                            }
+                        }
+                        if let Some(error) = online.as_ref().and_then(|o| o.error.as_ref()) {
+                            ui.colored_label(Color32::from_rgb(255, 150, 150), error);
+                        }
                         if let Some(error) = &frontend.error {
                             ui.colored_label(Color32::from_rgb(255, 150, 150), error);
                         }
                         ui.add_space(8.);
+                        let page_text = frontend.tab.text(online.as_deref());
                         let pane_height = (ui.available_height() - 22.).max(100.);
                         let body = housing().inner_margin(10).show(ui, |ui| {
                             let compact_navigation =
@@ -751,7 +944,7 @@ pub fn ui(
                                     frontend.widgets.remove("Game play");
                                 }
                                 #[cfg(test)]
-                                for tab in Tab::ALL {
+                                for &tab in &nav {
                                     frontend.widgets.remove(tab.label());
                                 }
                                 let navigation = egui::ComboBox::from_id_salt("settings-page")
@@ -763,7 +956,7 @@ pub fn ui(
                                         frontend
                                             .widgets
                                             .insert("settings-navigation-popup", ui.clip_rect());
-                                        for tab in Tab::ALL {
+                                        for &tab in &nav {
                                             let selected = tab == frontend.tab;
                                             let response =
                                                 ui.selectable_label(selected, tab.label());
@@ -784,7 +977,7 @@ pub fn ui(
                                 let _ = navigation;
                                 ui.separator();
                                 if ui.available_height() >= 500. {
-                                    ui.label(RichText::new(frontend.tab.description()).color(DIM));
+                                    ui.label(RichText::new(&page_text.1).color(DIM));
                                     ui.add_space(4.);
                                 }
                                 let page_height = (ui.available_height() - 4.).max(20.);
@@ -799,13 +992,14 @@ pub fn ui(
                                             size,
                                             context.pixels_per_point(),
                                             &car_preview,
+                                            online.as_deref_mut(),
                                         );
                                     },
                                 );
                             } else {
                                 let nav_width = (ui.available_width() * 0.15).clamp(176., 206.);
                                 let nav_button_height =
-                                    ((pane_height - 180.) / Tab::ALL.len() as f32).clamp(24., 38.);
+                                    ((pane_height - 180.) / nav.len() as f32).clamp(24., 38.);
                                 ui.horizontal_top(|ui| {
                                     ui.allocate_ui_with_layout(
                                         egui::vec2(nav_width, pane_height),
@@ -813,7 +1007,7 @@ pub fn ui(
                                         |ui| {
                                             ui.spacing_mut().item_spacing.y = 3.;
                                             let mut group = "";
-                                            for tab in Tab::ALL {
+                                            for &tab in &nav {
                                                 if tab.group() != group {
                                                     if !group.is_empty() {
                                                         ui.add_space(8.);
@@ -855,14 +1049,11 @@ pub fn ui(
                                         ui.spacing_mut().item_spacing.y = 4.;
                                         {
                                             ui.heading(
-                                                RichText::new(frontend.tab.label())
+                                                RichText::new(&page_text.0)
                                                     .size(if size.x < 700. { 22. } else { 28. })
                                                     .strong(),
                                             );
-                                            ui.label(
-                                                RichText::new(frontend.tab.description())
-                                                    .color(DIM),
-                                            );
+                                            ui.label(RichText::new(&page_text.1).color(DIM));
                                             ui.add_space(5.);
                                             ui.separator();
                                         }
@@ -878,6 +1069,7 @@ pub fn ui(
                                                     size,
                                                     context.pixels_per_point(),
                                                     &car_preview,
+                                                    online.as_deref_mut(),
                                                 );
                                             },
                                         );
@@ -893,6 +1085,9 @@ pub fn ui(
                 );
             });
         });
+    if let Some(online) = online.as_mut() {
+        online.finish(&frontend, &mut session, &options);
+    }
     if frontend.race_started {
         let player = session.player;
         session.race.entrants[player].car.assists = frontend.aids;
@@ -912,11 +1107,30 @@ fn render_settings_page(
     size: egui::Vec2,
     pixels_per_point: f32,
     car_preview: &car_preview::CarPreview,
+    mut online: Option<&mut crate::online::Online>,
 ) {
     let content = egui::ScrollArea::vertical()
         .id_salt(("settings-content", frontend.tab))
         .auto_shrink([false, false])
         .show(ui, |ui| match frontend.tab {
+            Tab::Join => {
+                if let Some(online) = online.as_mut() {
+                    online.join_tab(ui, frontend);
+                }
+            }
+            Tab::Host => page(ui, |ui, part| match part {
+                Part::Settings => {
+                    if let Some(online) = online.as_mut() {
+                        online.host_tab(ui, frontend);
+                    }
+                }
+                Part::Preview => track_preview(ui, &frontend.catalog, &frontend.draft),
+            }),
+            Tab::Room => {
+                if let Some(online) = online.as_mut() {
+                    online.room_tab(ui, frontend, session);
+                }
+            }
             Tab::Track => page(ui, |ui, part| match part {
                 Part::Settings => selection(ui, &frontend.catalog, &mut frontend.draft),
                 Part::Preview => track_preview(ui, &frontend.catalog, &frontend.draft),
@@ -981,6 +1195,20 @@ fn page(ui: &mut egui::Ui, mut draw: impl FnMut(&mut egui::Ui, Part)) {
 
 fn selection(ui: &mut egui::Ui, catalog: &Catalog, draft: &mut Options) {
     section(ui, "Circuit");
+    circuit_choice(ui, catalog, draft);
+    ui.separator();
+    section(ui, "Weather");
+    ui.horizontal(|ui| {
+        for weather in crate::sky::Weather::ALL {
+            ui.selectable_value(&mut draft.weather, weather, weather.label());
+        }
+    });
+    ui.separator();
+    selection_rest(ui, draft);
+}
+
+/// The circuit dropdown, shared with the multiplayer Host page.
+pub(crate) fn circuit_choice(ui: &mut egui::Ui, catalog: &Catalog, draft: &mut Options) {
     let selected = catalog
         .circuits
         .iter()
@@ -999,14 +1227,9 @@ fn selection(ui: &mut egui::Ui, catalog: &Catalog, draft: &mut Options) {
                 }
             }
         });
-    ui.separator();
-    section(ui, "Weather");
-    ui.horizontal(|ui| {
-        for weather in crate::sky::Weather::ALL {
-            ui.selectable_value(&mut draft.weather, weather, weather.label());
-        }
-    });
-    ui.separator();
+}
+
+fn selection_rest(ui: &mut egui::Ui, draft: &mut Options) {
     section(ui, "Race distance & grid");
     if ui.available_width() >= 720. {
         ui.columns(2, |columns| {

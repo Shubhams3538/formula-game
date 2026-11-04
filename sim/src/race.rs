@@ -40,7 +40,7 @@ pub struct EntrantConfig {
     pub livery: [f32; 3],
 }
 
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Timing {
     /// Race distance: laps × track length + lap distance; negative on the grid.
     pub distance: f64,
@@ -76,7 +76,7 @@ pub const RECOVERY_GHOST: f64 = 3.0;
 /// Metres behind a rejoin spot that must be free of cars in its lane.
 const REJOIN_CLEAR_BEHIND: f64 = 120.0;
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum Phase {
     /// Red lights coming on; `lights` of five are lit. Cars are held.
     Countdown {
@@ -90,7 +90,7 @@ pub enum Phase {
     Finished,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum RaceEvent {
     LightsOut,
     LapCompleted {
@@ -1451,6 +1451,118 @@ mod tow_strength {
                 gain > 0.,
                 "tow at {gap} m must increase speed, got {gain} km/h"
             );
+        }
+    }
+}
+
+/// Authoritative mutable race state, independent of assets and presentation.
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+pub struct Snapshot {
+    pub tick: u64,
+    #[serde(with = "crate::exact")]
+    pub time: f64,
+    pub phase: Phase,
+    entrants: Vec<EntrantState>,
+    order: Vec<usize>,
+    finish_order: Vec<usize>,
+    rng: Rng,
+}
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+struct EntrantState {
+    ghost: f64,
+    car: crate::car::CarState,
+    #[serde(with = "crate::exact")]
+    timing: Timing,
+    drs: drs::Tracker,
+    safe_pose: (DVec3, f64, usize),
+    driver: Option<crate::ai::AiState>,
+}
+impl Race {
+    pub fn snapshot(&self) -> Snapshot {
+        Snapshot {
+            tick: self.tick,
+            time: self.time,
+            phase: self.phase,
+            entrants: self
+                .entrants
+                .iter()
+                .map(|e| EntrantState {
+                    ghost: e.ghost,
+                    car: e.car.snapshot(),
+                    timing: e.timing.clone(),
+                    drs: e.drs.clone(),
+                    safe_pose: e.safe_pose,
+                    driver: match &e.driver {
+                        Driver::Ai(ai) => Some(ai.snapshot()),
+                        _ => None,
+                    },
+                })
+                .collect(),
+            order: self.order.clone(),
+            finish_order: self.finish_order.clone(),
+            rng: self.rng.clone(),
+        }
+    }
+    /// Apply atomically after checking field shape. Human slots equal grid indices online.
+    pub fn restore(&mut self, state: &Snapshot) -> Result<(), String> {
+        let n = self.entrants.len();
+        let mut order = state.order.clone();
+        order.sort_unstable();
+        if state.entrants.len() != n
+            || order != (0..n).collect::<Vec<_>>()
+            || state.finish_order.iter().any(|i| *i >= n)
+            || !state.time.is_finite()
+        {
+            return Err("snapshot does not match this race".into());
+        }
+        self.tick = state.tick;
+        self.time = state.time;
+        self.phase = state.phase;
+        self.order.clone_from(&state.order);
+        self.finish_order.clone_from(&state.finish_order);
+        self.rng = state.rng.clone();
+        for (slot, (e, s)) in self.entrants.iter_mut().zip(&state.entrants).enumerate() {
+            e.car.restore(&s.car);
+            e.ghost = s.ghost;
+            e.timing = s.timing.clone();
+            e.drs = s.drs.clone();
+            e.safe_pose = s.safe_pose;
+            if let Some(ai) = &s.driver {
+                if !matches!(e.driver, Driver::Ai(_)) {
+                    e.driver = Driver::Ai(Box::new(AiDriver::new(
+                        DriverProfile {
+                            pace: 0.95,
+                            aggression: 0.5,
+                            consistency: 0.9,
+                        },
+                        &e.car,
+                        &self.track,
+                        slot as u64 + 1,
+                    )));
+                }
+                if let Driver::Ai(driver) = &mut e.driver {
+                    driver.restore(ai, &e.car, &self.track);
+                }
+            } else {
+                e.driver = Driver::Human { slot };
+            }
+        }
+        Ok(())
+    }
+    /// A departed human remains in the field under server-controlled AI.
+    pub fn ai_takeover(&mut self, slot: usize) {
+        if let Some(e) = self.entrants.get_mut(slot) {
+            e.car.assists.automatic_gears = true;
+            e.driver = Driver::Ai(Box::new(AiDriver::new(
+                DriverProfile {
+                    pace: 0.95,
+                    aggression: 0.5,
+                    consistency: 0.9,
+                },
+                &e.car,
+                &self.track,
+                slot as u64 + 1,
+            )));
         }
     }
 }

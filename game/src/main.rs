@@ -12,6 +12,7 @@ mod hud;
 mod materials;
 mod menu;
 mod meshes;
+mod online;
 mod options;
 mod pose;
 mod preferences;
@@ -55,6 +56,8 @@ pub struct Session {
     pub show_racing_line: bool,
     pub show_performance: bool,
     pub poses: pose::Poses,
+    /// Round-trip time per entrant slot in an online race; empty offline.
+    pub pings: Vec<Option<u16>>,
 }
 
 fn main() -> ExitCode {
@@ -107,6 +110,12 @@ fn build_app(mut options: Options) -> Result<App, String> {
         .assets
         .canonicalize()
         .map_err(|error| format!("asset directory {}: {error}", options.assets.display()))?;
+    if (options.host.is_some() || options.join.is_some())
+        && options.car == "gen22"
+        && !options.assets.join("cars/gen22/car.json").is_file()
+    {
+        options.car = "rb6".into();
+    }
     let teams = if options.car == "gen22" {
         teams::Teams::load(&options.assets)?
     } else {
@@ -124,7 +133,11 @@ fn build_app(mut options: Options) -> Result<App, String> {
         None
     };
     let player = options.grid_slot - 1;
-    let title = format!("F1 Racecraft - {}", race.track.name);
+    let title = if options.host.is_some() || options.join.is_some() {
+        format!("F1 Racecraft - {} - {}", race.track.name, options.name)
+    } else {
+        format!("F1 Racecraft - {}", race.track.name)
+    };
     let quick_race = options.quick_race || options.frames.is_some();
     let frontend = menu::Frontend::new(&options);
     let mut rig = camera::ChaseCamera::new(&race, player);
@@ -149,6 +162,7 @@ fn build_app(mut options: Options) -> Result<App, String> {
         delta: default(),
         telemetry: default(),
         ready: false,
+        pings: Vec::new(),
         screen: if quick_race {
             menu::Screen::Racing
         } else {
@@ -196,9 +210,11 @@ fn build_app(mut options: Options) -> Result<App, String> {
         // A paused race in the background only needs to redraw occasionally.
         app.insert_resource(bevy::winit::WinitSettings {
             focused_mode: bevy::winit::UpdateMode::Continuous,
-            unfocused_mode: bevy::winit::UpdateMode::reactive_low_power(
-                std::time::Duration::from_millis(100),
-            ),
+            unfocused_mode: if options.test_driver {
+                bevy::winit::UpdateMode::Continuous
+            } else {
+                bevy::winit::UpdateMode::reactive_low_power(std::time::Duration::from_millis(100))
+            },
         });
     }
     let profile = std::env::var_os("F1_PROFILE").is_some();
@@ -224,6 +240,7 @@ fn build_app(mut options: Options) -> Result<App, String> {
         .insert_resource(Time::<Fixed>::from_hz(PHYSICS_RATE))
         .insert_resource(teams)
         .insert_resource(session)
+        .insert_resource(online::Online::new(&options))
         .insert_resource(options)
         .insert_resource(frontend)
         .init_resource::<Capture>()
@@ -245,7 +262,9 @@ fn build_app(mut options: Options) -> Result<App, String> {
         .add_systems(
             Update,
             (
+                online::poll,
                 menu::apply,
+                online::install,
                 graphics::apply,
                 assets::update_opponent_lods.after(graphics::apply),
                 materials::prepare,
@@ -293,6 +312,7 @@ fn pause_on_focus_loss(
 ) {
     for event in focus.read() {
         if !event.focused
+            && !options.test_driver
             && options.frames.is_none()
             && options.benchmark.is_none()
             && session.screen == menu::Screen::Racing
@@ -303,16 +323,52 @@ fn pause_on_focus_loss(
     }
 }
 
-fn step_race(mut session: ResMut<Session>, benchmark: Option<Res<benchmark::Run>>) {
+fn step_race(
+    mut session: ResMut<Session>,
+    benchmark: Option<Res<benchmark::Run>>,
+    mut online: Option<ResMut<online::Online>>,
+) {
     if benchmark.is_some() {
         return;
     }
     let Session { poses, race, .. } = &mut *session;
     poses.record(race);
-    if session.paused || !session.ready {
+    let connected = online.as_ref().is_some_and(|o| o.client.is_some());
+    if (!connected && session.paused) || !session.ready {
         return;
     }
-    let input = session.controls.car_input();
+    let scripted = online.as_mut().and_then(|o| o.pilot.as_mut()).map(|pilot| {
+        let race = &session.race;
+        let car = &race.entrants[session.player].car;
+        let rivals: Vec<_> = race
+            .entrants
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| *i != session.player)
+            .filter_map(|(_, e)| {
+                let gap = race
+                    .track
+                    .delta(car.track_position.s, e.car.track_position.s);
+                (gap.abs() < 120.).then_some(racecraft_sim::ai::Rival {
+                    gap,
+                    lateral: e.car.track_position.lateral,
+                    speed: e.car.speed(),
+                    position: glam::DVec2::new(e.car.position.x, e.car.position.z),
+                })
+            })
+            .collect();
+        pilot.drive(car, &race.track, &rivals, 1. / PHYSICS_RATE)
+    });
+    let input = if let Some(input) = scripted {
+        input
+    } else if connected && session.screen != menu::Screen::Racing {
+        racecraft_sim::CarInput {
+            brake: 0.3,
+            ..default()
+        }
+    } else {
+        session.controls.car_input()
+    };
     let Session {
         race,
         player,
@@ -320,14 +376,24 @@ fn step_race(mut session: ResMut<Session>, benchmark: Option<Res<benchmark::Run>
         corner_braking,
         ..
     } = &mut *session;
-    let input = guidance.apply(
-        &race.entrants[*player].car,
-        &race.track,
-        input,
-        *corner_braking,
-        1. / PHYSICS_RATE,
-    );
-    race.step(&[input]);
+    let input = if scripted.is_some() {
+        input
+    } else {
+        guidance.apply(
+            &race.entrants[*player].car,
+            &race.track,
+            input,
+            *corner_braking,
+            1. / PHYSICS_RATE,
+        )
+    };
+    if let Some(client) = online.as_mut().and_then(|o| o.client.as_mut()) {
+        if let Err(error) = client.predict(race, input) {
+            client.error = Some(error);
+        }
+    } else {
+        race.step(&[input]);
+    }
     session.sample_hud();
 }
 

@@ -78,15 +78,39 @@ impl Pose {
 /// Each car's pose at the previous tick.
 pub struct Poses {
     previous: Vec<Pose>,
+    corrections: Vec<(DVec3, f64)>,
+    correction_left: f64,
 }
 
 impl Poses {
     pub fn new(race: &Race) -> Self {
         Self {
             previous: race.entrants.iter().map(|e| Pose::of(&e.car)).collect(),
+            corrections: Vec::new(),
+            correction_left: 0.,
         }
     }
 
+    pub fn advance_correction(&mut self, dt: f64) {
+        self.correction_left = (self.correction_left - dt).max(0.);
+    }
+    pub fn correct(&mut self, before: &[Pose], race: &Race) {
+        self.corrections = before
+            .iter()
+            .zip(&race.entrants)
+            .map(|(a, e)| {
+                let b = Pose::of(&e.car);
+                let delta = a.origin - b.origin;
+                if delta.length() > TELEPORT {
+                    (DVec3::ZERO, 0.)
+                } else {
+                    (delta, (a.yaw - b.yaw + PI).rem_euclid(TAU) - PI)
+                }
+            })
+            .collect();
+        self.correction_left = 0.1;
+        self.record(race);
+    }
     /// Call before stepping the race, and every tick while it is paused.
     pub fn record(&mut self, race: &Race) {
         self.previous.clear();
@@ -102,6 +126,11 @@ impl Poses {
             Some(previous) if previous.origin.distance(current.origin) < TELEPORT => {
                 let mut pose = previous.lerp(&current, t.clamp(0., 1.));
                 pose.resample_ground(&race.track.collision, &race.entrants[index].car.spec.wheels);
+                if let Some((position, yaw)) = self.corrections.get(index) {
+                    let weight = self.correction_left / 0.1;
+                    pose.origin += *position * weight;
+                    pose.yaw += *yaw * weight;
+                }
                 pose
             }
             _ => current,
