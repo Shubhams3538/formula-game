@@ -31,6 +31,8 @@ struct Controls {
 }
 /// Sent snapshots kept as delta baselines: 64 × 33 ms ≈ two seconds.
 const HISTORY: usize = 64;
+/// How often every driver's round-trip time is shared with the room.
+const PING_INTERVAL: Duration = Duration::from_secs(1);
 /// Rejected joins get this long to receive the reason before disconnection.
 const REJECT_GRACE: Duration = Duration::from_millis(500);
 /// Main-thread independent server. `update` is also usable by deterministic test harnesses.
@@ -62,6 +64,7 @@ pub struct Server {
     /// Race events waiting for the next snapshot, sent together.
     events: Vec<Event>,
     history: VecDeque<(u64, Encoded)>,
+    pings_sent: Duration,
 }
 impl Server {
     pub fn bind(
@@ -139,6 +142,7 @@ impl Server {
             rejected: HashMap::new(),
             events: Vec::new(),
             history: VecDeque::new(),
+            pings_sent: Duration::ZERO,
         })
     }
     pub fn address(&self) -> SocketAddr {
@@ -157,6 +161,19 @@ impl Server {
         for id in self.lobby.players.iter().map(|p| p.id).collect::<Vec<_>>() {
             self.send(id, CONTROL, &msg);
         }
+    }
+    /// Round-trip time to each connected player. A hosting player's own client
+    /// shares the process, so its time is near zero.
+    pub fn pings(&self) -> Vec<(u64, u16)> {
+        self.lobby
+            .players
+            .iter()
+            .filter(|p| p.connected && self.net.is_connected(p.id))
+            .map(|p| {
+                let ms = (self.net.rtt(p.id) * 1000.).round();
+                (p.id, ms.clamp(0., u16::MAX as f64) as u16)
+            })
+            .collect()
     }
     fn announce(&mut self) {
         self.broadcast(ServerMessage::Lobby(self.lobby.clone()));
@@ -568,6 +585,11 @@ impl Server {
             {
                 self.leave(id);
             }
+        }
+        if self.time >= self.pings_sent + PING_INTERVAL && !self.lobby.players.is_empty() {
+            self.pings_sent = self.time;
+            let pings = self.pings();
+            self.broadcast(ServerMessage::Pings(pings));
         }
         if self.lobby.stage == Stage::Loading {
             let all = self

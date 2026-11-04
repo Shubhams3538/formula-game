@@ -1127,3 +1127,74 @@ fn websocket_paused_reader_recovers_without_blocking_other_drivers() {
             .any(|p| p.id == clients[1].id && p.ready));
     }
 }
+
+#[test]
+fn every_driver_learns_every_other_drivers_ping() {
+    let fixture = Fixture::new();
+    let mut server = Server::bind(
+        &fixture.0,
+        "127.0.0.1:0".parse().unwrap(),
+        RaceSettings::default(),
+        None,
+    )
+    .unwrap();
+    let mut clients = vec![
+        join(&fixture, &server, "First", None),
+        join(&fixture, &server, "Second", None),
+    ];
+    let mut races = vec![None, None];
+    pump(&mut server, &mut clients, &mut races, &fixture.0, 80);
+    assert_eq!(server.lobby.players.len(), 2);
+    // The room shares round-trip times once a second.
+    pump(&mut server, &mut clients, &mut races, &fixture.0, 400);
+    let ids: Vec<_> = clients.iter().map(|c| c.id).collect();
+    for client in &clients {
+        for &id in &ids {
+            assert!(
+                client.pings.contains_key(&id),
+                "{} has no ping for {id}",
+                client.id
+            );
+            assert!(client.ping_ms(id).is_some());
+        }
+    }
+    let server_ids: Vec<_> = server.pings().iter().map(|(id, _)| *id).collect();
+    assert_eq!(server_ids.len(), 2);
+}
+
+#[test]
+fn a_slow_frame_rate_does_not_inflate_ping() {
+    let fixture = Fixture::new();
+    let mut server = Server::bind(
+        &fixture.0,
+        "127.0.0.1:0".parse().unwrap(),
+        RaceSettings::default(),
+        None,
+    )
+    .unwrap();
+    let mut clients = vec![join(&fixture, &server, "Slow", None)];
+    let mut races = vec![None];
+    pump(&mut server, &mut clients, &mut races, &fixture.0, 80);
+    assert_eq!(server.lobby.players.len(), 1);
+    // The game thread only polls ten times a second, as at 10 fps. The server
+    // keeps its real-time loop.
+    let started = Instant::now();
+    let mut last_poll = Instant::now();
+    let mut previous = Instant::now();
+    while started.elapsed() < Duration::from_secs(3) {
+        let now = Instant::now();
+        server.update(now - previous).unwrap();
+        previous = now;
+        if last_poll.elapsed() >= Duration::from_millis(100) {
+            clients[0].poll(last_poll.elapsed()).unwrap();
+            last_poll = Instant::now();
+        }
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    let id = clients[0].id;
+    let (_, ping) = server.pings().into_iter().find(|(p, _)| *p == id).unwrap();
+    assert!(
+        ping < 40,
+        "a 10 fps client measured {ping} ms on loopback; the frame rate leaked into the ping"
+    );
+}

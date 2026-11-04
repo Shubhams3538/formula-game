@@ -1,9 +1,10 @@
+use crate::link::LinkHandle;
 use crate::transport::ClientTransport;
 use crate::{codec::Encoded, *};
 use racecraft_sim::{Assists, CarInput, Race, PHYSICS_RATE};
 use renet::RenetClient;
 use std::{
-    collections::VecDeque,
+    collections::{HashMap, VecDeque},
     path::{Path, PathBuf},
     time::Duration,
 };
@@ -20,8 +21,8 @@ pub struct AuthorityObservation {
     pub distances: Vec<f64>,
 }
 pub struct Client {
-    net: RenetClient,
-    transport: ClientTransport,
+    /// Socket and reliability layer, serviced on the network thread.
+    link: LinkHandle,
     root: PathBuf,
     name: String,
     assists: Assists,
@@ -32,6 +33,8 @@ pub struct Client {
     pub closed: bool,
     pub load: Option<Lobby>,
     pub events: VecDeque<Event>,
+    /// Each connected driver's round-trip time to the server in ms, by player id.
+    pub pings: HashMap<u64, u16>,
     hello: bool,
     elapsed: Duration,
     sent: Duration,
@@ -71,8 +74,7 @@ impl Client {
         let id = id.unwrap_or_else(random_id);
         let transport = ClientTransport::connect(endpoint, id)?;
         Ok(Self {
-            net: RenetClient::new(connection_config()),
-            transport,
+            link: LinkHandle::spawn(RenetClient::new(connection_config()), transport)?,
             root: root.to_path_buf(),
             name,
             assists,
@@ -83,6 +85,7 @@ impl Client {
             closed: false,
             load: None,
             events: VecDeque::new(),
+            pings: HashMap::new(),
             hello: false,
             elapsed: Duration::ZERO,
             sent: Duration::ZERO,
@@ -112,10 +115,11 @@ impl Client {
             CONTROL
         };
         let bytes = encode(&message)?;
-        if !self.net.can_send_message(channel, bytes.len()) {
+        let mut link = self.link.lock();
+        if !link.net.can_send_message(channel, bytes.len()) {
             return Err("Network send queue is full".into());
         }
-        self.net.send_message(channel, bytes);
+        link.net.send_message(channel, bytes);
         Ok(())
     }
     pub fn slot(&self) -> Option<usize> {
@@ -142,27 +146,41 @@ impl Client {
             return Ok(());
         }
         self.elapsed += dt;
-        self.net.update(dt);
-        if let Err(e) = self.transport.update(dt, &mut self.net) {
-            self.closed = true;
-            return Err(format!("Connection ended: {e}"));
-        }
-        if self.net.is_connected() && !self.hello {
+        // The network thread keeps the connection serviced between frames;
+        // catch it up now too, then take what has arrived.
+        let (connected, inbox) = {
+            let mut link = self.link.lock();
+            // Read only here; `poll` ends with a flush.
+            link.service();
+            if let Some(e) = link.error.clone() {
+                drop(link);
+                self.closed = true;
+                return Err(format!("Connection ended: {e}"));
+            }
+            let mut inbox = Vec::new();
+            for channel in [CONTROL, STATE] {
+                for _ in 0..256 {
+                    let Some(bytes) = link.net.receive_message(channel) else {
+                        break;
+                    };
+                    inbox.push(bytes);
+                }
+            }
+            (link.net.is_connected(), inbox)
+        };
+        if connected && !self.hello {
             self.send(ClientMessage::Hello {
                 name: self.name.clone(),
             })?;
             self.hello = true;
         }
-        for channel in [CONTROL, STATE] {
-            for _ in 0..256 {
-                let Some(bytes) = self.net.receive_message(channel) else {
-                    break;
-                };
+        {
+            for bytes in inbox {
                 match decode::<ServerMessage>(&bytes)? {
                     ServerMessage::Offer { settings, content } => {
                         if fingerprint(&self.root, &settings)? != content {
                             self.closed = true;
-                            self.transport.disconnect();
+                            self.link.lock().transport.disconnect();
                             return Err("Game version or converted track/car assets differ from the host. Install the same build and assets.".into());
                         }
                         self.send(ClientMessage::Accept {
@@ -231,6 +249,7 @@ impl Client {
                             self.events.push_back(event);
                         }
                     }
+                    ServerMessage::Pings(pings) => self.pings = pings.into_iter().collect(),
                     ServerMessage::Error(error) => self.error = Some(error),
                     ServerMessage::Closed(reason) => {
                         self.error = Some(reason);
@@ -240,9 +259,13 @@ impl Client {
                 }
             }
         }
-        if self.transport.time_since_last_received_packet() > TIMEOUT
-            || self.lobby.is_none() && self.elapsed > TIMEOUT
-        {
+        if self.lobby.is_none() && self.elapsed > TIMEOUT {
+            self.closed = true;
+            return Err(
+                "Could not reach the room. Check the address and that the host is running.".into(),
+            );
+        }
+        if self.link.lock().transport.time_since_last_received_packet() > TIMEOUT {
             self.closed = true;
             return Err("Host is not responding. The race has ended.".into());
         }
@@ -265,8 +288,7 @@ impl Client {
                 samples,
             })?;
         }
-        self.transport.send_packets(&mut self.net)?;
-        Ok(())
+        self.flush()
     }
     /// Apply the newest authoritative state.
     ///
@@ -280,7 +302,7 @@ impl Client {
         };
         let slot = self.slot().ok_or("Host did not assign a driver slot")?;
         let tick = state.race.tick;
-        let natural = tick + prediction_lead(self.net.rtt());
+        let natural = tick + prediction_lead(self.link.lock().net.rtt());
         self.authoritative_tick = Some(tick);
         self.pending.retain(|s| s.tick > tick);
         self.commands
@@ -444,11 +466,21 @@ impl Client {
         }
         self.command_at(tick, Command::Recover)
     }
+    /// Send queued messages now rather than on the network thread's next pass.
     pub fn flush(&mut self) -> Result<(), String> {
-        self.transport.send_packets(&mut self.net)
+        self.link.lock().send()
     }
     pub fn rtt_ms(&self) -> f64 {
-        self.net.rtt() * 1000.
+        self.link.lock().net.rtt() * 1000.
+    }
+    /// Latest round-trip time for a connected driver, as the server measures it,
+    /// so every driver sees the same figure. Before the first room broadcast this
+    /// client falls back to its own measurement.
+    pub fn ping_ms(&self, player: u64) -> Option<u16> {
+        self.pings.get(&player).copied().or_else(|| {
+            (player == self.id && self.lobby.is_some())
+                .then(|| self.rtt_ms().round().clamp(0., u16::MAX as f64) as u16)
+        })
     }
 }
 /// Predicted snapshot-tick states kept for exact-match checks; covers twice the maximum lead.
@@ -479,7 +511,7 @@ impl Drop for Client {
     fn drop(&mut self) {
         let _ = self.send(ClientMessage::Leave);
         let _ = self.flush();
-        self.transport.disconnect();
+        self.link.lock().transport.disconnect();
     }
 }
 
