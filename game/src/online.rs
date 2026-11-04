@@ -1,9 +1,6 @@
 //! Graphical lobby and the bridge from authoritative networking into the existing Session.
 use crate::{
-    menu::{
-        housing, section, setting_row, Frontend, Screen, BACKDROP, DIM, HOUSING, LABEL, RED, WELL,
-        WELL_RIM,
-    },
+    menu::{section, setting_row, Frontend, Screen, Tab, DIM, HOUSING, LABEL, RED, WELL, WELL_RIM},
     options::Options,
     pose::Poses,
     Session,
@@ -33,12 +30,16 @@ pub struct Online {
     request: Option<bool>,
     pub pilot: Option<racecraft_sim::AiDriver>,
     test_started: bool,
+    page: Page,
+    intent: Intent,
 }
 impl Online {
     pub fn new(options: &Options) -> Self {
         Self {
             pilot: None,
             test_started: false,
+            page: Page::Connect,
+            intent: Intent::default(),
             client: None,
             host: None,
             open: options.host.is_some() || options.join.is_some(),
@@ -140,32 +141,36 @@ impl Online {
         session.controls = default();
         session.pings.clear();
     }
-    /// Open the multiplayer screens from the main menu.
+    /// Switch the menu to multiplayer.
     pub fn show(&mut self) {
         self.open = true;
     }
-    /// Draws the multiplayer screens. Returns true while they own the frame, so
-    /// the offline menu stays hidden behind them.
-    pub fn ui(
-        &mut self,
-        context: &egui::Context,
-        frontend: &mut Frontend,
-        session: &mut Session,
-        options: &Options,
-    ) -> bool {
-        // Driving: the timing tower carries everyone's ping, so nothing overlays the road.
-        if self.client.as_ref().is_some_and(|c| {
-            c.active() && c.stage() != Stage::Results && session.screen == Screen::Racing
-        }) {
-            return true;
+    /// Switch the menu back to solo; only possible outside a room.
+    pub fn close(&mut self) {
+        if self.client.is_none() {
+            self.open = false;
+            self.error = None;
         }
-        if self.client.is_none() && !self.open {
-            return false;
-        }
+    }
+    /// The menu is in multiplayer mode.
+    pub fn active(&self) -> bool {
+        self.client.is_some() || self.open
+    }
+    pub fn in_room(&self) -> bool {
+        self.client.is_some()
+    }
+    /// Results take the screen over a finished race even while still "driving".
+    pub fn owns_racing_screen(&self) -> bool {
+        self.client
+            .as_ref()
+            .is_some_and(|c| c.active() && c.stage() == Stage::Results)
+    }
+    /// Refresh the page from the network once per menu frame.
+    pub fn prepare(&mut self) {
         if let Some(error) = self.client.as_mut().and_then(|c| c.error.take()) {
             self.error = Some(error);
         }
-        let page = match &self.client {
+        self.page = match &self.client {
             None => Page::Connect,
             Some(client) => match &client.lobby {
                 None => Page::Connecting,
@@ -177,7 +182,7 @@ impl Online {
                 },
             },
         };
-        if let Page::Lobby(lobby) = &page {
+        if let Page::Lobby(lobby) = &self.page {
             let owner = self.client.as_ref().is_some_and(|c| c.owner());
             // Owners edit a draft; everyone else always sees the room's rules.
             if self.draft_owner != Some(lobby.owner) || !owner {
@@ -185,99 +190,100 @@ impl Online {
                 self.draft_owner = Some(lobby.owner);
             }
         }
-        let size = context.content_rect().size();
-        let margin = (size.x * 0.018).clamp(10., 24.);
-        let content_width = (size.x * 0.94).clamp(300., 1280.);
-        let mut viewport = egui::Ui::new(
-            context.clone(),
-            "online-viewport".into(),
-            egui::UiBuilder::new()
-                .layer_id(egui::LayerId::background())
-                .max_rect(context.viewport_rect()),
-        );
-        let mut intent = Intent::default();
-
-        // ---- Footer actions, the same bar the offline menu uses.
-        let footer_height = if size.y < 520. { 56. } else { 72. };
-        let button = egui::vec2(((content_width - 24.) / 3.).clamp(110., 200.), 44.);
-        let translucent = matches!(page, Page::Live(_)) && session.ready;
-        let backdrop = if translucent {
-            BACKDROP.gamma_multiply(0.82)
-        } else {
-            BACKDROP
-        };
-        egui::Panel::bottom("online-actions")
-            .exact_size(footer_height)
-            .show_separator_line(false)
-            .frame(
-                egui::Frame::new()
-                    .fill(backdrop)
-                    .inner_margin(egui::Margin::symmetric(margin as i8, 8)),
-            )
-            .show(&mut viewport, |ui| {
-                centered(ui, content_width, |ui| {
-                    ui.horizontal_wrapped(|ui| {
-                        ui.spacing_mut().item_spacing.x = 12.;
-                        self.footer(ui, &page, session, button, &mut intent);
-                    });
+    }
+    /// Page heading and description for a multiplayer tab.
+    pub fn heading(&self, tab: Tab) -> (String, String) {
+        match tab {
+            Tab::Join => (
+                "Join room".into(),
+                "Enter the host's LAN or VPN address, or a hosted server URL.".into(),
+            ),
+            Tab::Host => (
+                "Host room".into(),
+                format!(
+                    "Race up to {MAX_PLAYERS} drivers. Others join with your LAN or VPN address."
+                ),
+            ),
+            _ => {
+                let (title, subtitle) = self.page.heading(self.host.is_some());
+                (title.into(), subtitle)
+            }
+        }
+    }
+    pub fn join_tab(&mut self, ui: &mut egui::Ui, frontend: &Frontend) {
+        self.driver_section(ui, frontend);
+        ui.separator();
+        section(ui, "Room");
+        field(ui, "Address", |ui| {
+            ui.add(
+                egui::TextEdit::singleline(&mut self.address)
+                    .hint_text("192.168.1.20:7777 or wss://…")
+                    .desired_width(ui.available_width()),
+            );
+        });
+    }
+    pub fn host_tab(&mut self, ui: &mut egui::Ui, frontend: &mut Frontend) {
+        self.driver_section(ui, frontend);
+        ui.separator();
+        section(ui, "Room");
+        crate::menu::circuit_choice(ui, &frontend.catalog, &mut frontend.draft);
+        self.settings.track = frontend.draft.track.clone();
+        field(ui, "Car", |ui| {
+            egui::ComboBox::from_id_salt("online-car")
+                .width(ui.available_width())
+                .selected_text(car_name(&self.settings.car))
+                .show_ui(ui, |ui| {
+                    ui.selectable_value(&mut self.settings.car, "rb6".into(), "RB6");
+                    ui.selectable_value(&mut self.settings.car, "gen22".into(), "GEN22");
                 });
-            });
-
-        // ---- Page body.
-        egui::CentralPanel::default()
-            .frame(
-                egui::Frame::new()
-                    .fill(backdrop)
-                    .inner_margin(margin as i8),
-            )
-            .show(&mut viewport, |ui| {
-                centered(ui, content_width, |ui| {
-                    let (title, subtitle) = page.heading(self.host.is_some());
+        });
+        field(ui, "UDP port", |ui| {
+            ui.add(egui::DragValue::new(&mut self.port).range(1024..=65535));
+        });
+        ui.separator();
+        section(ui, "Race rules");
+        rules(ui, &mut self.settings, MAX_PLAYERS - 1);
+    }
+    /// The room tab: connecting, lobby, loading, live standings or results.
+    pub fn room_tab(&mut self, ui: &mut egui::Ui, frontend: &Frontend, session: &Session) {
+        let mut intent = std::mem::take(&mut self.intent);
+        let page = std::mem::replace(&mut self.page, Page::Connect);
+        match &page {
+            Page::Connect => {}
+            Page::Connecting => {
+                ui.horizontal(|ui| {
+                    ui.spinner();
+                    ui.label("Connecting and checking that your assets match the room…");
+                });
+            }
+            Page::Lobby(lobby) => self.lobby_page(ui, lobby, frontend, &mut intent),
+            Page::Loading(lobby) => {
+                ui.horizontal(|ui| {
+                    ui.spinner();
                     ui.label(
-                        RichText::new(title)
-                            .size(if size.x < 700. { 28. } else { 36. })
-                            .strong(),
+                        "Loading the circuit and cars. The race starts when every driver is ready.",
                     );
-                    ui.label(RichText::new(subtitle).color(DIM));
-                    if let Some(error) = &self.error {
-                        ui.add_space(4.);
-                        notice(ui, error, ERROR);
-                    }
-                    ui.add_space(10.);
-                    egui::ScrollArea::vertical()
-                        .id_salt("online-body")
-                        .auto_shrink([false, false])
-                        .show(ui, |ui| match &page {
-                            Page::Connect => self.connect_page(ui, frontend, &mut intent),
-                            Page::Connecting => {
-                                housing().show(ui, |ui| {
-                                    ui.set_width(ui.available_width());
-                                    ui.horizontal(|ui| {
-                                        ui.spinner();
-                                        ui.label("Connecting and checking that your assets match the room…");
-                                    });
-                                });
-                            }
-                            Page::Lobby(lobby) => {
-                                self.lobby_page(ui, lobby, frontend, &mut intent)
-                            }
-                            Page::Loading(lobby) => {
-                                housing().show(ui, |ui| {
-                                    ui.set_width(ui.available_width());
-                                    ui.horizontal(|ui| {
-                                        ui.spinner();
-                                        ui.label("Loading the circuit and cars. The race starts when every driver is ready.");
-                                    });
-                                });
-                                ui.add_space(12.);
-                                self.roster(ui, lobby, frontend, false, &mut intent);
-                            }
-                            Page::Live(lobby) => self.live_page(ui, lobby, frontend, session),
-                            Page::Results(_) => self.results_page(ui, session),
-                        });
                 });
-            });
-
+                ui.separator();
+                self.roster(ui, lobby, frontend, false, &mut intent);
+            }
+            Page::Live(lobby) => self.standings(ui, session, lobby, false),
+            Page::Results(lobby) => self.standings(ui, session, lobby, true),
+        }
+        self.page = page;
+        self.intent = intent;
+    }
+    /// Footer actions for the current page, before the menu's own Quit.
+    pub fn actions(&mut self, ui: &mut egui::Ui, tab: Tab, session: &Session, size: egui::Vec2) {
+        let mut intent = std::mem::take(&mut self.intent);
+        let page = std::mem::replace(&mut self.page, Page::Connect);
+        self.footer(ui, &page, tab, session, size, &mut intent);
+        self.page = page;
+        self.intent = intent;
+    }
+    /// Apply what the player asked for this frame.
+    pub fn finish(&mut self, frontend: &Frontend, session: &mut Session, options: &Options) {
+        let intent = std::mem::take(&mut self.intent);
         if let Some(host) = intent.start {
             if let Err(error) = self.begin(host, options, frontend.aids) {
                 self.error = Some(error);
@@ -293,20 +299,52 @@ impl Online {
         if intent.resume {
             crate::menu::resume(session);
         }
-        if intent.close {
-            self.open = false;
-            self.error = None;
-        }
         if intent.leave {
             self.leave(session);
         }
-        self.client.is_some() || self.open
+    }
+    fn driver_section(&mut self, ui: &mut egui::Ui, frontend: &Frontend) {
+        section(ui, "Your driver");
+        field(ui, "Driver name", |ui| {
+            ui.add(
+                egui::TextEdit::singleline(&mut self.name)
+                    .char_limit(32)
+                    .hint_text("Name shown to other drivers")
+                    .desired_width(ui.available_width()),
+            );
+        });
+        if !frontend.teams.teams.is_empty() {
+            field(ui, "GEN22 identity", |ui| {
+                egui::ComboBox::from_id_salt("online-identity")
+                    .width(ui.available_width())
+                    .selected_text(self.identity.as_ref().map_or_else(
+                        || "Assign a free driver".to_owned(),
+                        |i| identity_label(frontend, i),
+                    ))
+                    .show_ui(ui, |ui| {
+                        ui.selectable_value(&mut self.identity, None, "Assign a free driver");
+                        for team in &frontend.teams.teams {
+                            for driver in &team.drivers {
+                                ui.selectable_value(
+                                    &mut self.identity,
+                                    Some(racecraft_net::DriverIdentity {
+                                        team: team.id.clone(),
+                                        driver: driver.id.clone(),
+                                    }),
+                                    format!("{} · {}", team.name, driver.name),
+                                );
+                            }
+                        }
+                    });
+            });
+        }
     }
 
     fn footer(
         &mut self,
         ui: &mut egui::Ui,
         page: &Page,
+        tab: Tab,
         session: &Session,
         size: egui::Vec2,
         intent: &mut Intent,
@@ -329,9 +367,11 @@ impl Online {
             .clicked()
         };
         match page {
+            // Like Start race offline: the main action stays on every page.
             Page::Connect => {
-                if secondary(ui, "Back to menu") {
-                    intent.close = true;
+                let host = tab == Tab::Host;
+                if primary(ui, if host { "Host room" } else { "Join room" }, true) {
+                    intent.start = Some(host);
                 }
             }
             Page::Lobby(lobby) => {
@@ -385,122 +425,6 @@ impl Online {
                     intent.leave = true;
                 }
             }
-        }
-    }
-
-    fn connect_page(&mut self, ui: &mut egui::Ui, frontend: &Frontend, intent: &mut Intent) {
-        card(ui, "Your driver", |ui| {
-            field(ui, "Driver name", |ui| {
-                ui.add(
-                    egui::TextEdit::singleline(&mut self.name)
-                        .char_limit(32)
-                        .hint_text("Name shown to other drivers")
-                        .desired_width(ui.available_width()),
-                );
-            });
-            if !frontend.teams.teams.is_empty() {
-                field(ui, "GEN22 identity", |ui| {
-                    egui::ComboBox::from_id_salt("online-identity")
-                        .width(ui.available_width())
-                        .selected_text(self.identity.as_ref().map_or_else(
-                            || "Assign a free driver".to_owned(),
-                            |i| identity_label(frontend, i),
-                        ))
-                        .show_ui(ui, |ui| {
-                            ui.selectable_value(&mut self.identity, None, "Assign a free driver");
-                            for team in &frontend.teams.teams {
-                                for driver in &team.drivers {
-                                    ui.selectable_value(
-                                        &mut self.identity,
-                                        Some(racecraft_net::DriverIdentity {
-                                            team: team.id.clone(),
-                                            driver: driver.id.clone(),
-                                        }),
-                                        format!("{} · {}", team.name, driver.name),
-                                    );
-                                }
-                            }
-                        });
-                });
-            }
-        });
-        ui.add_space(12.);
-        let join = |ui: &mut egui::Ui, this: &mut Self, intent: &mut Intent| {
-            card(ui, "Join a room", |ui| {
-                ui.label(
-                    RichText::new("Enter the host's LAN or VPN address, or a hosted server URL.")
-                        .color(DIM),
-                );
-                ui.add_space(4.);
-                field(ui, "Address", |ui| {
-                    ui.add(
-                        egui::TextEdit::singleline(&mut this.address)
-                            .hint_text("192.168.1.20:7777 or wss://…")
-                            .desired_width(ui.available_width()),
-                    );
-                });
-                ui.add_space(6.);
-                if ui
-                    .add(
-                        egui::Button::new(RichText::new("Join room").strong())
-                            .fill(RED)
-                            .min_size(egui::vec2(ui.available_width(), 42.)),
-                    )
-                    .clicked()
-                {
-                    intent.start = Some(false);
-                }
-            });
-        };
-        let host = |ui: &mut egui::Ui,
-                    this: &mut Self,
-                    frontend: &Frontend,
-                    intent: &mut Intent| {
-            card(ui, "Host a room", |ui| {
-                this.settings.track = frontend.draft.track.clone();
-                field(ui, "Circuit", |ui| {
-                    ui.label(RichText::new(circuit_name(frontend, &this.settings.track)).strong());
-                });
-                ui.label(
-                    RichText::new("Pick another circuit on the Track page of the main menu.")
-                        .size(14.)
-                        .color(LABEL),
-                );
-                field(ui, "Car", |ui| {
-                    egui::ComboBox::from_id_salt("online-car")
-                        .width(ui.available_width())
-                        .selected_text(car_name(&this.settings.car))
-                        .show_ui(ui, |ui| {
-                            ui.selectable_value(&mut this.settings.car, "rb6".into(), "RB6");
-                            ui.selectable_value(&mut this.settings.car, "gen22".into(), "GEN22");
-                        });
-                });
-                field(ui, "UDP port", |ui| {
-                    ui.add(egui::DragValue::new(&mut this.port).range(1024..=65535));
-                });
-                rules(ui, &mut this.settings, MAX_PLAYERS - 1);
-                ui.add_space(6.);
-                if ui
-                    .add(
-                        egui::Button::new(RichText::new("Host room").strong())
-                            .fill(RED)
-                            .min_size(egui::vec2(ui.available_width(), 42.)),
-                    )
-                    .clicked()
-                {
-                    intent.start = Some(true);
-                }
-            });
-        };
-        if ui.available_width() >= 860. {
-            ui.columns(2, |columns| {
-                join(&mut columns[0], self, intent);
-                host(&mut columns[1], self, frontend, intent);
-            });
-        } else {
-            join(ui, self, intent);
-            ui.add_space(12.);
-            host(ui, self, frontend, intent);
         }
     }
 
@@ -587,9 +511,7 @@ impl Online {
             if let Some(port) = address {
                 notice(
                     ui,
-                    &format!(
-                        "You are hosting on UDP port {port}. Share your LAN or VPN IP address with other drivers."
-                    ),
+                    &format!("Hosting on UDP port {port}. Share your LAN or VPN IP address."),
                     DIM,
                 );
                 ui.add_space(8.);
@@ -603,7 +525,7 @@ impl Online {
             });
         } else {
             draw_grid(ui, self, intent);
-            ui.add_space(12.);
+            ui.separator();
             draw_rules(ui, self, intent);
         }
     }
@@ -702,59 +624,6 @@ impl Online {
         );
     }
 
-    /// Esc during an online race: live standings with ping. The race keeps running.
-    fn live_page(
-        &self,
-        ui: &mut egui::Ui,
-        lobby: &Lobby,
-        frontend: &mut Frontend,
-        session: &Session,
-    ) {
-        let wide = ui.available_width() >= 900.;
-        let standings = |ui: &mut egui::Ui| self.standings(ui, session, lobby, false);
-        let mut local = |ui: &mut egui::Ui| {
-            card(ui, "This computer", |ui| {
-                field(ui, "Volume", |ui| {
-                    ui.add(
-                        egui::Slider::new(&mut frontend.audio.master, 0. ..=1.)
-                            .custom_formatter(|v, _| format!("{:.0}%", v * 100.))
-                            .custom_parser(|s| {
-                                s.trim_end_matches('%')
-                                    .trim()
-                                    .parse::<f64>()
-                                    .ok()
-                                    .map(|v| v / 100.)
-                            }),
-                    );
-                });
-                field(ui, "Sound", |ui| {
-                    ui.checkbox(&mut frontend.muted, "Mute all sound");
-                });
-                ui.add_space(4.);
-                ui.label(
-                    RichText::new("Opening this menu does not pause the shared race.").color(LABEL),
-                );
-            });
-        };
-        if wide {
-            ui.columns(2, |columns| {
-                standings(&mut columns[0]);
-                local(&mut columns[1]);
-            });
-        } else {
-            standings(ui);
-            ui.add_space(12.);
-            local(ui);
-        }
-    }
-
-    fn results_page(&self, ui: &mut egui::Ui, session: &Session) {
-        let Some(lobby) = self.client.as_ref().and_then(|c| c.lobby.as_ref()) else {
-            return;
-        };
-        self.standings(ui, session, lobby, true);
-    }
-
     /// Race order with gaps (or final times) and each human driver's ping.
     fn standings(&self, ui: &mut egui::Ui, session: &Session, lobby: &Lobby, results: bool) {
         let Some(client) = &self.client else { return };
@@ -842,18 +711,15 @@ impl Page {
             )
         };
         match self {
-            Self::Connect => (
-                "MULTIPLAYER",
-                format!("Race up to {MAX_PLAYERS} drivers over LAN, VPN or a hosted server."),
-            ),
-            Self::Connecting => ("JOINING ROOM", "Waiting for the room to answer.".into()),
+            Self::Connect => ("Room", "You are not in a room.".into()),
+            Self::Connecting => ("Joining room", "Waiting for the room to answer.".into()),
             Self::Lobby(lobby) => (
-                if hosting { "YOUR ROOM" } else { "ROOM LOBBY" },
+                if hosting { "Your room" } else { "Room lobby" },
                 room(lobby),
             ),
-            Self::Loading(lobby) => ("LOADING RACE", room(lobby)),
-            Self::Live(lobby) => ("LIVE RACE", room(lobby)),
-            Self::Results(lobby) => ("RACE RESULTS", room(lobby)),
+            Self::Loading(lobby) => ("Loading race", room(lobby)),
+            Self::Live(lobby) => ("Live race", room(lobby)),
+            Self::Results(lobby) => ("Race results", room(lobby)),
         }
     }
 }
@@ -864,31 +730,16 @@ struct Intent {
     send: Option<ClientMessage>,
     leave: bool,
     resume: bool,
-    close: bool,
 }
 
 const GREEN: Color32 = Color32::from_rgb(64, 230, 115);
 const AMBER: Color32 = Color32::from_rgb(255, 184, 38);
-const ERROR: Color32 = Color32::from_rgb(255, 150, 150);
 
-/// A column of at most `width`, centred in the available space.
-fn centered(ui: &mut egui::Ui, width: f32, add: impl FnOnce(&mut egui::Ui)) {
-    let width = ui.available_width().min(width);
-    ui.vertical_centered(|ui| {
-        ui.allocate_ui_with_layout(
-            egui::vec2(width, ui.available_height()),
-            egui::Layout::top_down(egui::Align::Min),
-            add,
-        );
-    });
-}
-
-/// A titled charcoal panel that fills its column.
+/// A titled group of settings, laid out like the menu's own sections.
 fn card(ui: &mut egui::Ui, title: &str, add: impl FnOnce(&mut egui::Ui)) {
-    housing().inner_margin(16).show(ui, |ui| {
+    ui.vertical(|ui| {
         ui.set_width(ui.available_width());
         section(ui, title);
-        ui.add_space(6.);
         add(ui);
     });
 }
@@ -905,19 +756,8 @@ fn notice(ui: &mut egui::Ui, text: &str, color: Color32) {
         });
 }
 
-/// A settings row in a fixed-height box. Centre-aligned layouts otherwise
-/// centre in all of a scroll area's height.
 fn field(ui: &mut egui::Ui, label: &str, add: impl FnOnce(&mut egui::Ui)) {
-    let height = if ui.available_width() < 440. {
-        46.
-    } else {
-        38.
-    };
-    ui.allocate_ui_with_layout(
-        egui::vec2(ui.available_width(), height),
-        egui::Layout::top_down(egui::Align::Min),
-        |ui| setting_row(ui, label, add),
-    );
+    setting_row(ui, label, add);
 }
 
 /// One read-only rule as a two-column grid row.
@@ -937,15 +777,6 @@ fn car_name(car: &str) -> &'static str {
         "rb6" => "RB6",
         _ => "Car",
     }
-}
-
-fn circuit_name(frontend: &Frontend, track: &str) -> String {
-    frontend
-        .catalog
-        .circuits
-        .iter()
-        .find(|c| c.id == track)
-        .map_or_else(|| track.to_owned(), |c| c.name.clone())
 }
 
 fn team_color(frontend: &Frontend, team: &str) -> Option<Color32> {
@@ -1536,9 +1367,13 @@ mod tests {
         let mut frontend = Frontend::new(&options);
         let mut session = crate::tests::session();
         let context = egui::Context::default();
+        online.prepare();
         let mut output = context.run_ui(egui::RawInput::default(), |ui| {
-            online.ui(ui.ctx(), &mut frontend, &mut session, &options);
+            online.join_tab(ui, &frontend);
+            online.host_tab(ui, &mut frontend);
+            online.room_tab(ui, &frontend, &session);
         });
+        online.finish(&frontend, &mut session, &options);
         assert!(!output.shapes.is_empty());
         output.textures_delta.clear();
     }

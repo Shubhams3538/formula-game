@@ -250,7 +250,8 @@ pub fn update(
             frontend.display,
             time.delta_secs(),
         );
-    } else if !session.ready {
+    } else if !session.ready && session.screen == crate::menu::Screen::Racing {
+        // Menus and lobbies show their own loading state.
         hud.text(
             &style.bold,
             32.0,
