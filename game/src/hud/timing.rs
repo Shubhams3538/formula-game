@@ -52,7 +52,7 @@ pub(super) fn strip(
     );
     let counter_x = right - 86. * s;
     let since = (race.time - timing.sector_start).max(0.);
-    if running {
+    if running && (last_split(session).is_none() || since >= SLIDE_SECONDS) {
         readout(
             hud,
             style,
@@ -189,7 +189,12 @@ fn sector_bar(
     let cell_w = (sector_w - mini_gap * 2.) / 3.;
     let length = race.track.length / MINISECTORS as f64;
     let distance = timing.distance.max(0.);
-    let lap = (distance / race.track.length).floor() as u32;
+    let finished = timing.finish_time.is_some();
+    let lap = if finished {
+        timing.laps_completed.saturating_sub(1)
+    } else {
+        (distance / race.track.length).floor() as u32
+    };
     let progress = (distance / length).fract() as f32;
     let current = ((distance / length).floor() as usize) % MINISECTORS;
     for sector in 0..3 {
@@ -204,7 +209,7 @@ fn sector_bar(
                 continue;
             }
             let done = session.telemetry.minis[index]
-                .filter(|split| running && split.lap == lap && index < current);
+                .filter(|split| split.lap == lap && (finished || running && index < current));
             let color = match done.map(|split| split.result) {
                 Some(MiniResult::Overall) => PURPLE,
                 Some(MiniResult::Personal) => GREEN,

@@ -14,7 +14,7 @@ permissions:
   contents: read
 
 env:
-  ASSET_ARCHIVE_URL: https://fbs.jr4.in/s/f1-assets
+  ASSET_ARCHIVE_URL: https://github.com/jR4dh3y/formula-game/releases/download/assets-68ae3a48b726ffa5/f1-racecraft-assets.zip
   ASSET_ARCHIVE_SHA256: 68ae3a48b726ffa5789ca049ebc438e77db8aca6fa91a46755c1376ae4053e7d
 
 jobs:
@@ -173,6 +173,9 @@ jobs:
           TAG: ${{ github.ref_name }}
           REPOSITORY: ${{ github.repository }}
         run: |
+          if [[ "$(gh release view "$TAG" --repo "$REPOSITORY" --json isDraft --jq .isDraft 2>/dev/null)" == "true" ]]; then
+            gh release delete "$TAG" --repo "$REPOSITORY" --yes
+          fi
           if gh release view "$TAG" --repo "$REPOSITORY" >/dev/null 2>&1; then
             echo "Release $TAG already exists; published assets are immutable. Use a new version tag." >&2
             exit 1

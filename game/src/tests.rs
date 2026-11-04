@@ -469,6 +469,7 @@ fn rendered_menu_and_track_selection() {
 
 #[derive(Resource, Default)]
 struct MenuProbe {
+    navigation: Option<String>,
     initial_time: Option<f64>,
     stage: usize,
     ticks: usize,
@@ -530,11 +531,23 @@ fn menu_click(
     name: &str,
 ) {
     use bevy_egui::egui::{Event, Modifiers, PointerButton};
-    let position = frontend
+    let control = if !frontend.widgets.contains_key(name)
+        && matches!(name, "Driving assistance" | "Track" | "Interface")
+    {
+        probe.navigation = Some(name.into());
+        "settings-navigation"
+    } else {
+        name
+    };
+    let button = frontend
         .widgets
-        .get(name)
-        .unwrap_or_else(|| panic!("missing UI control {name}"))
-        .center();
+        .get(control)
+        .unwrap_or_else(|| panic!("missing UI control {control}"));
+    let position = if frontend.widgets.contains_key("settings-navigation-popup") {
+        button.left_center() + bevy_egui::egui::vec2(40., 0.)
+    } else {
+        button.center()
+    };
     let mut input = inputs.single_mut().unwrap();
     input.0.events.push(Event::PointerMoved(position));
     input.0.events.push(Event::PointerButton {
@@ -610,6 +623,39 @@ fn menu_probe(
             });
         return;
     }
+    if let Some(name) = probe.navigation.take() {
+        probe.ticks += 1;
+        if probe.ticks < 12 || !frontend.widgets.contains_key(name.as_str()) {
+            probe.navigation = Some(name);
+            return;
+        }
+        if let Some(popup) = frontend.widgets.get("settings-navigation-popup") {
+            let button = frontend.widgets[name.as_str()];
+            if button.intersect(*popup).height() < button.height().min(12.) {
+                let mut input = inputs.single_mut().unwrap();
+                input.0.events.push(Event::PointerMoved(popup.center()));
+                input.0.events.push(Event::MouseWheel {
+                    unit: bevy_egui::egui::MouseWheelUnit::Point,
+                    phase: bevy_egui::egui::TouchPhase::Move,
+                    delta: bevy_egui::egui::vec2(
+                        0.,
+                        if button.center().y > popup.center().y {
+                            -180.
+                        } else {
+                            180.
+                        },
+                    ),
+                    modifiers: Modifiers::default(),
+                });
+                probe.navigation = Some(name);
+                probe.ticks = 0;
+                return;
+            }
+        }
+        menu_click(&mut probe, &mut inputs, &frontend, &name);
+        probe.ticks = 0;
+        return;
+    }
     probe.ticks += 1;
     match probe.stage {
         0 if session.ready && probe.ticks > 30 => {
@@ -683,11 +729,11 @@ fn menu_probe(
             probe.ticks = 0;
         }
         17 if probe.ticks > 12 => {
-            if frontend.tab != menu::Tab::Track {
-                menu_click(&mut probe, &mut inputs, &frontend, "Track");
-                probe.ticks = 0;
-                return;
-            }
+            assert_eq!(
+                frontend.tab,
+                menu::Tab::Track,
+                "first Track click was ignored"
+            );
             probe.stage = 4;
             probe.ticks = 0;
         }

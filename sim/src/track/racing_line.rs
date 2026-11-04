@@ -64,7 +64,16 @@ impl RacingLine {
     /// The path a fixed lateral offset from the centerline traces, with its
     /// own curvature, so a car holding a lane plans speeds for that lane.
     pub fn constant_offset(stations: &[Station], lateral: f64) -> Self {
-        Self::from_offsets(stations, vec![lateral; stations.len()])
+        Self::from_offsets(
+            stations,
+            stations
+                .iter()
+                .map(|station| {
+                    let limit = (station.half_width - 1.4).max(0.);
+                    lateral.clamp(-limit, limit)
+                })
+                .collect(),
+        )
     }
 
     fn from_offsets(stations: &[Station], offsets: Vec<f64>) -> Self {
@@ -120,9 +129,11 @@ impl RacingLine {
     ) -> Vec<f64> {
         let capable_limits = self.lateral_limits(capable);
         let capable_speed = self.passes(capable_limits.clone(), capable);
+        let top_speed = (capable.power / (0.5 * AIR_DENSITY * capable.drag_area)).cbrt();
         let mut limits = self.lateral_limits(car);
         for (index, limit) in limits.iter_mut().enumerate() {
-            if capable_limits[index] > capable_speed[index] * 1.001 {
+            // A flat bend is power-limited, rather than cornering-limited.
+            if capable_limits[index] >= top_speed * 0.999 {
                 *limit = limit.max(capable_speed[index]);
             }
         }
@@ -311,6 +322,39 @@ mod tests {
         assert!(max_offset > 3.0, "line should swing wide: {max_offset}");
         for (offset, station) in line.offsets.iter().zip(&track.stations) {
             assert!(offset.abs() <= station.half_width - EDGE_MARGIN + 1e-9);
+        }
+    }
+
+    #[test]
+    fn flat_bends_keep_full_speed_while_tight_corners_keep_the_pace_margin() {
+        let capable = PerformanceEnvelope {
+            mass: 800.,
+            grip: 2.,
+            lift_area: 0.,
+            drag_area: 1.3,
+            power: 500_000.,
+            brake_fraction: 0.9,
+            load_sensitivity: 0.,
+        };
+        let cautious = PerformanceEnvelope {
+            grip: 0.8,
+            ..capable
+        };
+        for (curvature, flat) in [(0.002, true), (0.02, false)] {
+            let line = RacingLine {
+                offsets: vec![0.; 100],
+                curvature: vec![curvature; 100],
+                vertical_curvature: vec![0.; 100],
+            };
+            let original = line.speed_profile(&cautious);
+            let promoted = line.speed_profile_keeping_flat(&cautious, &capable);
+            let full = line.speed_profile(&capable);
+            if flat {
+                assert!(promoted[0] > original[0] + 5.);
+                assert!((promoted[0] - full[0]).abs() < 1e-6);
+            } else {
+                assert!((promoted[0] - original[0]).abs() < 1e-6);
+            }
         }
     }
 

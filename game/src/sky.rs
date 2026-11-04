@@ -272,17 +272,17 @@ mod tests {
     use super::*;
     #[test]
     fn embedded_skies_have_six_square_faces_at_each_quality() {
-        for bytes in [
-            include_bytes!("../sky/clear-128.png").as_slice(),
-            include_bytes!("../sky/storm-128.png").as_slice(),
-            include_bytes!("../sky/clear-256.png").as_slice(),
-            include_bytes!("../sky/storm-256.png").as_slice(),
-            include_bytes!("../sky/clear-512.png").as_slice(),
-            include_bytes!("../sky/storm-512.png").as_slice(),
+        for (bytes, width) in [
+            (include_bytes!("../sky/clear-128.png").as_slice(), 128),
+            (include_bytes!("../sky/storm-128.png").as_slice(), 128),
+            (include_bytes!("../sky/clear-256.png").as_slice(), 256),
+            (include_bytes!("../sky/storm-256.png").as_slice(), 256),
+            (include_bytes!("../sky/clear-512.png").as_slice(), 512),
+            (include_bytes!("../sky/storm-512.png").as_slice(), 512),
         ] {
             let image = cubemap(bytes);
             let size = image.texture_descriptor.size;
-            assert!(matches!(size.width, 128 | 256 | 512));
+            assert_eq!(size.width, width);
             assert_eq!(size.width, size.height);
             assert_eq!(size.depth_or_array_layers, 6);
             assert_eq!(

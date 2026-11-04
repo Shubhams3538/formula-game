@@ -280,7 +280,7 @@ impl Options {
             stability: self.assist_level,
             automatic_gears: self.automatic_gears,
             drs_anywhere: false,
-            auto_drs: true,
+            auto_drs: self.assist_level > 0.,
         });
         aids.drs_anywhere |= self.drs_anywhere;
         aids

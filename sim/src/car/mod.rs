@@ -490,6 +490,38 @@ impl Car {
         let traction_cap = rear_room * (1.0 + 0.4 * (1.0 - self.assists.traction)) + 1.0;
         let drive = drive.clamp(-traction_cap, traction_cap);
 
+        let mut wheel_brakes: [f64; 4] = std::array::from_fn(|index| {
+            brake_force_total
+                * if index < 2 {
+                    spec.brake_bias
+                } else {
+                    1. - spec.brake_bias
+                }
+                * 0.5
+        });
+        if self.assists.braking >= 0.999 {
+            let mut released = 0.;
+            for index in 2..4 {
+                let room = contacts[index].longitudinal_room;
+                if wheel_brakes[index] > room {
+                    let trimmed = room * (1. - REAR_ABS_HEADROOM);
+                    released += wheel_brakes[index] - trimmed;
+                    wheel_brakes[index] = trimmed;
+                }
+            }
+            // Recover braking at the front while retaining its lateral reserve.
+            let spare: [f64; 2] = std::array::from_fn(|index| {
+                (contacts[index].longitudinal_room * 0.94 - wheel_brakes[index]).max(0.)
+            });
+            let extra = released.min(spare.iter().sum());
+            let total: f64 = spare.iter().sum();
+            if total > 0. {
+                for index in 0..2 {
+                    wheel_brakes[index] += extra * spare[index] / total;
+                }
+            }
+        }
+
         for (index, wheel_spec) in spec.wheels.iter().enumerate() {
             let front = index < 2;
             let axle = if front { 0 } else { 1 };
@@ -500,12 +532,7 @@ impl Car {
             let wheel_long = contact.wheel_long;
 
             // Longitudinal demand: drive on the rear, brakes everywhere.
-            let brake_share = if front {
-                spec.brake_bias
-            } else {
-                1.0 - spec.brake_bias
-            } * 0.5;
-            let mut brake_force = brake_force_total * brake_share;
+            let mut brake_force = wheel_brakes[index];
             let mut drive_force = if front { 0.0 } else { drive * 0.5 };
 
             // Partial ABS trims a locking demand to slightly under the limit, so
@@ -1158,7 +1185,7 @@ mod abs_stability {
     use spec::test_wheels;
 
     /// Heading change over 1.2 s with a touch of lock, braking or coasting.
-    fn heading_change(kmh: f64, brake: f64) -> f64 {
+    fn heading_change(kmh: f64, brake: f64) -> (f64, f64) {
         let track = oval_track();
         let (position, yaw) = track.grid_slot(0);
         let mut car = Car::new(
@@ -1188,14 +1215,18 @@ mod abs_stability {
                 dt,
             );
         }
-        (car.yaw - start).to_degrees().abs()
+        ((car.yaw - start).to_degrees().abs(), car.speed())
     }
 
     #[test]
     fn abs_braking_with_a_little_lock_does_not_spin_the_car() {
         for kmh in [300.0, 150.0, 90.0] {
-            let coasting = heading_change(kmh, 0.0);
-            let braking = heading_change(kmh, 1.0);
+            let (coasting, coast_speed) = heading_change(kmh, 0.0);
+            let (braking, brake_speed) = heading_change(kmh, 1.0);
+            assert!(
+                brake_speed < coast_speed - 5.,
+                "ABS must decelerate at {kmh} km/h"
+            );
             assert!(
                 braking < coasting * 2.0 + 3.0,
                 "{kmh} km/h: braking turned {braking:.1} deg, coasting {coasting:.1} deg"

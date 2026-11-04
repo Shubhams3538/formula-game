@@ -15,7 +15,9 @@ Both keep the existing dry surface and tyre physics.
 - Rendering: only the primary race camera gets the skybox, matching generated
   environment maps and weather ambient light. The car preview retains its
   studio lighting. Sun direction follows the active track.
-- Graphics presets: Low/Off use 128-pixel cube faces, Medium 256, High/Ultra 512.
+- Detailed sky levels: Off/Low use 128-pixel cube faces, Medium 256, High 512.
+  Low, Medium and High graphics presets select Medium sky at 256; Ultra selects
+  High sky at 512.
   A source change resets environment-map settling before filtering is frozen.
 - Audio: delayed thunder is synthesized in the existing effects/master bus,
   follows mute and session pause; changing back to Clear stops its envelope.

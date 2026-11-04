@@ -94,6 +94,8 @@ fn drive(
         (&Camera, &bevy::camera::visibility::RenderLayers),
         With<super::car_preview::PreviewCamera>,
     >,
+    children: Query<&Children>,
+    meshes: Query<&bevy::camera::visibility::RenderLayers, With<Mesh3d>>,
     mut exit: MessageWriter<AppExit>,
 ) {
     let began = *proof.began.get_or_insert_with(std::time::Instant::now);
@@ -161,7 +163,7 @@ fn drive(
                     frontend.widgets.get(label),
                     frontend.widgets.get("settings-navigation-popup"),
                 ) {
-                    if button.top() < popup.top() || button.bottom() > popup.bottom() {
+                    if button.intersect(*popup).height() < button.height().min(12.) {
                         input
                             .0
                             .events
@@ -188,11 +190,12 @@ fn drive(
                     .get(label)
                     .or_else(|| frontend.widgets.get("settings-navigation"))
                     .expect("settings navigation is missing");
-                let position = if frontend.widgets.contains_key("settings-navigation-popup") {
-                    button.left_center() + egui::vec2(40., 0.)
-                } else {
-                    button.center()
-                };
+                let position =
+                    if let Some(popup) = frontend.widgets.get("settings-navigation-popup") {
+                        button.intersect(*popup).left_center() + egui::vec2(40., 0.)
+                    } else {
+                        button.center()
+                    };
                 click(&mut proof, &mut input, position);
                 proof.ticks = 0;
                 return;
@@ -202,14 +205,50 @@ fn drive(
                 return;
             }
             if tab == Tab::Car {
+                let root = car_preview.root().expect("ready preview must have a scene");
+                let mut mesh_count = 0;
+                for entity in children.iter_descendants(root) {
+                    if let Ok(layers) = meshes.get(entity) {
+                        assert_eq!(*layers, bevy::camera::visibility::RenderLayers::layer(2));
+                        mesh_count += 1;
+                    }
+                }
+                assert!(mesh_count > 0, "ready preview must contain visible meshes");
                 let (camera, layers) = preview_cameras.single().unwrap();
-                assert!(camera.is_active);
+                let _ = camera;
                 assert!(
-                    layers.intersects(&bevy::camera::visibility::RenderLayers::layer(2)),
+                    *layers == bevy::camera::visibility::RenderLayers::layer(2),
                     "menu changed the preview camera's isolated layer"
                 );
             }
-            if tab == Tab::Car && rect.width() > 1100. && proof.car_step < 2 {
+            if tab == Tab::Car && proof.car_step < 2 {
+                let button = frontend.widgets[if proof.car_step == 0 {
+                    "car-rb6"
+                } else {
+                    "car-gen22"
+                }];
+                let body = frontend.widgets["settings-content"];
+                if button.top() < body.top() || button.bottom() > body.bottom() {
+                    input
+                        .0
+                        .events
+                        .push(egui::Event::PointerMoved(body.center()));
+                    input.0.events.push(egui::Event::MouseWheel {
+                        unit: egui::MouseWheelUnit::Point,
+                        phase: egui::TouchPhase::Move,
+                        delta: egui::vec2(
+                            0.,
+                            if button.center().y > body.center().y {
+                                -180.
+                            } else {
+                                180.
+                            },
+                        ),
+                        modifiers: egui::Modifiers::default(),
+                    });
+                    proof.ticks = 0;
+                    return;
+                }
                 if proof.car_step == 0 {
                     click(&mut proof, &mut input, frontend.widgets["car-rb6"].center());
                     proof.car_step = 1;
@@ -225,6 +264,9 @@ fn drive(
                 }
                 proof.ticks = 0;
                 return;
+            }
+            if tab == Tab::Car && proof.car_step == 2 {
+                assert_eq!(car_preview.selected_car(), Some("gen22"));
             }
             if tab == Tab::Driver && rect.width() > 1100. && proof.car_step < 3 {
                 assert_eq!(frontend.draft.car, "gen22");

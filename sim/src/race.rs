@@ -983,6 +983,7 @@ mod spa_overtaking {
                 race.events.clear();
                 ticks += 1;
             }
+            assert_eq!(race.phase, Phase::Finished, "seed {seed}: race timed out");
             if race.entrants[race.order()[0]].name == "Fast" {
                 wins += 1;
             }
@@ -1167,6 +1168,7 @@ mod human_passing {
                 e.timing.laps_completed = 1;
             }
             let (mut min_sep, mut contacts, mut ai_toward) = (99.0_f64, 0, 0.0_f64);
+            let mut alongside_ticks = 0;
             let ai_start = race.entrants[1].car.track_position.lateral;
             for _ in 0..(7.0 * PHYSICS_RATE) as usize {
                 // Aim a car width beside the AI, kept on the road.
@@ -1190,6 +1192,7 @@ mod human_passing {
                 let gap = track.delta(me.track_position.s, ai.track_position.s);
                 let sep = (me.track_position.lateral - ai.track_position.lateral).abs();
                 if gap.abs() < 6.0 {
+                    alongside_ticks += 1;
                     min_sep = min_sep.min(sep);
                 }
                 ai_toward = ai_toward.max((ai.track_position.lateral - ai_start) * side);
@@ -1199,7 +1202,7 @@ mod human_passing {
             // A car width (1.9 m) plus margin: never squeezed into the
             // wall or chopped as the racing line swings across.
             assert!(
-                min_sep > 2.6,
+                alongside_ticks > 0 && min_sep > 2.6,
                 "side {side}: squeezed to {min_sep:.2} m alongside"
             );
             assert_eq!(contacts, 0, "side {side}: {contacts} contacts");
@@ -1443,9 +1446,10 @@ mod tow_strength {
         };
         let alone = speed_after(None);
         for gap in [15.0, 30.0, 60.0, 90.0] {
-            println!(
-                "tow at {gap:3} m: +{:.1} km/h after 6 s (alone {alone:.0})",
-                speed_after(Some(gap)) - alone
+            let gain = speed_after(Some(gap)) - alone;
+            assert!(
+                gain > 0.,
+                "tow at {gap} m must increase speed, got {gain} km/h"
             );
         }
     }

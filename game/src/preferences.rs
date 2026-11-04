@@ -58,6 +58,11 @@ impl Preferences {
         }
     }
     pub fn sanitize(&mut self) {
+        self.team = match self.team.as_str() {
+            "alfaromeo" => "audi".into(),
+            "alphatauri" => "racingbulls".into(),
+            _ => self.team.clone(),
+        };
         if let Some(old) = self.views.remove("rb22") {
             self.views.entry("gen22".into()).or_insert(old);
         }
@@ -93,6 +98,20 @@ impl Preferences {
     }
 }
 
+fn saved_preferences(bytes: &[u8]) -> Option<Preferences> {
+    let value: serde_json::Value = serde_json::from_slice(bytes).ok()?;
+    let mut prefs: Preferences = serde_json::from_value(value.clone()).ok()?;
+    if value["aids"].get("auto_drs").is_none() {
+        let aids = prefs.aids;
+        prefs.aids.auto_drs = aids.steering > 0.
+            || aids.braking > 0.
+            || aids.traction > 0.
+            || aids.stability > 0.
+            || aids.automatic_gears;
+    }
+    Some(prefs)
+}
+
 pub struct Store {
     path: Option<PathBuf>,
     saved: Preferences,
@@ -116,7 +135,7 @@ impl Store {
         let mut prefs = path
             .as_ref()
             .and_then(|p| std::fs::read(p).ok())
-            .and_then(|bytes| serde_json::from_slice::<Preferences>(&bytes).ok())
+            .and_then(|bytes| saved_preferences(&bytes))
             .unwrap_or_else(|| Preferences::defaults(options));
         prefs.sanitize();
         if options.weather_explicit {
@@ -136,7 +155,9 @@ impl Store {
             prefs.aids.drs_anywhere = true;
         }
         if options.aids_explicit {
+            let automatic_drs = prefs.aids.auto_drs;
             prefs.aids = options.player_assists();
+            prefs.aids.auto_drs = automatic_drs && options.assist_level > 0.;
             prefs.corner_braking = options.corner_braking;
         }
         (
@@ -171,6 +192,33 @@ impl Store {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn legacy_aids_keep_unassisted_saves_manual_and_assisted_saves_automatic() {
+        for assisted in [false, true] {
+            let options = Options::parse(
+                ["--assists", if assisted { "1" } else { "0" }]
+                    .into_iter()
+                    .map(str::to_owned),
+            )
+            .unwrap();
+            let mut value = serde_json::to_value(Preferences::defaults(&options)).unwrap();
+            value["aids"].as_object_mut().unwrap().remove("auto_drs");
+            let restored = saved_preferences(&serde_json::to_vec(&value).unwrap()).unwrap();
+            assert_eq!(restored.aids.auto_drs, assisted);
+        }
+    }
+
+    #[test]
+    fn saved_team_ids_follow_the_renamed_roster() {
+        let options = Options::parse(std::iter::empty()).unwrap();
+        for (old, new) in [("alfaromeo", "audi"), ("alphatauri", "racingbulls")] {
+            let mut prefs = Preferences::defaults(&options);
+            prefs.team = old.into();
+            prefs.sanitize();
+            assert_eq!(prefs.team, new);
+        }
+    }
+
     #[test]
     fn preferences_round_trip_aids_and_per_car_cameras() {
         let options = Options::parse(std::iter::empty()).unwrap();

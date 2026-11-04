@@ -28,9 +28,16 @@ pub(crate) struct CarPreview {
     scene_ready: bool,
     pub(super) ready: bool,
     failed: bool,
+    retry_at: f64,
+    image_visible: std::sync::atomic::AtomicBool,
 }
 
 impl CarPreview {
+    #[cfg(test)]
+    pub(super) fn root(&self) -> Option<Entity> {
+        self.root
+    }
+
     #[cfg(test)]
     pub(super) fn selected_car(&self) -> Option<&str> {
         self.selected.as_ref().map(|(car, _)| car.as_str())
@@ -42,6 +49,10 @@ impl CarPreview {
             ui.available_width() * SIZE.1 as f32 / SIZE.0 as f32,
         );
         let response = ui.add(egui::Image::new((self.texture, size)).corner_radius(6));
+        self.image_visible.store(
+            ui.is_rect_visible(response.rect),
+            std::sync::atomic::Ordering::Relaxed,
+        );
         if !self.ready {
             ui.painter().text(
                 response.rect.center(),
@@ -81,6 +92,8 @@ pub(crate) fn setup(
         scene_ready: false,
         ready: false,
         failed: false,
+        retry_at: 0.,
+        image_visible: std::sync::atomic::AtomicBool::new(true),
     });
     commands.spawn((
         PreviewCamera,
@@ -137,6 +150,7 @@ pub(crate) fn update(
     frontend: Res<Frontend>,
     session: Res<Session>,
     server: Res<AssetServer>,
+    time: Res<Time>,
     mut preview: ResMut<CarPreview>,
     mut cameras: Query<&mut Camera, With<PreviewCamera>>,
 ) {
@@ -144,16 +158,30 @@ pub(crate) fn update(
         && frontend.tab == Tab::Car
         && frontend.benchmark.child.is_none();
     for mut camera in &mut cameras {
-        camera.is_active = visible;
+        camera.is_active = visible
+            && (!preview.ready
+                || preview
+                    .image_visible
+                    .load(std::sync::atomic::Ordering::Relaxed));
     }
     if !visible {
         return;
     }
     let selected = (&frontend.draft.car, frontend.draft.setup.compound);
-    if preview
-        .selected
-        .as_ref()
-        .is_none_or(|(car, compound)| (car, *compound) != selected)
+    let retry = preview.failed && time.elapsed_secs_f64() >= preview.retry_at;
+    if retry {
+        server.reload(format!("cars/{}/car.glb", frontend.draft.car));
+        if let Some(texture) = &preview.tyre_texture {
+            if let Some(path) = server.get_path(texture.id()) {
+                server.reload(path);
+            }
+        }
+    }
+    if retry
+        || preview
+            .selected
+            .as_ref()
+            .is_none_or(|(car, compound)| (car, *compound) != selected)
     {
         if let Some(root) = preview.root.take() {
             commands.entity(root).despawn();
@@ -173,6 +201,7 @@ pub(crate) fn update(
         preview.scene_ready = false;
         preview.tyre_texture = None;
         preview.failed = false;
+        preview.retry_at = time.elapsed_secs_f64() + 5.;
     }
     preview.failed = preview.asset.as_ref().is_some_and(|asset| {
         matches!(

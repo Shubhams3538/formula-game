@@ -49,9 +49,14 @@ def main():
     for name, (asset, digest) in SOURCES.items():
         source = args.cache / f'{name}.hdr'
         if not source.exists():
+            partial = source.with_suffix(".hdr.part")
             subprocess.run(['curl', '-fL', '--retry', '2', '--max-time', '120',
                             f'https://dl.polyhaven.org/file/ph-assets/HDRIs/hdr/2k/{asset}_2k.hdr',
-                            '-o', str(source)], check=True)
+                            '-o', str(partial)], check=True)
+            if digest and hashlib.sha256(partial.read_bytes()).hexdigest() != digest:
+                partial.unlink()
+                raise RuntimeError(f'Source checksum mismatch: {partial}')
+            partial.replace(source)
         if digest and hashlib.sha256(source.read_bytes()).hexdigest() != digest:
             raise RuntimeError(f'Source checksum mismatch: {source}')
         build(source, output / name)

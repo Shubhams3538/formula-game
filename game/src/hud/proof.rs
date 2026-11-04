@@ -48,7 +48,7 @@ fn rendered_timing_and_pass_states() {
     app.insert_resource(proof)
         .add_systems(Update, fixture.after(crate::camera::update));
     assert!(app.run().is_success());
-    assert_eq!(completed.load(Ordering::SeqCst), 4);
+    assert_eq!(completed.load(Ordering::SeqCst), 5);
 }
 
 fn fixture(
@@ -152,15 +152,41 @@ fn fixture(
             hold: 1.,
         };
     }
+    if proof.frame == 30 {
+        assert_eq!(
+            instruments::DrsLamp::of(&session),
+            Some(instruments::DrsLamp::Ready)
+        );
+    }
+    if proof.frame == 75 {
+        assert_eq!(
+            instruments::DrsLamp::of(&session),
+            Some(instruments::DrsLamp::Open)
+        );
+    }
+    if proof.frame == 110 {
+        session.race.phase = Phase::Finished;
+        let time = session.race.time;
+        let distance = session.race.track.length * 2.;
+        let timing = &mut session.race.entrants[player].timing;
+        timing.laps_completed = 2;
+        timing.distance = distance;
+        timing.finish_time = Some(time);
+        session.telemetry.minis = [Some(telemetry::MiniSplit {
+            lap: 1,
+            result: telemetry::MiniResult::Overall,
+        }); telemetry::MINISECTORS];
+    }
     let name = match proof.frame {
         30 => "timing-gained-digital",
         75 => "timing-lost-analog",
         105 => "timing-first-lap",
-        120..=180 if proof.completed.load(Ordering::SeqCst) == 4 => {
+        120 => "timing-finished",
+        135..=210 if proof.completed.load(Ordering::SeqCst) == 5 => {
             exit.write(bevy::app::AppExit::Success);
             return;
         }
-        181 => panic!("timing captures did not complete"),
+        211 => panic!("timing captures did not complete"),
         _ => return,
     };
     capture(

@@ -105,6 +105,7 @@ struct Feed {
 #[derive(Default)]
 struct Shared {
     active: AtomicBool,
+    paused: AtomicBool,
     kind: AtomicU32,
     master: AtomicF32,
     engine: AtomicF32,
@@ -541,7 +542,9 @@ impl Mixer {
         // Low-passed noise gives a distant rolling thunder, routed through the
         // same effects/master/mute bus as the rest of the environment.
         let thunder = a.thunder_body.process(a.noise[0].next()) * a.thunder * 1.2;
-        a.thunder *= 1. - 1. / (2.2 * RATE);
+        if !self.shared.paused.load(Ordering::Relaxed) {
+            a.thunder *= 1. - 1. / (2.2 * RATE);
+        }
         let center = squeal + scrub + drum + rumble + whine + thump + thunder;
         (center + wind[0], center + wind[1])
     }
@@ -652,6 +655,7 @@ pub fn update(
         session.ready && !session.paused && !frontend.muted,
         Ordering::Relaxed,
     );
+    s.paused.store(session.paused, Ordering::Relaxed);
     s.thunders.store(storm.thunder, Ordering::Relaxed);
     s.storm.store(
         frontend.draft.weather == crate::sky::Weather::Storm,
@@ -802,6 +806,23 @@ mod tests {
         shared.player.gain.set(1.);
         shared.player.doppler.set(1.);
         Mixer::new(shared)
+    }
+
+    #[test]
+    fn paused_thunder_keeps_its_envelope_until_resume() {
+        let mut mixer = mixer(Kind::V6Hybrid);
+        mixer.shared.storm.store(true, Ordering::Relaxed);
+        mixer.shared.thunders.store(1, Ordering::Relaxed);
+        mixer.frame();
+        mixer.shared.paused.store(true, Ordering::Relaxed);
+        let before = mixer.ambience.thunder;
+        for _ in 0..1000 {
+            mixer.frame();
+        }
+        assert_eq!(mixer.ambience.thunder, before);
+        mixer.shared.paused.store(false, Ordering::Relaxed);
+        mixer.frame();
+        assert!(mixer.ambience.thunder < before);
     }
 
     #[test]
@@ -1074,6 +1095,7 @@ mod tests {
         .insert_resource(crate::tests::session())
         .insert_resource(Frontend::new(&options))
         .insert_resource(options)
+        .init_resource::<crate::sky::Storm>()
         .init_resource::<ButtonInput<KeyCode>>()
         .add_systems(Startup, setup)
         .add_systems(Update, update);

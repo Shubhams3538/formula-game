@@ -43,7 +43,7 @@ pub fn influences(cars: &[&Car], track_length: f64) -> Vec<AeroInfluence> {
 
 /// What `leader`'s wake does to `follower` on a lap of `track_length`.
 pub fn influence(follower: &Car, leader: &Car, track_length: f64) -> AeroInfluence {
-    if leader.speed() < 12.0 {
+    if leader.speed() < 12.0 || leader.forward_speed() < 0.0 {
         return AeroInfluence::default();
     }
     let behind = (leader.track_position.s - follower.track_position.s).rem_euclid(track_length);
@@ -137,6 +137,20 @@ mod tests {
         let clear = influence(&follower, &leader, track_length());
         assert!(offset.dirty_air() < aligned.dirty_air());
         assert_eq!(clear, AeroInfluence::default());
+    }
+
+    #[test]
+    fn wake_wraps_the_lap_seam_and_reversing_leaders_leave_no_wake() {
+        let (mut follower, mut leader) = pair(10., 0.);
+        let expected = influence(&follower, &leader, track_length());
+        follower.track_position.s = track_length() - 5.;
+        leader.track_position.s = 5.;
+        assert_eq!(influence(&follower, &leader, track_length()), expected);
+        leader.velocity = -leader.forward() * 30.;
+        assert_eq!(
+            influence(&follower, &leader, track_length()),
+            AeroInfluence::default()
+        );
     }
 
     #[test]

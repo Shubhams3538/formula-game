@@ -120,11 +120,11 @@ pub fn racing_line(session: bevy::prelude::Res<crate::Session>, mut gizmos: bevy
     let track = &session.race.track;
     // Samples sit at fixed lap distances, not relative to the car, so the
     // ribbon stays put on the asphalt instead of re-sampling every frame.
-    const SPACING: f64 = 6.;
-    let start = car.track_position.s + SPACING;
-    let first = (start / SPACING).ceil() * SPACING;
+    let spacing = track.length / (track.length / 6.).round().max(1.);
+    let start = car.track_position.s + spacing;
+    let first = (start / spacing).ceil() * spacing;
     let mut previous = None;
-    for distance in std::iter::once(start).chain((0..24).map(|step| first + step as f64 * SPACING))
+    for distance in std::iter::once(start).chain((0..24).map(|step| first + step as f64 * spacing))
     {
         let frame = track.frame_at(distance);
         let mut point = frame.point_at(line_offset(track, distance));

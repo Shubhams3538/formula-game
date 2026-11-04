@@ -485,10 +485,15 @@ fn setting_row(ui: &mut egui::Ui, label: &str, add_control: impl FnOnce(&mut egu
     let width = ui.available_width();
     let label_width = (width * 0.38).clamp(96., 190.);
     let row_height = if width < 440. { 40. } else { 32. };
-    let response = ui.horizontal(|row| {
+    let layout = if width < 300. {
+        egui::Layout::top_down(egui::Align::Min)
+    } else {
+        egui::Layout::left_to_right(egui::Align::Center)
+    };
+    let response = ui.with_layout(layout, |row| {
         row.spacing_mut().item_spacing.x = 8.;
         row.add_sized(
-            egui::vec2(label_width, row_height),
+            egui::vec2(if width < 300. { width } else { label_width }, row_height),
             egui::Label::new(RichText::new(label).color(DIM)).wrap(),
         );
         // egui's slider_width sizes only the rail, excluding the editable value.
@@ -656,52 +661,58 @@ pub fn ui(
                     egui::vec2(width, ui.available_height()),
                     egui::Layout::top_down(egui::Align::Min),
                     |ui| {
-                        ui.horizontal_wrapped(|ui| {
-                            ui.spacing_mut().item_spacing.x = 12.;
-                            if frontend.race_started && session.ready {
-                                let resume_button = ui.add_enabled(
-                                    frontend.benchmark.child.is_none(),
-                                    egui::Button::new(RichText::new("Resume race").strong())
-                                        .fill(RED)
+                        egui::ScrollArea::vertical()
+                            .id_salt("footer-scroll")
+                            .show(ui, |ui| {
+                                ui.horizontal_wrapped(|ui| {
+                                    ui.spacing_mut().item_spacing.x = 12.;
+                                    if frontend.race_started && session.ready {
+                                        let resume_button = ui.add_enabled(
+                                            frontend.benchmark.child.is_none(),
+                                            egui::Button::new(
+                                                RichText::new("Resume race").strong(),
+                                            )
+                                            .fill(RED)
+                                            .min_size(action),
+                                        );
+                                        if resume_button.clicked() {
+                                            resume(&mut session);
+                                        }
+                                    }
+                                    let start = ui.add_enabled(
+                                        available
+                                            && !frontend.pending
+                                            && frontend.benchmark.child.is_none(),
+                                        egui::Button::new(
+                                            RichText::new(if frontend.race_started {
+                                                "Start new race"
+                                            } else {
+                                                "Start race"
+                                            })
+                                            .strong(),
+                                        )
+                                        .fill(if frontend.race_started { HOUSING } else { RED })
                                         .min_size(action),
-                                );
-                                if resume_button.clicked() {
-                                    resume(&mut session);
-                                }
-                            }
-                            let start = ui.add_enabled(
-                                available
-                                    && !frontend.pending
-                                    && frontend.benchmark.child.is_none(),
-                                egui::Button::new(
-                                    RichText::new(if frontend.race_started {
-                                        "Start new race"
-                                    } else {
-                                        "Start race"
-                                    })
-                                    .strong(),
-                                )
-                                .fill(if frontend.race_started { HOUSING } else { RED })
-                                .min_size(action),
-                            );
-                            #[cfg(test)]
-                            frontend.widgets.insert("start", start.rect);
-                            if start.clicked() {
-                                frontend.pending = true;
-                            }
-                            let quit = ui.add(
-                                egui::Button::new(RichText::new("Quit game").strong())
-                                    .fill(HOUSING)
-                                    .min_size(action),
-                            );
-                            if quit.clicked() {
-                                if let Some(child) = frontend.benchmark.child.as_mut() {
-                                    let _ = child.kill();
-                                    let _ = child.wait();
-                                }
-                                exit.write(AppExit::Success);
-                            }
-                        });
+                                    );
+                                    #[cfg(test)]
+                                    frontend.widgets.insert("start", start.rect);
+                                    if start.clicked() {
+                                        frontend.pending = true;
+                                    }
+                                    let quit = ui.add(
+                                        egui::Button::new(RichText::new("Quit game").strong())
+                                            .fill(HOUSING)
+                                            .min_size(action),
+                                    );
+                                    if quit.clicked() {
+                                        if let Some(child) = frontend.benchmark.child.as_mut() {
+                                            let _ = child.kill();
+                                            let _ = child.wait();
+                                        }
+                                        exit.write(AppExit::Success);
+                                    }
+                                });
+                            });
                     },
                 );
             });
@@ -1458,7 +1469,8 @@ fn camera_editor(viewport: &egui::Ui, session: &mut Session, car: &str) {
     egui::Area::new("camera-editor".into())
         .anchor(egui::Align2::RIGHT_CENTER, egui::vec2(-18., 0.))
         .show(viewport, |ui| {
-            egui::ScrollArea::vertical()
+            egui::ScrollArea::both()
+                .max_width((viewport.max_rect().width() - 18.).max(80.))
                 .id_salt("camera-editor-scroll")
                 .max_height((viewport.max_rect().height() - 48.).max(80.))
                 .show(ui, |ui| {
@@ -1971,8 +1983,15 @@ fn option_card(
     description: &str,
 ) -> egui::Response {
     let width = ui.available_width();
-    let (rect, response) = ui.allocate_exact_size(egui::vec2(width, 74.), egui::Sense::click());
-    let hovered = response.hovered();
+    let description = ui.painter().layout(
+        description.into(),
+        egui::FontId::proportional(14.),
+        DIM,
+        (width - 68.).max(1.),
+    );
+    let height = (description.size().y + 50.).max(96.);
+    let (rect, response) = ui.allocate_exact_size(egui::vec2(width, height), egui::Sense::click());
+    let hovered = response.hovered() || response.has_focus();
     let painter = ui.painter();
     painter.rect_filled(
         rect,
@@ -1990,7 +2009,11 @@ fn option_card(
         10.,
         egui::Stroke::new(
             if selected { 2. } else { 1. },
-            if selected { RED } else { WELL_RIM },
+            if selected || response.has_focus() {
+                RED
+            } else {
+                WELL_RIM
+            },
         ),
         egui::StrokeKind::Inside,
     );
@@ -2010,13 +2033,7 @@ fn option_card(
         egui::FontId::proportional(18.),
         Color32::WHITE,
     );
-    painter.text(
-        rect.left_top() + egui::vec2(16., 42.),
-        egui::Align2::LEFT_TOP,
-        description,
-        egui::FontId::proportional(14.),
-        DIM,
-    );
+    painter.galley(rect.left_top() + egui::vec2(16., 38.), description, DIM);
     response.on_hover_cursor(egui::CursorIcon::PointingHand)
 }
 
@@ -2165,7 +2182,7 @@ mod tests {
             .text_styles
             .insert(egui::TextStyle::Button, egui::FontId::proportional(17.));
         context.set_style_of(egui::Theme::Dark, style);
-        for width in [260., 320., 440., 657., 900.] {
+        for width in [180., 260., 320., 440., 657., 900.] {
             context.begin_pass(egui::RawInput::default());
             let mut ui = egui::Ui::new(
                 context.clone(),
@@ -2178,6 +2195,10 @@ mod tests {
             let mut value = 300.;
             setting_row(&mut ui, "Shadow distance", |ui| {
                 let bounds = ui.available_rect_before_wrap();
+                assert!(
+                    ui.spacing().slider_width > 0.,
+                    "slider rail collapsed at {width}"
+                );
                 let response = ui.add_sized(
                     egui::vec2(ui.available_width(), 28.),
                     egui::Slider::new(&mut value, 30.0..=300.0).suffix(" m"),

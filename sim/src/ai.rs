@@ -11,7 +11,7 @@ const PLAN_INTERVAL: f64 = 0.25;
 /// Personality of a computer driver.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct DriverProfile {
-    /// Fraction of the car's grip the driver dares to use, ~0.9..1.0.
+    /// Grip used in braking corners, ~0.9..1.0. Power-limited bends stay flat.
     pub pace: f64,
     /// Willingness to attack and to defend, 0..1.
     pub aggression: f64,
@@ -86,6 +86,7 @@ struct Launch {
     /// Speeds for the lane's own path, which is tighter than the racing
     /// line through a corner taken from one side of the road.
     speed: Vec<f64>,
+    line: RacingLine,
 }
 
 /// Metres past the first corner's apex before a car may rejoin the line.
@@ -166,16 +167,13 @@ impl AiDriver {
                 .as_ref()
                 .is_none_or(|launch| (launch.lane - lane).abs() > 0.2);
             if moved {
-                self.launch = corner.map(|corner| Launch {
+                let line = RacingLine::constant_offset(&track.stations, lane);
+                self.launch = Some(Launch {
                     lane,
                     from_s: s,
-                    release_s: corner.apex_s + LAUNCH_RELEASE,
-                    speed: speed_profile(
-                        self.profile,
-                        car,
-                        &RacingLine::constant_offset(&track.stations, lane),
-                        self.planned_grip,
-                    ),
+                    release_s: corner.map_or(s + 200., |corner| corner.apex_s + LAUNCH_RELEASE),
+                    speed: speed_profile(self.profile, car, &line, self.planned_grip),
+                    line,
                 });
             }
         }
@@ -253,18 +251,15 @@ impl AiDriver {
         };
         let mut lane_min = -limit;
         let mut lane_max = limit;
-        let packed = in_pack(car, rivals);
         for rival in rivals {
             // Centres one car length apart is nose to tail, not alongside.
             let overlapping = rival.gap.abs() < car.spec.length + 0.5;
             // A quicker car closing from just behind and off to one side is
             // about to be alongside: leave it room now instead of following
             // the line across into it. This is what lets a human pass.
-            // In a pack there is no room to give; the pack rules apply.
-            let arriving = !packed
-                && rival.gap < 0.0
-                && rival.gap > -car.spec.length * 1.5
-                && rival.speed > speed + 1.0;
+            // Lane bounds from all rivals keep the response within free space.
+            let arriving =
+                rival.gap < 0.0 && rival.gap > -car.spec.length * 1.5 && rival.speed > speed + 1.0;
             let alongside = overlapping || arriving;
             // Only a car we are about to run into needs a lane change, and
             // only when we mean to pass it; otherwise follow it on the line
@@ -363,6 +358,7 @@ impl AiDriver {
             Some(launch) => launch.speed[track.station_at(ahead)],
             None => self.target_speed(track, ahead),
         };
+        let planned = target_speed;
         // Dirty air costs front downforce. The car is front-limited, so plan
         // for the share of front-axle load that is lost: a lot in fast
         // corners, little in slow ones where mechanical grip dominates.
@@ -372,13 +368,14 @@ impl AiDriver {
         // it at what the car can corner with the downforce lost to the car
         // ahead. Ordinary corners already plan for dirty air above.
         if car.aero.dirty_air() > 0.01 {
+            let path = self
+                .launch
+                .as_ref()
+                .map_or(&track.racing_line, |launch| &launch.line);
             let bend = (0..=6)
-                .map(|step| {
-                    track.racing_line.curvature[track.station_at(ahead + step as f64 * 8.0)].abs()
-                })
+                .map(|step| path.curvature[track.station_at(ahead + step as f64 * 8.0)].abs())
                 .fold(0.0, f64::max);
             let clean = self.dirty_air_corner_limit(car, bend, 0.0);
-            let planned = self.target_speed(track, ahead);
             // The plan asks for more than steady clean-air cornering gives:
             // a flat-out bend. Scale it by what the dirty air takes away.
             if planned > FAST_BEND && planned >= clean * 0.98 && clean.is_finite() {
@@ -426,6 +423,21 @@ impl AiDriver {
                 } else {
                     (12.0 + speed * 0.25).min(32.0)
                 };
+                let grip_decel = car
+                    .wheels
+                    .iter()
+                    .enumerate()
+                    .map(|(index, wheel)| {
+                        let load = wheel.load;
+                        car.spec.tyre_friction
+                            * car.tyres[index / 2].grip(car.setup.compound)
+                            * wheel.surface.grip()
+                            * load
+                    })
+                    .sum::<f64>()
+                    / car.spec.mass
+                    * 0.7;
+                let deceleration = deceleration.min(grip_decel);
                 let closing = (speed - rival.speed).max(0.0);
                 let safe_speed =
                     (rival.speed.powi(2) + 2.0 * deceleration * room).sqrt() - closing * 0.7;
@@ -473,6 +485,13 @@ impl AiDriver {
             self.planned_grip = grip;
             self.speed_profile = speed_profile(self.profile, car, &track.racing_line, grip);
             self.corners = find_corners(track, &self.speed_profile);
+            if let Some(launch) = self.launch.as_mut() {
+                launch.speed = speed_profile(self.profile, car, &launch.line, grip);
+            }
+        }
+        if self.launch.is_some() {
+            self.intent = Intent::Line;
+            return;
         }
         let s = car.track_position.s;
         // Forget a plan once its corner is behind us.
@@ -848,7 +867,10 @@ mod eau_rouge {
 
     fn spa() -> Option<Track> {
         let root = std::env::var("F1_ASSETS").ok()?;
-        Track::load(std::path::Path::new(&root).join("tracks/spa")).ok()
+        Some(
+            Track::load(std::path::Path::new(&root).join("tracks/spa"))
+                .expect("F1_ASSETS must contain a valid converted Spa track"),
+        )
     }
 
     fn car(track: &Track) -> Car {
@@ -897,7 +919,7 @@ mod eau_rouge {
 
     #[test]
     #[ignore]
-    fn ai_never_brakes_through_eau_rouge_on_cold_or_warm_tyres() {
+    fn ai_never_brakes_through_eau_rouge_on_two_successive_laps() {
         let Some(track) = spa() else { return };
         for pace in [0.85, 1.0] {
             drive_eau_rouge(&track, DriverProfile { pace, ..PROFILE });
@@ -910,6 +932,7 @@ mod eau_rouge {
         let dt = 1.0 / 360.0;
         let (mut lap, mut last_s) = (0, car.track_position.s);
         let mut worst = [(1.0_f64, 0.0_f64); 2];
+        let mut samples = [0; 2];
         for _ in 0..(240.0 / dt) as usize {
             let input = driver.drive(&car, track, &[], dt);
             car.step(&input, track, dt);
@@ -919,6 +942,7 @@ mod eau_rouge {
             }
             last_s = s;
             if (1..=2).contains(&lap) && SECTION.contains(&s) {
+                samples[lap - 1] += 1;
                 let (throttle, brake) = &mut worst[lap - 1];
                 *throttle = throttle.min(input.throttle);
                 *brake = brake.max(input.brake);
@@ -928,6 +952,7 @@ mod eau_rouge {
             }
         }
         for (lap, (throttle, brake)) in worst.into_iter().enumerate() {
+            assert!(samples[lap] > 0, "lap {} never reached Eau Rouge", lap + 1);
             assert!(
                 brake == 0.0 && throttle > 0.99,
                 "pace {}, lap {}: throttle {throttle:.2}, brake {brake:.2}",

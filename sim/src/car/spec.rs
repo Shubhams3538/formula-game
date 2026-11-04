@@ -268,8 +268,8 @@ impl CarSpec {
         // Seventh must reach its shift lights before high-wing drag balances
         // engine power. Keep eighth's ratio for the low-drag/DRS top speed.
         // Fifth to seventh are spaced evenly from fourth so no upshift comes
-        // early: the auto box shifts at the power crossover, which a short
-        // step pulls down toward the power peak.
+        // early: a short step pulls the power crossover toward the peak.
+        // The automatic box may shift first at its 98.5% rev-limit reserve.
         let seventh: f64 = 6.15;
         let step = (gear_ratios[3] / seventh).powf(1.0 / 3.0);
         for gear in 4..7 {
@@ -442,24 +442,31 @@ mod tests {
 #[cfg(test)]
 mod gear_spacing {
     use super::*;
-    use crate::car::powertrain::power_shape;
-
-    /// Rpm where the next gear starts giving more power: the auto upshift point.
-    fn crossover(step: f64, peak: f64) -> f64 {
-        let mut x = 1.0;
-        while power_shape(x / step) <= power_shape(x) && x < 1.2 {
-            x += 0.0005;
-        }
-        x * peak
-    }
+    use crate::car::powertrain::Powertrain;
 
     #[test]
     fn gen22_upshifts_near_the_limiter_in_every_gear() {
         let spec = CarSpec::gen22(test_wheels(), 5.4, 1.9);
         let ratios = &spec.engine.gear_ratios;
         for gear in 1..ratios.len() {
-            let rpm = crossover(ratios[gear - 1] / ratios[gear], spec.engine.peak_power_rpm);
-            assert!(rpm > 12_950.0, "gear {gear} upshifts at {rpm:.0} rpm");
+            let mut shifted = None;
+            for rpm in (10_000..13_501).step_by(5) {
+                let mut box_state = Powertrain::new(&spec.engine);
+                box_state.gear = gear as i32;
+                box_state.rpm = rpm as f64;
+                let radius = spec.wheels[2].radius;
+                let speed = rpm as f64 * std::f64::consts::TAU * radius / (60. * ratios[gear - 1]);
+                box_state.auto_shift(&spec.engine, speed, radius, 1., 0.);
+                if box_state.gear > gear as i32 {
+                    shifted = Some(rpm);
+                    break;
+                }
+            }
+            let rpm = shifted.expect("automatic gearbox must shift before the limiter");
+            assert!(
+                (12_950..=13_305).contains(&rpm),
+                "gear {gear} upshifts at {rpm} rpm"
+            );
         }
     }
 }

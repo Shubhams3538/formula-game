@@ -32,7 +32,7 @@ jobs:
           This preview contains only the game executable.
           Use an existing converted asset tree with:
             f1-the-game.exe --assets C:\path\to\assets
-          See README.md for asset setup. The executable needs car and track assets before the settings menu can open.
+          Download the assets ZIP from https://github.com/jR4dh3y/formula-game/releases/download/assets-68ae3a48b726ffa5/f1-racecraft-assets.zip and extract it to create assets. The executable needs car and track assets before the settings menu can open.
           '@ | Set-Content target/release/PREVIEW.txt
 
       - uses: actions/upload-artifact@v7

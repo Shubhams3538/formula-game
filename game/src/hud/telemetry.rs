@@ -104,8 +104,8 @@ pub struct Telemetry {
     pub(super) minis: [Option<MiniSplit>; MINISECTORS],
     mini_best: [Option<f64>; MINISECTORS],
     mini_overall: [Option<f64>; MINISECTORS],
-    /// Per entrant: the minisector count it last crossed into, and when.
-    mini_clock: Vec<Option<(i64, f64)>>,
+    /// Per entrant: observed minisector and an optional valid boundary time.
+    mini_clock: Vec<Option<(i64, Option<f64>)>>,
     sector: Option<(u32, usize, f64)>,
     best_sectors: [Option<f64>; 3],
     leader: Option<usize>,
@@ -200,23 +200,39 @@ impl Telemetry {
         let length = race.track.length / MINISECTORS as f64;
         let racing = matches!(
             race.phase,
-            racecraft_sim::Phase::Racing | racecraft_sim::Phase::Finishing
+            racecraft_sim::Phase::Racing
+                | racecraft_sim::Phase::Finishing
+                | racecraft_sim::Phase::Finished
         );
         for (index, entrant) in race.entrants.iter().enumerate() {
             let distance = entrant.timing.distance;
-            if !racing || distance < 0. || entrant.timing.finish_time.is_some() {
+            if !racing {
                 self.mini_clock[index] = None;
                 continue;
             }
             let count = (distance / length).floor() as i64;
+            // Recovery ghosting identifies resets even within the same cell.
+            // An unknown or skipped start must never time a partial cell.
+            if entrant.ghost > 0. {
+                self.mini_clock[index] = Some((count, None));
+                continue;
+            }
             let crossed = match self.mini_clock[index] {
-                Some((previous, started)) if count == previous + 1 => Some((previous, started)),
+                Some((previous, started)) if count == previous + 1 => {
+                    self.mini_clock[index] = Some((count, Some(race.time)));
+                    started.map(|started| (previous, started))
+                }
                 Some((previous, _)) if count == previous => continue,
-                // First sighting, a recovery or a skipped boundary: restart.
-                _ => None,
+                None if race.time == 0. && count == 0 => {
+                    self.mini_clock[index] = Some((count, Some(race.time)));
+                    None
+                }
+                _ => {
+                    self.mini_clock[index] = Some((count, None));
+                    None
+                }
             };
-            self.mini_clock[index] = Some((count, race.time));
-            let Some((previous, started)) = crossed else {
+            let Some((previous, started)) = crossed.filter(|(previous, _)| *previous >= 0) else {
                 continue;
             };
             let mini = previous.rem_euclid(MINISECTORS as i64) as usize;
@@ -366,6 +382,75 @@ mod tests {
         assert_eq!(result(2).result, MiniResult::Slower);
         // The third minisector of lap one is untouched by lap two so far.
         assert_eq!(result(3).lap, 0);
+    }
+
+    #[test]
+    fn recovery_and_skipped_boundaries_never_set_partial_bests_for_any_car() {
+        for player in [0, 1] {
+            for (from, to, ghost) in [(4., 2.5, 0.), (4., 4.5, 1.), (4., 7.5, 0.)] {
+                let mut race = two_cars();
+                race.phase = Phase::Racing;
+                let length = race.track.length / MINISECTORS as f64;
+                let mut display = Telemetry::default();
+                let mut sample = |display: &mut Telemetry, time, cell, ghost| {
+                    race.time = time;
+                    for entrant in &mut race.entrants {
+                        entrant.timing.distance = cell * length + 1.;
+                        entrant.ghost = ghost;
+                    }
+                    display.update_minis(&race, player);
+                };
+                sample(&mut display, 10., from, 0.);
+                sample(&mut display, 20., to, ghost);
+                sample(&mut display, 21., to, 0.);
+                sample(&mut display, 22., to.floor() + 1., 0.);
+                assert!(display.mini_best.iter().all(Option::is_none));
+                assert!(display.mini_overall.iter().all(Option::is_none));
+                sample(&mut display, 32., to.floor() + 2., 0.);
+                let index = (to.floor() as usize + 1) % MINISECTORS;
+                assert_eq!(display.mini_best[index], Some(10.));
+                assert_eq!(display.mini_overall[index], Some(10.));
+            }
+        }
+    }
+
+    #[test]
+    fn final_minisector_is_recorded_when_the_race_finishes() {
+        let mut session = crate::tests::session();
+        session.race.phase = Phase::Racing;
+        let length = session.race.track.length / MINISECTORS as f64;
+        for (time, cell) in [(10., 7.), (20., 8.)] {
+            session.race.time = time;
+            session.race.entrants[0].timing.distance = cell * length + 1.;
+            session.telemetry.update_minis(&session.race, 0);
+        }
+        session.race.phase = Phase::Finished;
+        session.race.time = 30.;
+        session.race.entrants[0].timing.distance = session.race.track.length;
+        session.race.entrants[0].timing.finish_time = Some(30.);
+        session.telemetry.update_minis(&session.race, 0);
+        assert_eq!(session.telemetry.mini_best[8], Some(10.));
+        assert_eq!(session.telemetry.minis[8].unwrap().lap, 0);
+    }
+
+    #[test]
+    fn a_personal_improvement_behind_a_faster_rival_is_green() {
+        let mut race = two_cars();
+        race.phase = Phase::Racing;
+        let length = race.track.length / MINISECTORS as f64;
+        let mut display = Telemetry {
+            mini_clock: vec![Some((0, Some(0.))); 2],
+            ..Telemetry::default()
+        };
+        display.mini_best[0] = Some(10.);
+        race.time = 8.;
+        race.entrants[0].timing.distance = length - 1.;
+        race.entrants[1].timing.distance = length + 1.;
+        display.update_minis(&race, 0);
+        race.time = 9.;
+        race.entrants[0].timing.distance = length + 1.;
+        display.update_minis(&race, 0);
+        assert_eq!(display.minis[0].unwrap().result, MiniResult::Personal);
     }
 
     #[test]

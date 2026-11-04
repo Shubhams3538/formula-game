@@ -176,7 +176,7 @@ def wall_segments(objects) -> np.ndarray:
         family = prefix(obj.name)
         if family not in DRIVABLE_PREFIXES and family not in BARRIER_PREFIXES:
             continue
-        if surface_for_texture(obj.texture) == SURFACE_KERB:
+        if family not in BARRIER_PREFIXES and surface_for_texture(obj.texture) == SURFACE_KERB:
             # Kerbs are driven over. Their side skirts drop below the ground
             # (about 0.5 m at Eau Rouge) and would otherwise become walls.
             continue

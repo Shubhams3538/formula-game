@@ -22,9 +22,6 @@
 
 ## Release assets
 
-- Upload `target/packaging/f1-racecraft-assets.zip` (adds the GEN22 car, 2026
-  roster and the fixed Spa collision) to the asset archive URL before the next
-  release tag; `release.yml` already pins its SHA-256.
 - The archive's experimental tracks (Silverstone, Bahrain, COTA) predate the
   local conversions; refresh them once that track work is reviewed.
 
