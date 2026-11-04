@@ -1,6 +1,6 @@
 //! Small deterministic RNG so simulations replay identically (needed for netcode).
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct Rng(u64);
 
 impl Rng {

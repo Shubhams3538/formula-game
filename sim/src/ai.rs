@@ -9,7 +9,7 @@ use glam::DVec2;
 const PLAN_INTERVAL: f64 = 0.25;
 
 /// Personality of a computer driver.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct DriverProfile {
     /// Grip used in braking corners, ~0.9..1.0. Power-limited bends stay flat.
     pub pace: f64,
@@ -34,7 +34,7 @@ struct CornerPlan {
 /// Approach speed over apex speed that makes a corner a passing place.
 const PASSING_SPEED_DROP: f64 = 1.4;
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum Intent {
     /// Drive the racing line.
     Line,
@@ -74,19 +74,39 @@ pub struct AiDriver {
     on_grid: bool,
     /// The grid lane kept from the start through the first corner.
     launch: Option<Launch>,
+    /// The plan this driver used before the current one. Network rollback can
+    /// move a driver back and forth across a replanning threshold; swapping to
+    /// this copy avoids rebuilding the whole-lap profile each time.
+    previous_plan: Option<Box<Plan>>,
+}
+
+#[derive(Clone, Debug)]
+struct Plan {
+    profile: DriverProfile,
+    grip: f64,
+    speed_profile: Vec<f64>,
+    corners: Vec<CornerPlan>,
 }
 
 /// A standing start keeps each car in its grid lane, so the field runs two
 /// wide into the first corner instead of collapsing onto one racing line.
 #[derive(Clone, Debug)]
 struct Launch {
+    state: LaunchState,
+    /// Speeds for the lane's own path, which is tighter than the racing
+    /// line through a corner taken from one side of the road. Cached and
+    /// rebuilt locally rather than sent over the network.
+    speed: Vec<f64>,
+    line: RacingLine,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+struct LaunchState {
     lane: f64,
     from_s: f64,
     release_s: f64,
-    /// Speeds for the lane's own path, which is tighter than the racing
-    /// line through a corner taken from one side of the road.
-    speed: Vec<f64>,
-    line: RacingLine,
+    profile: DriverProfile,
+    grip: f64,
 }
 
 /// Metres past the first corner's apex before a car may rejoin the line.
@@ -116,7 +136,39 @@ impl AiDriver {
             planned_grip,
             on_grid: false,
             launch: None,
+            previous_plan: None,
         }
+    }
+
+    /// Switch to the lap plan for `profile` and `grip`, reusing the previous plan when it matches.
+    fn set_plan(&mut self, profile: DriverProfile, grip: f64, car: &Car, track: &Track) {
+        if self.profile == profile && self.planned_grip == grip {
+            return;
+        }
+        let current = Plan {
+            profile: self.profile,
+            grip: self.planned_grip,
+            speed_profile: std::mem::take(&mut self.speed_profile),
+            corners: std::mem::take(&mut self.corners),
+        };
+        let next = match self.previous_plan.take() {
+            Some(plan) if plan.profile == profile && plan.grip == grip => *plan,
+            _ => {
+                let speed_profile = speed_profile(profile, car, &track.racing_line, grip);
+                let corners = find_corners(track, &speed_profile);
+                Plan {
+                    profile,
+                    grip,
+                    speed_profile,
+                    corners,
+                }
+            }
+        };
+        self.profile = next.profile;
+        self.planned_grip = next.grip;
+        self.speed_profile = next.speed_profile;
+        self.corners = next.corners;
+        self.previous_plan = Some(Box::new(current));
     }
 
     /// Target speed the driver wants at lap distance `s`.
@@ -165,22 +217,26 @@ impl AiDriver {
             let moved = self
                 .launch
                 .as_ref()
-                .is_none_or(|launch| (launch.lane - lane).abs() > 0.2);
+                .is_none_or(|launch| (launch.state.lane - lane).abs() > 0.2);
             if moved {
                 let line = RacingLine::constant_offset(&track.stations, lane);
                 self.launch = Some(Launch {
-                    lane,
-                    from_s: s,
-                    release_s: corner.map_or(s + 200., |corner| corner.apex_s + LAUNCH_RELEASE),
+                    state: LaunchState {
+                        lane,
+                        from_s: s,
+                        release_s: corner.map_or(s + 200., |corner| corner.apex_s + LAUNCH_RELEASE),
+                        profile: self.profile,
+                        grip: self.planned_grip,
+                    },
                     speed: speed_profile(self.profile, car, &line, self.planned_grip),
                     line,
                 });
             }
         }
         if let Some(launch) = &self.launch {
-            let travelled = track.delta(launch.from_s, s).rem_euclid(track.length);
+            let travelled = track.delta(launch.state.from_s, s).rem_euclid(track.length);
             let to_release = track
-                .delta(launch.from_s, launch.release_s)
+                .delta(launch.state.from_s, launch.state.release_s)
                 .rem_euclid(track.length);
             let line = track.racing_line.offsets[track.station_at(s)];
             let toward = line - car.track_position.lateral;
@@ -217,7 +273,7 @@ impl AiDriver {
             Intent::Line => self
                 .launch
                 .as_ref()
-                .map_or(line_lateral, |launch| launch.lane),
+                .map_or(line_lateral, |launch| launch.state.lane),
             Intent::Attack { side, .. } => {
                 // Sit in the tow until close or the braking zone nears, then
                 // pull out and use the extra speed to get alongside.
@@ -482,10 +538,9 @@ impl AiDriver {
         // The whole-lap profile only needs rebuilding once the tyres have changed.
         let grip = tyre_grip(car);
         if (grip - self.planned_grip).abs() > self.planned_grip * 0.004 {
-            self.planned_grip = grip;
-            self.speed_profile = speed_profile(self.profile, car, &track.racing_line, grip);
-            self.corners = find_corners(track, &self.speed_profile);
+            self.set_plan(self.profile, grip, car, track);
             if let Some(launch) = self.launch.as_mut() {
+                launch.state.grip = grip;
                 launch.speed = speed_profile(self.profile, car, &launch.line, grip);
             }
         }
@@ -783,6 +838,20 @@ mod tests {
     }
 
     #[test]
+    fn restoring_a_previous_grip_reuses_its_plan_instead_of_rebuilding() {
+        let track = oval_track();
+        let (mut driver, car) = driver_and_car(&track);
+        let before = driver.snapshot();
+        let original = driver.speed_profile.as_ptr();
+        driver.set_plan(driver.profile, driver.planned_grip * 0.9, &car, &track);
+        assert_ne!(driver.speed_profile.as_ptr(), original);
+        // A rollback to the authoritative state swaps the cached plan back.
+        driver.restore(&before, &car, &track);
+        assert_eq!(driver.speed_profile.as_ptr(), original);
+        assert_eq!(driver.planned_grip, before.planned_grip);
+    }
+
+    #[test]
     fn finds_both_ends_of_the_oval_as_corners() {
         let track = oval_track();
         let (driver, _) = driver_and_car(&track);
@@ -960,5 +1029,61 @@ mod eau_rouge {
                 lap + 1
             );
         }
+    }
+}
+
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+pub struct AiState {
+    on_grid: bool,
+    #[serde(with = "crate::exact")]
+    launch: Option<LaunchState>,
+    #[serde(with = "crate::exact")]
+    profile: DriverProfile,
+    intent: Intent,
+    rng: Rng,
+    mistake: f64,
+    mistake_corner: Option<f64>,
+    plan_timer: f64,
+    stuck_timer: f64,
+    line_offset: f64,
+    #[serde(with = "crate::exact")]
+    planned_grip: f64,
+}
+impl AiDriver {
+    pub fn snapshot(&self) -> AiState {
+        AiState {
+            on_grid: self.on_grid,
+            launch: self.launch.as_ref().map(|launch| launch.state),
+            profile: self.profile,
+            intent: self.intent,
+            rng: self.rng.clone(),
+            mistake: self.mistake,
+            mistake_corner: self.mistake_corner,
+            plan_timer: self.plan_timer,
+            stuck_timer: self.stuck_timer,
+            line_offset: self.line_offset,
+            planned_grip: self.planned_grip,
+        }
+    }
+    pub fn restore(&mut self, state: &AiState, car: &Car, track: &Track) {
+        self.set_plan(state.profile, state.planned_grip, car, track);
+        self.on_grid = state.on_grid;
+        if self.launch.as_ref().map(|launch| launch.state) != state.launch {
+            self.launch = state.launch.map(|state| {
+                let line = RacingLine::constant_offset(&track.stations, state.lane);
+                Launch {
+                    speed: speed_profile(state.profile, car, &line, state.grip),
+                    line,
+                    state,
+                }
+            });
+        }
+        self.intent = state.intent;
+        self.rng = state.rng.clone();
+        self.mistake = state.mistake;
+        self.mistake_corner = state.mistake_corner;
+        self.plan_timer = state.plan_timer;
+        self.stuck_timer = state.stuck_timer;
+        self.line_offset = state.line_offset;
     }
 }

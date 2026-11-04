@@ -1,0 +1,17 @@
+**
+!Cargo.toml
+!Cargo.lock
+!game/
+!game/Cargo.toml
+!sim/
+!sim/**
+!net/
+!net/**
+!deploy/
+!deploy/render/
+!deploy/render/assets/
+!deploy/render/assets/**
+!deploy/render/rules.json
+!tools/
+!tools/package/
+!tools/package/render.Dockerfile

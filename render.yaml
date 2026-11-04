@@ -1,0 +1,13 @@
+services:
+  - type: web
+    name: f1-racecraft
+    runtime: docker
+    plan: starter
+    region: singapore
+    dockerfilePath: ./tools/package/render.Dockerfile
+    dockerContext: .
+    healthCheckPath: /health
+    autoDeployTrigger: 'off'
+    envVars:
+      - key: PORT
+        value: '10000'

@@ -321,6 +321,7 @@ pub fn apply(
         (Entity, Option<&bevy::camera::visibility::RenderLayers>),
         With<bevy_egui::PrimaryEguiContext>,
     >,
+    online: Option<Res<crate::online::Online>>,
 ) {
     // The benchmark window owns the GPU workload; keep the menu available
     // without also rendering a second race behind it.
@@ -358,8 +359,10 @@ pub fn apply(
         display: frontend.display,
         audio: frontend.audio,
     };
-    if let Err(error) = frontend.store.save(prefs) {
-        frontend.error = Some(error);
+    if !online.as_ref().is_some_and(|o| o.client.is_some()) {
+        if let Err(error) = frontend.store.save(prefs) {
+            frontend.error = Some(error);
+        }
     }
     if !frontend.pending {
         return;
@@ -424,7 +427,11 @@ pub fn apply(
             .looking_to(Vec3::new(sun.x as f32, sun.y as f32, sun.z as f32), Vec3::Y);
     }
     for mut window in &mut windows {
-        window.title = format!("F1 Racecraft - {}", race.track.name);
+        window.title = if selected.host.is_some() || selected.join.is_some() {
+            format!("F1 Racecraft - {} - {}", race.track.name, selected.name)
+        } else {
+            format!("F1 Racecraft - {}", race.track.name)
+        };
     }
     *session = Session {
         identities,
@@ -530,6 +537,7 @@ pub fn ui(
     mut warmed: Local<u8>,
     car_preview: Res<car_preview::CarPreview>,
     mut exit: MessageWriter<AppExit>,
+    mut online: Option<ResMut<crate::online::Online>>,
 ) -> Result {
     frontend.benchmark.poll();
     let context = contexts.ctx_mut()?;
@@ -587,6 +595,11 @@ pub fn ui(
     }
     if *warmed < 2 {
         *warmed += 1;
+    }
+    if let Some(online) = online.as_mut() {
+        if online.ui(context, &mut frontend, &mut session, &options) {
+            return Ok(());
+        }
     }
     let mut viewport = egui::Ui::new(
         context.clone(),

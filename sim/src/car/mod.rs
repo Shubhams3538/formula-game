@@ -74,7 +74,7 @@ impl Default for Assists {
 
 /// The rear-wing flap. The race sets `available`; the driver opens it, and
 /// braking or leaving the zone closes it.
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Drs {
     pub available: bool,
     pub open: bool,
@@ -96,7 +96,7 @@ impl Drs {
 }
 
 /// How nearby cars change this car's airflow this tick.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct AeroInfluence {
     /// Multiplier on drag (slipstream lowers it).
     pub drag_scale: f64,
@@ -125,7 +125,7 @@ impl AeroInfluence {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct WheelState {
     pub load: f64,
     pub slip_angle: f64,
@@ -196,7 +196,7 @@ pub struct Car {
 /// Visual suspension: an alpha-beta tracker that follows steady slopes without
 /// lag but filters the facet-to-facet noise of the collision mesh, which would
 /// otherwise rock the body (and the camera with it) at ~15 Hz.
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 struct Suspension {
     value: f64,
     rate: f64,
@@ -1232,5 +1232,87 @@ mod abs_stability {
                 "{kmh} km/h: braking turned {braking:.1} deg, coasting {coasting:.1} deg"
             );
         }
+    }
+}
+
+/// Complete mutable vehicle state; immutable geometry/specification is never sent.
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+pub struct CarState {
+    // Configuration, not dynamics: kept exact so it matches the room rules.
+    #[serde(with = "crate::exact")]
+    setup: Setup,
+    #[serde(with = "crate::exact")]
+    assists: Assists,
+    position: DVec3,
+    yaw: f64,
+    yaw_rate: f64,
+    velocity: DVec2,
+    pitch: f64,
+    roll: f64,
+    body_height: f64,
+    suspension: [Suspension; 3],
+    steer_angle: f64,
+    powertrain: Powertrain,
+    tyres: [AxleTyres; 2],
+    wheels: [WheelState; 4],
+    aero: AeroInfluence,
+    drs: Drs,
+    downforce: f64,
+    track_position: TrackPosition,
+    acceleration: DVec2,
+    vertical_velocity: f64,
+    vertical_acceleration: f64,
+    impact: f64,
+}
+impl Car {
+    pub fn snapshot(&self) -> CarState {
+        CarState {
+            setup: self.setup,
+            assists: self.assists,
+            position: self.position,
+            yaw: self.yaw,
+            yaw_rate: self.yaw_rate,
+            velocity: self.velocity,
+            pitch: self.pitch,
+            roll: self.roll,
+            body_height: self.body_height,
+            suspension: self.suspension,
+            steer_angle: self.steer_angle,
+            powertrain: self.powertrain,
+            tyres: self.tyres,
+            wheels: self.wheels,
+            aero: self.aero,
+            drs: self.drs,
+            downforce: self.downforce,
+            track_position: self.track_position,
+            acceleration: self.acceleration,
+            vertical_velocity: self.vertical_velocity,
+            vertical_acceleration: self.vertical_acceleration,
+            impact: self.impact,
+        }
+    }
+    pub fn restore(&mut self, state: &CarState) {
+        self.setup = state.setup;
+        self.assists = state.assists;
+        self.position = state.position;
+        self.yaw = state.yaw;
+        self.yaw_rate = state.yaw_rate;
+        self.velocity = state.velocity;
+        self.pitch = state.pitch;
+        self.roll = state.roll;
+        self.body_height = state.body_height;
+        self.suspension = state.suspension;
+        self.steer_angle = state.steer_angle;
+        self.powertrain = state.powertrain;
+        self.tyres = state.tyres;
+        self.wheels = state.wheels;
+        self.aero = state.aero;
+        self.drs = state.drs;
+        self.downforce = state.downforce;
+        self.track_position = state.track_position;
+        self.acceleration = state.acceleration;
+        self.vertical_velocity = state.vertical_velocity;
+        self.vertical_acceleration = state.vertical_acceleration;
+        self.impact = state.impact;
     }
 }
