@@ -10,18 +10,21 @@ from pathlib import Path
 
 TEAMS_PATH = Path(__file__).resolve().parent / "teams.json"
 
-# 2022 constructors' order, with each team's race drivers as (name, abbr, number).
+# 2026 grid in 2025 constructors' order, then the new Cadillac entry, with each
+# team's race drivers as (name, abbr, number). The ground-effect cars and rules
+# stay 2022-2025; only the roster moves to 2026.
 EXPECTED_GRID = {
-    "redbull": [("Max Verstappen", "VER", 1), ("Sergio Perez", "PER", 11)],
-    "ferrari": [("Charles Leclerc", "LEC", 16), ("Carlos Sainz", "SAI", 55)],
-    "mercedes": [("Lewis Hamilton", "HAM", 44), ("George Russell", "RUS", 63)],
-    "alpine": [("Esteban Ocon", "OCO", 31), ("Fernando Alonso", "ALO", 14)],
-    "mclaren": [("Lando Norris", "NOR", 4), ("Daniel Ricciardo", "RIC", 3)],
-    "alfaromeo": [("Valtteri Bottas", "BOT", 77), ("Zhou Guanyu", "ZHO", 24)],
-    "astonmartin": [("Sebastian Vettel", "VET", 5), ("Lance Stroll", "STR", 18)],
-    "haas": [("Kevin Magnussen", "MAG", 20), ("Mick Schumacher", "MSC", 47)],
-    "alphatauri": [("Pierre Gasly", "GAS", 10), ("Yuki Tsunoda", "TSU", 22)],
-    "williams": [("Alexander Albon", "ALB", 23), ("Nicholas Latifi", "LAT", 6)],
+    "mclaren": [("Lando Norris", "NOR", 1), ("Oscar Piastri", "PIA", 81)],
+    "mercedes": [("George Russell", "RUS", 63), ("Kimi Antonelli", "ANT", 12)],
+    "redbull": [("Max Verstappen", "VER", 3), ("Isack Hadjar", "HAD", 6)],
+    "ferrari": [("Charles Leclerc", "LEC", 16), ("Lewis Hamilton", "HAM", 44)],
+    "williams": [("Alexander Albon", "ALB", 23), ("Carlos Sainz", "SAI", 55)],
+    "racingbulls": [("Liam Lawson", "LAW", 30), ("Arvid Lindblad", "LIN", 41)],
+    "astonmartin": [("Fernando Alonso", "ALO", 14), ("Lance Stroll", "STR", 18)],
+    "haas": [("Esteban Ocon", "OCO", 31), ("Oliver Bearman", "BEA", 87)],
+    "audi": [("Nico Hulkenberg", "HUL", 27), ("Gabriel Bortoleto", "BOR", 5)],
+    "alpine": [("Pierre Gasly", "GAS", 10), ("Franco Colapinto", "COL", 43)],
+    "cadillac": [("Sergio Perez", "PER", 11), ("Valtteri Bottas", "BOT", 77)],
 }
 
 HEX_RE = re.compile(r"^#[0-9A-Fa-f]{6}$")
@@ -38,8 +41,8 @@ class TeamsContractTest(unittest.TestCase):
         cls.teams = cls.data["teams"]
 
     def test_season_and_grid_order(self):
-        self.assertEqual(self.data["season"], 2022)
-        self.assertEqual(len(self.teams), 10)
+        self.assertEqual(self.data["season"], 2026)
+        self.assertEqual(len(self.teams), 11)
         self.assertEqual([t["id"] for t in self.teams], list(EXPECTED_GRID))
 
     def test_team_names(self):
@@ -51,8 +54,8 @@ class TeamsContractTest(unittest.TestCase):
                 self.assertTrue(team["short"].strip())
                 self.assertLessEqual(len(team["short"]), SHORT_NAME_MAX)
 
-    def test_drivers_match_2022_grid(self):
-        self.assertEqual(sum(len(t["drivers"]) for t in self.teams), 20)
+    def test_drivers_match_2026_grid(self):
+        self.assertEqual(sum(len(t["drivers"]) for t in self.teams), 22)
         for team in self.teams:
             with self.subTest(team=team["id"]):
                 got = [(d["name"], d["abbr"], d["number"]) for d in team["drivers"]]

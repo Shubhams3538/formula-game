@@ -48,7 +48,7 @@ fn rendered_timing_and_pass_states() {
     app.insert_resource(proof)
         .add_systems(Update, fixture.after(crate::camera::update));
     assert!(app.run().is_success());
-    assert_eq!(completed.load(Ordering::SeqCst), 4);
+    assert_eq!(completed.load(Ordering::SeqCst), 5);
 }
 
 fn fixture(
@@ -70,7 +70,8 @@ fn fixture(
         session.race.time = 73.4;
         let entrant = &mut session.race.entrants[player];
         entrant.timing.laps_completed = 1;
-        entrant.timing.distance = 4000.;
+        // Lap two, a little into the final sector.
+        entrant.timing.distance = 12100.;
         entrant.timing.lap_start = 0.;
         entrant.timing.sector = 2;
         entrant.timing.sector_start = 65.1;
@@ -79,23 +80,41 @@ fn fixture(
         entrant.car.velocity = glam::DVec2::Y * 61.1;
         entrant.car.powertrain.rpm = 10820.;
         entrant.car.powertrain.gear = 5;
+        // DRS earned: the digital frame shows the armed lamp.
+        entrant.car.drs.available = true;
         session.telemetry.splits = [
             Some(telemetry::Split {
                 time: 32.123,
                 delta: Some(-0.24),
                 lap: 1,
+                overall: true,
             }),
             Some(telemetry::Split {
                 time: 32.977,
                 delta: Some(0.18),
                 lap: 1,
+                overall: false,
             }),
             Some(telemetry::Split {
                 time: 43.332,
                 delta: None,
                 lap: 0,
+                overall: false,
             }),
         ];
+        // Minisectors completed so far this lap, each with its own result.
+        {
+            use telemetry::MiniResult::{Overall, Personal, Slower};
+            let lap = (12100. / session.race.track.length).floor() as u32;
+            for (index, result) in [
+                Overall, Personal, Slower, Personal, Slower, Overall, Personal, Slower, Overall,
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                session.telemetry.minis[index] = Some(telemetry::MiniSplit { lap, result });
+            }
+        }
         session.delta.current = Some(-0.17);
         session.telemetry.pass = Some(telemetry::PassNotice {
             gained: true,
@@ -111,6 +130,7 @@ fn fixture(
     }
     if proof.frame == 60 {
         frontend.display.layout = Layout::Gauges;
+        session.race.entrants[player].car.drs.flap = 1.0;
         session.telemetry.pass.as_mut().unwrap().gained = false;
         session.telemetry.pass.as_mut().unwrap().position = 6;
     }
@@ -132,15 +152,41 @@ fn fixture(
             hold: 1.,
         };
     }
+    if proof.frame == 30 {
+        assert_eq!(
+            instruments::DrsLamp::of(&session),
+            Some(instruments::DrsLamp::Ready)
+        );
+    }
+    if proof.frame == 75 {
+        assert_eq!(
+            instruments::DrsLamp::of(&session),
+            Some(instruments::DrsLamp::Open)
+        );
+    }
+    if proof.frame == 110 {
+        session.race.phase = Phase::Finished;
+        let time = session.race.time;
+        let distance = session.race.track.length * 2.;
+        let timing = &mut session.race.entrants[player].timing;
+        timing.laps_completed = 2;
+        timing.distance = distance;
+        timing.finish_time = Some(time);
+        session.telemetry.minis = [Some(telemetry::MiniSplit {
+            lap: 1,
+            result: telemetry::MiniResult::Overall,
+        }); telemetry::MINISECTORS];
+    }
     let name = match proof.frame {
         30 => "timing-gained-digital",
         75 => "timing-lost-analog",
         105 => "timing-first-lap",
-        120..=180 if proof.completed.load(Ordering::SeqCst) == 4 => {
+        120 => "timing-finished",
+        135..=210 if proof.completed.load(Ordering::SeqCst) == 5 => {
             exit.write(bevy::app::AppExit::Success);
             return;
         }
-        181 => panic!("timing captures did not complete"),
+        211 => panic!("timing captures did not complete"),
         _ => return,
     };
     capture(

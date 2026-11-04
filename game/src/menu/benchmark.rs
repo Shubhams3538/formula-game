@@ -103,6 +103,8 @@ fn arguments(
     let mut args = vec![
         "--assets".into(),
         draft.assets.as_os_str().to_owned(),
+        "--weather".into(),
+        draft.weather.cli().into(),
         "--track".into(),
         draft.track.clone().into(),
         "--car".into(),
@@ -135,23 +137,36 @@ fn arguments(
 }
 
 pub(super) fn panel(ui: &mut egui::Ui, frontend: &mut Frontend, size: egui::Vec2) {
-    section(ui, "Repeatable performance test");
-    ui.label(format!(
-        "{} computer-controlled cars, already moving. A fixed 20-second drive with no contact.",
-        frontend.draft.opponents + 1
-    ));
-    ui.add_space(12.);
     let available = frontend
         .catalog
         .circuits
         .iter()
         .any(|track| track.id == frontend.draft.track && track.unavailable.is_none());
     let available = available && frontend.catalog.car_available(&frontend.draft);
+    if ui.available_width() >= 720. {
+        ui.columns(2, |columns| {
+            run_panel(&mut columns[0], frontend, size, available);
+            setup_panel(&mut columns[1], frontend, size);
+        });
+    } else {
+        run_panel(ui, frontend, size, available);
+        ui.separator();
+        setup_panel(ui, frontend, size);
+    }
+}
+
+fn run_panel(ui: &mut egui::Ui, frontend: &mut Frontend, size: egui::Vec2, available: bool) {
+    section(ui, "Run benchmark");
+    ui.label(format!(
+        "{} cars · 20 seconds · fixed field, no contact.",
+        frontend.draft.opponents + 1
+    ));
+    ui.add_space(6.);
     let run = ui.add_enabled(
         available && frontend.benchmark.child.is_none(),
-        egui::Button::new(RichText::new("Run 20-second benchmark").strong())
+        egui::Button::new(RichText::new("Run benchmark").strong())
             .fill(RED)
-            .min_size(egui::vec2(ui.available_width().min(320.), 44.)),
+            .min_size(egui::vec2(ui.available_width().min(300.), 44.)),
     );
     #[cfg(test)]
     frontend.widgets.insert("benchmark-run", run.rect);
@@ -164,9 +179,40 @@ pub(super) fn panel(ui: &mut egui::Ui, frontend: &mut Frontend, size: egui::Vec2
             frontend.benchmark.message = Some(format!("Could not start benchmark: {error}"));
         }
     }
-    ui.add_space(12.);
+    if !available {
+        ui.label(RichText::new("Choose an available circuit and car in Game play.").color(DIM));
+    }
+    if let Some(message) = &frontend.benchmark.message {
+        ui.add_space(6.);
+        ui.label(message);
+    }
+    if let Some(output) = &frontend.benchmark.output {
+        ui.add_space(6.);
+        ui.label(RichText::new("Latest results").strong());
+        ui.add(
+            egui::Label::new(output.display().to_string())
+                .wrap()
+                .selectable(true),
+        );
+        if frontend.benchmark.child.is_none() {
+            if let Ok(bytes) = std::fs::read(output.join("benchmark.json")) {
+                if let Ok(report) = serde_json::from_slice::<Report>(&bytes) {
+                    ui.label(format!(
+                        "{:.1} avg FPS · {:.1} FPS 1% low · {:.2} ms p95",
+                        report.metrics.average_fps,
+                        report.metrics.one_percent_low_fps,
+                        report.metrics.p95_ms
+                    ));
+                }
+            }
+        }
+    }
+}
+
+fn setup_panel(ui: &mut egui::Ui, frontend: &Frontend, size: egui::Vec2) {
+    section(ui, "Test setup");
     egui::Grid::new("benchmark-summary")
-        .spacing([28., 8.])
+        .spacing([20., 4.])
         .show(ui, |ui| {
             for (name, value) in [
                 ("Circuit", frontend.draft.track.clone()),
@@ -183,34 +229,11 @@ pub(super) fn panel(ui: &mut egui::Ui, frontend: &mut Frontend, size: egui::Vec2
                 ui.end_row();
             }
         });
-    ui.add_space(12.);
-    ui.label("Choose the circuit and car in Race setup, the view in Cameras & controls, and the preset in Graphics. VSync is disabled for the test.");
-    ui.label("Six seeded screenshot times cover the drive. Images are rendered after timing so capture does not distort the frame times.");
-    ui.add_space(16.);
-    if let Some(message) = &frontend.benchmark.message {
-        ui.add_space(12.);
-        ui.label(message);
-    }
-    if let Some(output) = &frontend.benchmark.output {
-        ui.label(RichText::new("Results folder").strong());
-        ui.add(
-            egui::Label::new(output.display().to_string())
-                .wrap()
-                .selectable(true),
-        );
-        if frontend.benchmark.child.is_none() {
-            if let Ok(bytes) = std::fs::read(output.join("benchmark.json")) {
-                if let Ok(report) = serde_json::from_slice::<Report>(&bytes) {
-                    ui.label(format!(
-                        "{:.1} average FPS · {:.1} FPS 1% low · {:.2} ms p95",
-                        report.metrics.average_fps,
-                        report.metrics.one_percent_low_fps,
-                        report.metrics.p95_ms
-                    ));
-                }
-            }
-        }
-    }
+    ui.add_space(8.);
+    ui.label("VSync is disabled during the run. Six screenshots are captured after timing.");
+    ui.label(
+        "Choose the circuit and car in Game play, the view in Camera, and image quality in Graphics.",
+    );
 }
 
 #[derive(Deserialize)]

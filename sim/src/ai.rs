@@ -2,7 +2,7 @@
 
 use crate::car::{Car, CarInput};
 use crate::rng::Rng;
-use crate::track::racing_line::PerformanceEnvelope;
+use crate::track::racing_line::{PerformanceEnvelope, RacingLine};
 use crate::track::{Track, STATION_SPACING};
 use glam::DVec2;
 
@@ -11,7 +11,7 @@ const PLAN_INTERVAL: f64 = 0.25;
 /// Personality of a computer driver.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct DriverProfile {
-    /// Fraction of the car's grip the driver dares to use, ~0.9..1.0.
+    /// Grip used in braking corners, ~0.9..1.0. Power-limited bends stay flat.
     pub pace: f64,
     /// Willingness to attack and to defend, 0..1.
     pub aggression: f64,
@@ -70,12 +70,34 @@ pub struct AiDriver {
     line_offset: f64,
     /// Tyre grip the current speed profile was planned for.
     planned_grip: f64,
+    /// Set while the race holds the car on the grid.
+    on_grid: bool,
+    /// The grid lane kept from the start through the first corner.
+    launch: Option<Launch>,
 }
+
+/// A standing start keeps each car in its grid lane, so the field runs two
+/// wide into the first corner instead of collapsing onto one racing line.
+#[derive(Clone, Debug)]
+struct Launch {
+    lane: f64,
+    from_s: f64,
+    release_s: f64,
+    /// Speeds for the lane's own path, which is tighter than the racing
+    /// line through a corner taken from one side of the road.
+    speed: Vec<f64>,
+    line: RacingLine,
+}
+
+/// Metres past the first corner's apex before a car may rejoin the line.
+const LAUNCH_RELEASE: f64 = 40.0;
+/// A car still boxed in this far past the release point rejoins anyway.
+const LAUNCH_HOLD_LIMIT: f64 = 500.0;
 
 impl AiDriver {
     pub fn new(profile: DriverProfile, car: &Car, track: &Track, seed: u64) -> Self {
         let planned_grip = tyre_grip(car);
-        let speed_profile = speed_profile(profile, car, track, planned_grip);
+        let speed_profile = speed_profile(profile, car, &track.racing_line, planned_grip);
         let corners = find_corners(track, &speed_profile);
         let mut rng = Rng::new(seed);
         // Stagger replanning so a full field never plans on the same tick.
@@ -92,6 +114,8 @@ impl AiDriver {
             stuck_timer: 0.0,
             line_offset: 0.0,
             planned_grip,
+            on_grid: false,
+            launch: None,
         }
     }
 
@@ -121,17 +145,57 @@ impl AiDriver {
     /// Held on the grid: standing still is not being stuck.
     pub fn hold(&mut self) {
         self.stuck_timer = 0.0;
+        self.on_grid = true;
     }
 
     pub fn reset_after_recovery(&mut self) {
         self.stuck_timer = 0.0;
         self.intent = Intent::Line;
+        self.launch = None;
     }
 
     pub fn drive(&mut self, car: &Car, track: &Track, rivals: &[Rival], dt: f64) -> CarInput {
         let s = car.track_position.s;
         let speed = car.speed();
         let corner = self.next_corner(track, s);
+        if std::mem::take(&mut self.on_grid) {
+            // Still held: remember the grid lane, its speeds, and where the
+            // first corner ends. Replan only if the car has moved lanes.
+            let lane = car.track_position.lateral;
+            let moved = self
+                .launch
+                .as_ref()
+                .is_none_or(|launch| (launch.lane - lane).abs() > 0.2);
+            if moved {
+                let line = RacingLine::constant_offset(&track.stations, lane);
+                self.launch = Some(Launch {
+                    lane,
+                    from_s: s,
+                    release_s: corner.map_or(s + 200., |corner| corner.apex_s + LAUNCH_RELEASE),
+                    speed: speed_profile(self.profile, car, &line, self.planned_grip),
+                    line,
+                });
+            }
+        }
+        if let Some(launch) = &self.launch {
+            let travelled = track.delta(launch.from_s, s).rem_euclid(track.length);
+            let to_release = track
+                .delta(launch.from_s, launch.release_s)
+                .rem_euclid(track.length);
+            let line = track.racing_line.offsets[track.station_at(s)];
+            let toward = line - car.track_position.lateral;
+            // Rejoin only with nobody alongside on the side of the line.
+            let boxed_in = rivals.iter().any(|rival| {
+                let across = rival.lateral - car.track_position.lateral;
+                rival.gap.abs() < car.spec.length * 1.5
+                    && across * toward > 0.0
+                    && across.abs() < toward.abs() + car.spec.width + 1.0
+            });
+            let past = travelled > to_release && travelled < track.length * 0.5;
+            if past && (!boxed_in || travelled > to_release + LAUNCH_HOLD_LIMIT) {
+                self.launch = None;
+            }
+        }
 
         self.plan_timer -= dt;
         if self.plan_timer <= 0.0 {
@@ -150,7 +214,10 @@ impl AiDriver {
         let ahead_frame = track.frame_at(s + lookahead);
         let limit = (ahead_frame.half_width - 1.4).max(0.0);
         let mut lateral = match self.intent {
-            Intent::Line => line_lateral,
+            Intent::Line => self
+                .launch
+                .as_ref()
+                .map_or(line_lateral, |launch| launch.lane),
             Intent::Attack { side, .. } => {
                 // Sit in the tow until close or the braking zone nears, then
                 // pull out and use the extra speed to get alongside.
@@ -164,9 +231,11 @@ impl AiDriver {
                 match target {
                     Some(target) => {
                         let closing = speed - target.speed;
+                        // Pull out once the tow has brought us close and we are
+                        // still gaining, or as the braking zone nears.
                         let pull_out = to_brake < 60.0 + speed * 1.2
-                            || target.gap < car.spec.length * 2.0 && closing > 1.0
-                            || target.gap < car.spec.length * 1.2;
+                            || target.gap < car.spec.length * 3.0 && closing > 0.3
+                            || target.gap < car.spec.length * 1.5;
                         if pull_out {
                             // Alongside, not out on the kerb: one car width
                             // plus margin beside the car being passed.
@@ -185,13 +254,20 @@ impl AiDriver {
         for rival in rivals {
             // Centres one car length apart is nose to tail, not alongside.
             let overlapping = rival.gap.abs() < car.spec.length + 0.5;
+            // A quicker car closing from just behind and off to one side is
+            // about to be alongside: leave it room now instead of following
+            // the line across into it. This is what lets a human pass.
+            // Lane bounds from all rivals keep the response within free space.
+            let arriving =
+                rival.gap < 0.0 && rival.gap > -car.spec.length * 1.5 && rival.speed > speed + 1.0;
+            let alongside = overlapping || arriving;
             // Only a car we are about to run into needs a lane change, and
             // only when we mean to pass it; otherwise follow it on the line
             // and let the traffic speed limit below hold us back.
             let closing = (speed - rival.speed).max(0.0);
             let attacking = matches!(self.intent, Intent::Attack { .. });
             let close_behind_them = attacking && rival.gap > 0.0 && rival.gap < 6.0 + closing * 1.5;
-            if !(overlapping || close_behind_them) {
+            if !(alongside || close_behind_them) {
                 continue;
             }
             let separation = rival.lateral - car.track_position.lateral;
@@ -200,18 +276,20 @@ impl AiDriver {
             if separation.abs() < car.spec.width * 0.5 {
                 continue;
             }
-            let needed = car.spec.width + if overlapping { 1.1 } else { 0.6 };
-            if separation.abs() < needed + 1.5 {
-                // Keep a car's width (plus margin) away on the side we are on.
-                let side = if separation > 0.0 { -1.0 } else { 1.0 };
-                let bound = rival.lateral + side * needed;
-                if overlapping {
-                    if side < 0.0 {
-                        lane_max = lane_max.min(bound);
-                    } else {
-                        lane_min = lane_min.max(bound);
-                    }
+            let needed = car.spec.width + if alongside { 1.1 } else { 0.6 };
+            // Keep a car's width (plus margin) away on the side we are on.
+            let side = if separation > 0.0 { -1.0 } else { 1.0 };
+            let bound = rival.lateral + side * needed;
+            if alongside {
+                // A hard boundary however far apart we are now, so the line
+                // cannot drift into the car beside us.
+                if side < 0.0 {
+                    lane_max = lane_max.min(bound);
+                } else {
+                    lane_min = lane_min.max(bound);
                 }
+            }
+            if separation.abs() < needed + 1.5 {
                 lateral = if side < 0.0 {
                     lateral.min(bound)
                 } else {
@@ -275,12 +353,36 @@ impl AiDriver {
             }
             _ => 0.0,
         };
-        let mut target_speed = self.target_speed(track, s + anticipation - mistake - late_braking);
+        let ahead = s + anticipation - mistake - late_braking;
+        let mut target_speed = match &self.launch {
+            Some(launch) => launch.speed[track.station_at(ahead)],
+            None => self.target_speed(track, ahead),
+        };
+        let planned = target_speed;
         // Dirty air costs front downforce. The car is front-limited, so plan
         // for the share of front-axle load that is lost: a lot in fast
         // corners, little in slow ones where mechanical grip dominates.
         target_speed *=
             (1.0 - car.aero.dirty_air() * front_downforce_share(car, target_speed)).sqrt();
+        // A bend taken flat in clean air has no speed limit to scale, so cap
+        // it at what the car can corner with the downforce lost to the car
+        // ahead. Ordinary corners already plan for dirty air above.
+        if car.aero.dirty_air() > 0.01 {
+            let path = self
+                .launch
+                .as_ref()
+                .map_or(&track.racing_line, |launch| &launch.line);
+            let bend = (0..=6)
+                .map(|step| path.curvature[track.station_at(ahead + step as f64 * 8.0)].abs())
+                .fold(0.0, f64::max);
+            let clean = self.dirty_air_corner_limit(car, bend, 0.0);
+            // The plan asks for more than steady clean-air cornering gives:
+            // a flat-out bend. Scale it by what the dirty air takes away.
+            if planned > FAST_BEND && planned >= clean * 0.98 && clean.is_finite() {
+                let dirty = self.dirty_air_corner_limit(car, bend, car.aero.dirty_air());
+                target_speed = target_speed.min(planned * dirty / clean);
+            }
+        }
         // Running wide with the wheel already wound on: lift until the line comes back.
         let curvature = track.racing_line.curvature[track.station_at(s)];
         let wide = (car.track_position.lateral - lateral_target) * -curvature.signum();
@@ -302,15 +404,40 @@ impl AiDriver {
                 target_speed = target_speed.min(rival.speed - 1.0);
             }
             // Our lane now, or the one we are steering into.
-            let clear = car.spec.width + 0.3;
+            // A much slower car (crashed, spinning or rejoining) takes more
+            // room than its width, so give it a wider berth.
+            let crawling = rival.speed < speed * 0.6;
+            let clear = car.spec.width + if crawling { 1.8 } else { 0.3 };
             let in_line = (rival.lateral - car.track_position.lateral).abs() < clear
                 || (rival.lateral - lateral_target).abs() < clear;
             if in_line && rival.gap > 0.0 {
                 // Reserve the body length and braking distance for our closing
                 // speed. React to closing, not absolute speed: a steady tow
                 // must still let a faster car reach a passing opportunity.
-                let room = (rival.gap - car.spec.length - 1.5).max(0.0);
-                let deceleration = 8.0;
+                let room = (rival.gap - car.spec.length - if crowded { 3.0 } else { 1.5 }).max(0.0);
+                // A fast car can stop hard: aero braking at 300 km/h is well
+                // over 30 m/s². Assuming a slow car's 8 m/s² everywhere held
+                // followers a full tow's length back, too far to pull out.
+                let deceleration = if crowded {
+                    8.0
+                } else {
+                    (12.0 + speed * 0.25).min(32.0)
+                };
+                let grip_decel = car
+                    .wheels
+                    .iter()
+                    .enumerate()
+                    .map(|(index, wheel)| {
+                        let load = wheel.load;
+                        car.spec.tyre_friction
+                            * car.tyres[index / 2].grip(car.setup.compound)
+                            * wheel.surface.grip()
+                            * load
+                    })
+                    .sum::<f64>()
+                    / car.spec.mass
+                    * 0.7;
+                let deceleration = deceleration.min(grip_decel);
                 let closing = (speed - rival.speed).max(0.0);
                 let safe_speed =
                     (rival.speed.powi(2) + 2.0 * deceleration * room).sqrt() - closing * 0.7;
@@ -325,9 +452,13 @@ impl AiDriver {
         } else {
             (0.0, ((-error - 1.5) * 0.22).clamp(0.0, 1.0))
         };
-        // Feed the throttle in as the steering unwinds; back off if the rear slides.
+        // Feed the throttle in as the steering unwinds where traction is the
+        // limit; at high speed the engine cannot overpower the rears, so fast
+        // bends such as Eau Rouge stay flat. Back off if the rear slides.
         let rear_sliding = car.wheels[2].sliding.max(car.wheels[3].sliding);
-        let throttle = throttle * (1.0 - rear_sliding * 0.6) * (1.0 - steer.abs() * 0.35);
+        let traction_limited = ((TRACTION_SPEED - speed) / 20.0).clamp(0.0, 1.0);
+        let throttle =
+            throttle * (1.0 - rear_sliding * 0.6) * (1.0 - steer.abs() * 0.35 * traction_limited);
 
         CarInput {
             steer,
@@ -352,8 +483,15 @@ impl AiDriver {
         let grip = tyre_grip(car);
         if (grip - self.planned_grip).abs() > self.planned_grip * 0.004 {
             self.planned_grip = grip;
-            self.speed_profile = speed_profile(self.profile, car, track, grip);
+            self.speed_profile = speed_profile(self.profile, car, &track.racing_line, grip);
             self.corners = find_corners(track, &self.speed_profile);
+            if let Some(launch) = self.launch.as_mut() {
+                launch.speed = speed_profile(self.profile, car, &launch.line, grip);
+            }
+        }
+        if self.launch.is_some() {
+            self.intent = Intent::Line;
+            return;
         }
         let s = car.track_position.s;
         // Forget a plan once its corner is behind us.
@@ -405,7 +543,13 @@ impl AiDriver {
                     // Committed once the noses overlap; otherwise give up at
                     // the braking point rather than dive into the back.
                     // Decide early enough to tuck back in before braking.
-                    let no_overlap = target.gap > car.spec.length * 1.1;
+                    // Project the gap to the braking point at the current
+                    // closing speed: give up only if the nose will not be
+                    // alongside by then.
+                    let closing = car.speed() - target.speed;
+                    let time_to_brake = to_brake / car.speed().max(1.0);
+                    let projected = target.gap - closing.max(0.0) * time_to_brake;
+                    let no_overlap = projected > car.spec.length * 0.9;
                     let decision = 25.0 + car.speed() * 0.6;
                     if no_overlap && to_brake < decision && to_brake < track.length * 0.5 {
                         self.intent = Intent::Line;
@@ -482,6 +626,14 @@ fn in_pack(car: &Car, rivals: &[Rival]) -> bool {
         >= 2
 }
 
+/// Planned speed (m/s, ~250 km/h) above which a bend counts as flat out
+/// for the dirty-air cap; slower corners plan for dirty air directly.
+const FAST_BEND: f64 = 70.0;
+
+/// Above this speed (m/s) drive torque no longer threatens rear grip, so
+/// steering lock stops trimming the throttle.
+const TRACTION_SPEED: f64 = 60.0;
+
 /// Share of tyre friction the AI plans to use at low load.
 const GRIP_MARGIN: f64 = 0.88;
 /// The plan's grip falls off with aero load like the tyres do, so fast
@@ -490,18 +642,53 @@ const LOAD_SENSITIVITY: f64 = 0.04;
 
 /// Match the braking plan to the tyre compound, temperature and wear used by
 /// the physical car, rather than assuming optimal tyres for the whole race.
-fn speed_profile(profile: DriverProfile, car: &Car, track: &Track, tyre_grip: f64) -> Vec<f64> {
+fn speed_profile(profile: DriverProfile, car: &Car, line: &RacingLine, tyre_grip: f64) -> Vec<f64> {
     let spec = &car.spec;
-    track.racing_line.speed_profile(&PerformanceEnvelope {
+    let envelope = |grip: f64, brake: f64| PerformanceEnvelope {
         mass: spec.mass,
-        grip: spec.tyre_friction * GRIP_MARGIN * profile.pace * tyre_grip,
+        grip,
         lift_area: car.setup.front_lift_area(&spec.aero) + car.setup.rear_lift_area(&spec.aero),
         drag_area: car.setup.drag_area(&spec.aero),
-        power: spec.engine.max_power * 0.92,
-        // Leave headroom for axle brake bias, ABS trimming and turn-in loads.
-        brake_fraction: 0.76 * profile.pace,
+        // Slightly optimistic, so on straights and flat-out bends the car can
+        // never catch the plan and the throttle saturates instead of tracking
+        // the curve. Braking points come from the backward pass and are
+        // unaffected.
+        power: spec.engine.max_power * 1.1,
+        brake_fraction: brake,
         load_sensitivity: LOAD_SENSITIVITY,
-    })
+    };
+    line.speed_profile_keeping_flat(
+        &envelope(
+            spec.tyre_friction * GRIP_MARGIN * profile.pace * tyre_grip,
+            // Leave headroom for axle brake bias, ABS trimming and turn-in loads.
+            0.76 * profile.pace,
+        ),
+        // Every driver keeps flat the bends the car itself holds flat with a
+        // small margin, whatever their pace.
+        &envelope(spec.tyre_friction * FLAT_MARGIN * tyre_grip, 0.76),
+    )
+}
+
+/// Share of the car's real grip a bend must fit within to be taken flat.
+const FLAT_MARGIN: f64 = 0.96;
+
+impl AiDriver {
+    /// Highest steady speed for `curvature` with this car's downforce cut by
+    /// `dirty` (0 = clean air), using the same grip the plan uses. Infinite
+    /// when downforce alone holds the bend at any speed.
+    fn dirty_air_corner_limit(&self, car: &Car, curvature: f64, dirty: f64) -> f64 {
+        let spec = &car.spec;
+        let grip = spec.tyre_friction * GRIP_MARGIN * self.profile.pace * self.planned_grip;
+        let lift = car.setup.front_lift_area(&spec.aero) * (1.0 - dirty)
+            + car.setup.rear_lift_area(&spec.aero) * (1.0 - dirty * 0.5);
+        let downforce = 0.5 * crate::car::AIR_DENSITY * lift / spec.mass;
+        let denominator = curvature - grip * downforce;
+        if denominator <= 1e-9 {
+            f64::INFINITY
+        } else {
+            (grip * crate::car::GRAVITY / denominator).sqrt()
+        }
+    }
 }
 
 /// Fraction of the front axle's load that comes from downforce at `speed`.
@@ -664,5 +851,114 @@ mod tests {
             "only {distance} m in a minute"
         );
         assert!(worst_lateral < 6.5, "left the track: {worst_lateral} m");
+    }
+}
+
+/// Needs converted assets: `F1_ASSETS=assets cargo test -p racecraft-sim -- --ignored eau_rouge`.
+#[cfg(test)]
+mod eau_rouge {
+    use super::*;
+    use crate::car::spec::{test_wheels, CarSpec, Setup};
+    use crate::car::Assists;
+    use std::sync::Arc;
+
+    /// Kemmel run-up from La Source exit to the top of Raidillon.
+    const SECTION: std::ops::Range<f64> = 880.0..1250.0;
+
+    fn spa() -> Option<Track> {
+        let root = std::env::var("F1_ASSETS").ok()?;
+        Some(
+            Track::load(std::path::Path::new(&root).join("tracks/spa"))
+                .expect("F1_ASSETS must contain a valid converted Spa track"),
+        )
+    }
+
+    fn car(track: &Track) -> Car {
+        let (position, yaw) = track.grid_slot(0);
+        Car::new(
+            Arc::new(CarSpec::gen22(test_wheels(), 5.4, 1.9)),
+            Setup::default(),
+            Assists {
+                automatic_gears: true,
+                ..Assists::default()
+            },
+            track,
+            position,
+            yaw,
+        )
+    }
+
+    const PROFILE: DriverProfile = DriverProfile {
+        pace: 1.0,
+        aggression: 0.5,
+        consistency: 1.0,
+    };
+
+    #[test]
+    #[ignore]
+    fn plan_keeps_accelerating_through_eau_rouge() {
+        let Some(track) = spa() else { return };
+        let car = car(&track);
+        // Slowest grid pace, the player's guidance pace, a full-pace driver;
+        // warm race tyres sit around 92-95% of peak grip.
+        for pace in [0.85, 0.9, 1.0] {
+            let profile = DriverProfile { pace, ..PROFILE };
+            let speed = speed_profile(profile, &car, &track.racing_line, 0.92);
+            let stations: Vec<usize> = (300..1400)
+                .map(|s| (s as f64 / STATION_SPACING) as usize)
+                .collect();
+            for pair in stations.windows(2) {
+                assert!(
+                    speed[pair[1]] >= speed[pair[0]] - 1e-6,
+                    "pace {pace}: plan lifts at {:.0} m",
+                    pair[1] as f64 * STATION_SPACING
+                );
+            }
+        }
+    }
+
+    #[test]
+    #[ignore]
+    fn ai_never_brakes_through_eau_rouge_on_two_successive_laps() {
+        let Some(track) = spa() else { return };
+        for pace in [0.85, 1.0] {
+            drive_eau_rouge(&track, DriverProfile { pace, ..PROFILE });
+        }
+    }
+
+    fn drive_eau_rouge(track: &Track, profile: DriverProfile) {
+        let mut car = car(track);
+        let mut driver = AiDriver::new(profile, &car, track, 7);
+        let dt = 1.0 / 360.0;
+        let (mut lap, mut last_s) = (0, car.track_position.s);
+        let mut worst = [(1.0_f64, 0.0_f64); 2];
+        let mut samples = [0; 2];
+        for _ in 0..(240.0 / dt) as usize {
+            let input = driver.drive(&car, track, &[], dt);
+            car.step(&input, track, dt);
+            let s = car.track_position.s;
+            if s + 1000.0 < last_s {
+                lap += 1;
+            }
+            last_s = s;
+            if (1..=2).contains(&lap) && SECTION.contains(&s) {
+                samples[lap - 1] += 1;
+                let (throttle, brake) = &mut worst[lap - 1];
+                *throttle = throttle.min(input.throttle);
+                *brake = brake.max(input.brake);
+            }
+            if lap == 3 {
+                break;
+            }
+        }
+        for (lap, (throttle, brake)) in worst.into_iter().enumerate() {
+            assert!(samples[lap] > 0, "lap {} never reached Eau Rouge", lap + 1);
+            assert!(
+                brake == 0.0 && throttle > 0.99,
+                "pace {}, lap {}: throttle {throttle:.2}, brake {brake:.2}",
+                profile.pace,
+                lap + 1
+            );
+        }
     }
 }

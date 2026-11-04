@@ -267,7 +267,14 @@ impl CarSpec {
         let mut gear_ratios = gear_set(18.0, 5.22, 8);
         // Seventh must reach its shift lights before high-wing drag balances
         // engine power. Keep eighth's ratio for the low-drag/DRS top speed.
-        gear_ratios[6] = 6.0;
+        // Fifth to seventh are spaced evenly from fourth so no upshift comes
+        // early: a short step pulls the power crossover toward the peak.
+        // The automatic box may shift first at its 98.5% rev-limit reserve.
+        let seventh: f64 = 6.15;
+        let step = (gear_ratios[3] / seventh).powf(1.0 / 3.0);
+        for gear in 4..7 {
+            gear_ratios[gear] = gear_ratios[gear - 1] / step;
+        }
         Self {
             name: "GEN22".to_string(),
             // Race trim: the 798 kg minimum with driver plus a race-average fuel load.
@@ -290,16 +297,18 @@ impl CarSpec {
                 downshift_time: 0.06,
             },
             aero: AeroSpec {
-                front_lift_area: 1.86,
-                rear_lift_area: 2.4,
-                front_wing_lift: 0.12,
-                rear_wing_lift: 0.16,
+                // Ground-effect floor: ~4x weight in downforce at 300 km/h,
+                // enough to take Eau Rouge-Raidillon flat on warm tyres and default wings.
+                front_lift_area: 2.75,
+                rear_lift_area: 3.55,
+                front_wing_lift: 0.15,
+                rear_wing_lift: 0.2,
                 drag_area: 0.98,
                 front_wing_drag: 0.022,
                 rear_wing_drag: 0.042,
                 // About 10% of the car's drag: roughly +12 km/h at the end of Kemmel.
                 drs_drag: 0.13,
-                drs_lift: 0.4,
+                drs_lift: 0.57,
             },
             tyre_friction: 1.72,
             peak_slip_angle: 0.095,
@@ -427,5 +436,37 @@ mod tests {
             .iter()
             .fold((f64::MAX, 0.0_f64), |(a, b), &x| (a.min(x), b.max(x)));
         assert!(max < min * 1.5, "{steps:?}");
+    }
+}
+
+#[cfg(test)]
+mod gear_spacing {
+    use super::*;
+    use crate::car::powertrain::Powertrain;
+
+    #[test]
+    fn gen22_upshifts_near_the_limiter_in_every_gear() {
+        let spec = CarSpec::gen22(test_wheels(), 5.4, 1.9);
+        let ratios = &spec.engine.gear_ratios;
+        for gear in 1..ratios.len() {
+            let mut shifted = None;
+            for rpm in (10_000..13_501).step_by(5) {
+                let mut box_state = Powertrain::new(&spec.engine);
+                box_state.gear = gear as i32;
+                box_state.rpm = rpm as f64;
+                let radius = spec.wheels[2].radius;
+                let speed = rpm as f64 * std::f64::consts::TAU * radius / (60. * ratios[gear - 1]);
+                box_state.auto_shift(&spec.engine, speed, radius, 1., 0.);
+                if box_state.gear > gear as i32 {
+                    shifted = Some(rpm);
+                    break;
+                }
+            }
+            let rpm = shifted.expect("automatic gearbox must shift before the limiter");
+            assert!(
+                (12_950..=13_305).contains(&rpm),
+                "gear {gear} upshifts at {rpm} rpm"
+            );
+        }
     }
 }

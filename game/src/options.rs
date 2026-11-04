@@ -4,11 +4,16 @@ use crate::camera::Mode;
 use racecraft_sim::{Assists, Compound, Setup};
 use std::path::PathBuf;
 
+/// A full 2026 grid: 11 teams of two, less the player.
+pub const MAX_OPPONENTS: usize = 21;
+
 #[derive(Clone, bevy::prelude::Resource)]
 pub struct Options {
     pub assets: PathBuf,
     pub track: String,
     pub car: String,
+    pub weather: crate::sky::Weather,
+    pub weather_explicit: bool,
     pub team: String,
     pub driver: String,
     pub laps: u32,
@@ -42,6 +47,7 @@ impl Options {
     pub const USAGE: &'static str = "usage: f1-the-game [options]
   --assets DIR        asset directory (default: ./assets)
   --track NAME        circuit (default: spa; other circuits require an exp build)
+  --weather clear|storm   sky and thunder; track always stays dry
   --car gen22|rb6     car (default: gen22; rb22 is a deprecated alias)
   --team ID           2022 team (default: first team in teams.json)
   --driver ID         driver in that team (default: its first driver)
@@ -72,6 +78,8 @@ impl Options {
             assets: PathBuf::from("assets"),
             track: "spa".to_string(),
             car: "gen22".to_string(),
+            weather: crate::sky::Weather::default(),
+            weather_explicit: false,
             team: String::new(),
             driver: String::new(),
             laps: 3,
@@ -111,6 +119,10 @@ impl Options {
             match flag.as_str() {
                 "--assets" => options.assets = PathBuf::from(value()?),
                 "--track" => options.track = value()?,
+                "--weather" => {
+                    options.weather = value()?.parse()?;
+                    options.weather_explicit = true;
+                }
                 "--car" => {
                     options.car = value()?;
                     if options.car == "rb22" {
@@ -132,7 +144,7 @@ impl Options {
                     options.opponents = value()?
                         .parse::<usize>()
                         .map_err(|_| "opponents must be an integer")?
-                        .min(15)
+                        .min(MAX_OPPONENTS)
                 }
                 "--grid" => {
                     options.grid_slot = value()?
@@ -268,6 +280,7 @@ impl Options {
             stability: self.assist_level,
             automatic_gears: self.automatic_gears,
             drs_anywhere: false,
+            auto_drs: self.assist_level > 0.,
         });
         aids.drs_anywhere |= self.drs_anywhere;
         aids
@@ -400,6 +413,7 @@ mod tests {
             stability: 0.,
             automatic_gears: false,
             drs_anywhere: false,
+            auto_drs: false,
         };
         options.driver_aids = Some(selected);
         assert_eq!(options.player_assists(), selected);

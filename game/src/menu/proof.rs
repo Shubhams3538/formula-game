@@ -40,6 +40,7 @@ fn rendered_responsive_settings() {
 #[derive(Resource, Default)]
 struct Proof {
     step: usize,
+    car_step: usize,
     scrolled: bool,
     frames: usize,
     ticks: usize,
@@ -50,15 +51,6 @@ struct Proof {
     began: Option<std::time::Instant>,
     initial_time: Option<f64>,
 }
-const TABS: [(&str, Tab); 7] = [
-    ("Race setup", Tab::Race),
-    ("Driving aids", Tab::Aids),
-    ("Cameras & controls", Tab::Controls),
-    ("Graphics", Tab::Graphics),
-    ("Audio", Tab::Audio),
-    ("HUD & map", Tab::Hud),
-    ("Benchmark", Tab::Benchmark),
-];
 fn snapshot(commands: &mut Commands, proof: &mut Proof, name: &str) {
     let directory = std::path::PathBuf::from(std::env::var_os("F1_TEST_OUTPUT").unwrap());
     std::fs::create_dir_all(&directory).unwrap();
@@ -89,6 +81,7 @@ fn click(proof: &mut Proof, input: &mut bevy_egui::EguiInput, position: egui::Po
     });
     proof.release = Some(position);
 }
+#[allow(clippy::too_many_arguments)]
 fn drive(
     mut commands: Commands,
     mut proof: ResMut<Proof>,
@@ -96,6 +89,13 @@ fn drive(
     mut session: ResMut<Session>,
     mut inputs: Query<&mut bevy_egui::EguiInput, With<bevy_egui::PrimaryEguiContext>>,
     mut contexts: EguiContexts,
+    car_preview: Res<super::car_preview::CarPreview>,
+    preview_cameras: Query<
+        (&Camera, &bevy::camera::visibility::RenderLayers),
+        With<super::car_preview::PreviewCamera>,
+    >,
+    children: Query<&Children>,
+    meshes: Query<&bevy::camera::visibility::RenderLayers, With<Mesh3d>>,
     mut exit: MessageWriter<AppExit>,
 ) {
     let began = *proof.began.get_or_insert_with(std::time::Instant::now);
@@ -128,12 +128,21 @@ fn drive(
         return;
     }
     let rect = contexts.ctx_mut().unwrap().content_rect();
-    for (name, _) in TABS {
+    for tab in Tab::ALL {
+        let name = tab.label();
         let Some(widget) = frontend.widgets.get(name) else {
-            return;
+            continue;
+        };
+        let widget = if let Some(popup) = frontend.widgets.get("settings-navigation-popup") {
+            if !popup.intersects(*widget) {
+                continue;
+            }
+            widget.intersect(*popup)
+        } else {
+            *widget
         };
         assert!(
-            rect.contains_rect(*widget),
+            rect.contains_rect(widget),
             "tab {name} outside viewport: {widget:?}"
         );
     }
@@ -146,22 +155,80 @@ fn drive(
         "settings body overflows viewport"
     );
     match proof.step {
-        step if step < TABS.len() => {
-            let (label, tab) = TABS[proof.step];
+        step if step < Tab::ALL.len() => {
+            let tab = Tab::ALL[proof.step];
+            let label = tab.label();
             if frontend.tab != tab {
-                click(&mut proof, &mut input, frontend.widgets[label].center());
+                if let (Some(button), Some(popup)) = (
+                    frontend.widgets.get(label),
+                    frontend.widgets.get("settings-navigation-popup"),
+                ) {
+                    if button.intersect(*popup).height() < button.height().min(12.) {
+                        input
+                            .0
+                            .events
+                            .push(egui::Event::PointerMoved(popup.center()));
+                        input.0.events.push(egui::Event::MouseWheel {
+                            unit: egui::MouseWheelUnit::Point,
+                            phase: egui::TouchPhase::Move,
+                            delta: egui::vec2(
+                                0.,
+                                if button.center().y > popup.center().y {
+                                    -180.
+                                } else {
+                                    180.
+                                },
+                            ),
+                            modifiers: egui::Modifiers::default(),
+                        });
+                        proof.ticks = 0;
+                        return;
+                    }
+                }
+                let button = frontend
+                    .widgets
+                    .get(label)
+                    .or_else(|| frontend.widgets.get("settings-navigation"))
+                    .expect("settings navigation is missing");
+                let position =
+                    if let Some(popup) = frontend.widgets.get("settings-navigation-popup") {
+                        button.intersect(*popup).left_center() + egui::vec2(40., 0.)
+                    } else {
+                        button.center()
+                    };
+                click(&mut proof, &mut input, position);
                 proof.ticks = 0;
                 return;
             }
-            if tab == Tab::Audio
-                && !proof.scrolled
-                && frontend.audio.engine != crate::audio::EngineChoice::V12
-            {
-                let button = frontend.widgets["3.0 V12"];
-                // A widget may be inside the window but clipped below the scroll
-                // viewport, especially at 640×600. Scroll it into view before clicking.
-                let body = frontend.widgets["settings-body"].shrink(18.);
-                if !body.contains_rect(button) {
+            if tab == Tab::Car && !car_preview.ready {
+                proof.ticks = 0;
+                return;
+            }
+            if tab == Tab::Car {
+                let root = car_preview.root().expect("ready preview must have a scene");
+                let mut mesh_count = 0;
+                for entity in children.iter_descendants(root) {
+                    if let Ok(layers) = meshes.get(entity) {
+                        assert_eq!(*layers, bevy::camera::visibility::RenderLayers::layer(2));
+                        mesh_count += 1;
+                    }
+                }
+                assert!(mesh_count > 0, "ready preview must contain visible meshes");
+                let (camera, layers) = preview_cameras.single().unwrap();
+                let _ = camera;
+                assert!(
+                    *layers == bevy::camera::visibility::RenderLayers::layer(2),
+                    "menu changed the preview camera's isolated layer"
+                );
+            }
+            if tab == Tab::Car && proof.car_step < 2 {
+                let button = frontend.widgets[if proof.car_step == 0 {
+                    "car-rb6"
+                } else {
+                    "car-gen22"
+                }];
+                let body = frontend.widgets["settings-content"];
+                if button.top() < body.top() || button.bottom() > body.bottom() {
                     input
                         .0
                         .events
@@ -182,7 +249,80 @@ fn drive(
                     proof.ticks = 0;
                     return;
                 }
-                click(&mut proof, &mut input, button.center());
+                if proof.car_step == 0 {
+                    click(&mut proof, &mut input, frontend.widgets["car-rb6"].center());
+                    proof.car_step = 1;
+                } else {
+                    assert_eq!(car_preview.selected_car(), Some("rb6"));
+                    snapshot(&mut commands, &mut proof, "settings-Car-RB6");
+                    click(
+                        &mut proof,
+                        &mut input,
+                        frontend.widgets["car-gen22"].center(),
+                    );
+                    proof.car_step = 2;
+                }
+                proof.ticks = 0;
+                return;
+            }
+            if tab == Tab::Car && proof.car_step == 2 {
+                assert_eq!(car_preview.selected_car(), Some("gen22"));
+            }
+            if tab == Tab::Driver && rect.width() > 1100. && proof.car_step < 3 {
+                assert_eq!(frontend.draft.car, "gen22");
+                if frontend.draft.team != "ferrari" {
+                    click(
+                        &mut proof,
+                        &mut input,
+                        frontend.widgets["team-ferrari"].center(),
+                    );
+                    proof.ticks = 0;
+                    return;
+                }
+                let team = frontend
+                    .teams
+                    .teams
+                    .iter()
+                    .find(|team| team.id == "ferrari")
+                    .unwrap();
+                assert_eq!(frontend.draft.driver, team.drivers[0].id);
+                proof.car_step = 3;
+            }
+            if tab == Tab::Audio
+                && !proof.scrolled
+                && frontend.audio.engine != crate::audio::EngineChoice::V12
+            {
+                let button = frontend.widgets["3.0 V12"];
+                // A widget may be inside the window but clipped below the scroll
+                // viewport, especially at 640×600. Scroll it into view before clicking.
+                let body = frontend.widgets["settings-content"];
+                if button.top() < body.top() || button.bottom() > body.bottom() {
+                    input
+                        .0
+                        .events
+                        .push(egui::Event::PointerMoved(body.center()));
+                    input.0.events.push(egui::Event::MouseWheel {
+                        unit: egui::MouseWheelUnit::Point,
+                        phase: egui::TouchPhase::Move,
+                        delta: egui::vec2(
+                            0.,
+                            if button.center().y > body.center().y {
+                                -180.
+                            } else {
+                                180.
+                            },
+                        ),
+                        modifiers: egui::Modifiers::default(),
+                    });
+                    proof.ticks = 0;
+                    return;
+                }
+                // A justified radio row includes blank space; click its visible icon.
+                click(
+                    &mut proof,
+                    &mut input,
+                    button.left_center() + egui::vec2(8., 0.),
+                );
                 proof.ticks = 0;
                 return;
             }
@@ -209,7 +349,7 @@ fn drive(
             }
             proof.ticks = 0;
         }
-        step if step == TABS.len() => {
+        step if step == Tab::ALL.len() => {
             if proof.ticks == 20 {
                 input.0.events.push(egui::Event::PointerMoved(
                     frontend.widgets["settings-body"].center(),
@@ -229,13 +369,13 @@ fn drive(
                 let button = frontend.widgets["benchmark-run"];
                 assert!(rect.contains_rect(button));
                 click(&mut proof, &mut input, button.center());
-                proof.step = TABS.len() + 1;
+                proof.step = Tab::ALL.len() + 1;
             } else {
-                proof.step = TABS.len() + 2;
+                proof.step = Tab::ALL.len() + 2;
             }
             proof.ticks = 0;
         }
-        step if step == TABS.len() + 1 => {
+        step if step == Tab::ALL.len() + 1 => {
             if frontend.benchmark.child.is_some() {
                 if proof.ticks == 40 {
                     snapshot(&mut commands, &mut proof, "benchmark-running");
@@ -257,24 +397,24 @@ fn drive(
                 Some("Benchmark complete. Frame times and six screenshots are saved below.")
             );
             snapshot(&mut commands, &mut proof, "benchmark-complete");
-            proof.step = TABS.len() + 2;
+            proof.step = Tab::ALL.len() + 2;
             proof.ticks = 0;
         }
-        step if step == TABS.len() + 2 => {
+        step if step == Tab::ALL.len() + 2 => {
             session.screen = Screen::Paused;
             frontend.race_started = true;
             snapshot(&mut commands, &mut proof, "paused-settings");
-            proof.step = TABS.len() + 3;
+            proof.step = Tab::ALL.len() + 3;
             proof.ticks = 0;
         }
-        step if step == TABS.len() + 3 => {
+        step if step == Tab::ALL.len() + 3 => {
             session.screen = Screen::CameraEditor;
-            proof.step = TABS.len() + 4;
+            proof.step = Tab::ALL.len() + 4;
             proof.ticks = 0;
         }
-        step if step == TABS.len() + 4 => {
+        step if step == Tab::ALL.len() + 4 => {
             snapshot(&mut commands, &mut proof, "camera-editor");
-            proof.step = TABS.len() + 5;
+            proof.step = Tab::ALL.len() + 5;
             proof.ticks = 0;
         }
         _ if proof.captures.load(Ordering::SeqCst) == proof.requested => {

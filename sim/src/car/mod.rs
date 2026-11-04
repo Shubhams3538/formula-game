@@ -13,6 +13,9 @@ use spec::{CarSpec, Setup};
 use std::sync::Arc;
 use tyre::{lateral_shape, load_sensitivity, AxleTyres};
 
+/// Share of rear grip ABS keeps free of braking for cornering stability.
+const REAR_ABS_HEADROOM: f64 = 0.35;
+
 pub const AIR_DENSITY: f64 = 1.225;
 pub const GRAVITY: f64 = 9.81;
 
@@ -45,6 +48,14 @@ pub struct Assists {
     /// Lets this driver open DRS anywhere, not only where it is earned.
     #[serde(default)]
     pub drs_anywhere: bool,
+    /// Opens DRS by itself whenever it is available; it still closes on
+    /// braking or at the end of the zone. Saved aids from before default on.
+    #[serde(default = "enabled")]
+    pub auto_drs: bool,
+}
+
+fn enabled() -> bool {
+    true
 }
 
 impl Default for Assists {
@@ -56,6 +67,7 @@ impl Default for Assists {
             stability: 0.5,
             automatic_gears: false,
             drs_anywhere: false,
+            auto_drs: false,
         }
     }
 }
@@ -344,7 +356,8 @@ impl Car {
         self.steer_angle += (target - self.steer_angle) * (dt * response).min(1.0);
 
         // Aerodynamics. An open DRS flap stalls part of the rear wing.
-        self.drs.update(input.drs, brake, dt);
+        self.drs
+            .update(input.drs || self.assists.auto_drs, brake, dt);
         let dynamic_pressure = 0.5 * AIR_DENSITY * speed * speed;
         let front_downforce = dynamic_pressure
             * self.setup.front_lift_area(&spec.aero)
@@ -477,6 +490,38 @@ impl Car {
         let traction_cap = rear_room * (1.0 + 0.4 * (1.0 - self.assists.traction)) + 1.0;
         let drive = drive.clamp(-traction_cap, traction_cap);
 
+        let mut wheel_brakes: [f64; 4] = std::array::from_fn(|index| {
+            brake_force_total
+                * if index < 2 {
+                    spec.brake_bias
+                } else {
+                    1. - spec.brake_bias
+                }
+                * 0.5
+        });
+        if self.assists.braking >= 0.999 {
+            let mut released = 0.;
+            for index in 2..4 {
+                let room = contacts[index].longitudinal_room;
+                if wheel_brakes[index] > room {
+                    let trimmed = room * (1. - REAR_ABS_HEADROOM);
+                    released += wheel_brakes[index] - trimmed;
+                    wheel_brakes[index] = trimmed;
+                }
+            }
+            // Recover braking at the front while retaining its lateral reserve.
+            let spare: [f64; 2] = std::array::from_fn(|index| {
+                (contacts[index].longitudinal_room * 0.94 - wheel_brakes[index]).max(0.)
+            });
+            let extra = released.min(spare.iter().sum());
+            let total: f64 = spare.iter().sum();
+            if total > 0. {
+                for index in 0..2 {
+                    wheel_brakes[index] += extra * spare[index] / total;
+                }
+            }
+        }
+
         for (index, wheel_spec) in spec.wheels.iter().enumerate() {
             let front = index < 2;
             let axle = if front { 0 } else { 1 };
@@ -487,22 +532,29 @@ impl Car {
             let wheel_long = contact.wheel_long;
 
             // Longitudinal demand: drive on the rear, brakes everywhere.
-            let brake_share = if front {
-                spec.brake_bias
-            } else {
-                1.0 - spec.brake_bias
-            } * 0.5;
-            let mut brake_force = brake_force_total * brake_share;
+            let mut brake_force = wheel_brakes[index];
             let mut drive_force = if front { 0.0 } else { drive * 0.5 };
 
             // Partial ABS trims a locking demand to slightly under the limit, so
             // it never beats a driver who brakes right at the limit.
+            // Full ABS never lets a wheel lock: one locked front tyre loses its
+            // cornering force while the other three keep theirs, and the car
+            // spins toward it with the lightest steering under braking.
             let mut locked = false;
+            let abs = self.assists.braking.clamp(0.0, 1.0);
+            let lock_margin = if abs >= 0.999 {
+                f64::INFINITY
+            } else {
+                1.0 + 0.5 * abs / (1.0 - abs)
+            };
             if brake_force > room {
-                if brake_force > room * (1.0 + 0.5 * self.assists.braking) + 50.0 {
+                if brake_force > room * lock_margin + 50.0 {
                     locked = wheel_long.abs() > 0.5;
                 } else {
-                    brake_force = room * (1.0 - 0.06 * self.assists.braking);
+                    // The rear is held further below its limit so it keeps
+                    // cornering grip as weight comes off it under braking.
+                    let headroom = if front { 0.06 } else { REAR_ABS_HEADROOM };
+                    brake_force = room * (1.0 - headroom * abs);
                 }
             }
             // Traction smoothing, strongest at low speed.
@@ -968,6 +1020,36 @@ mod tests {
     }
 
     #[test]
+    fn automatic_drs_opens_when_available_and_closes_without_a_button() {
+        let track = oval_track();
+        let mut car = car_on(&track);
+        car.assists.auto_drs = true;
+        let cruise = CarInput {
+            throttle: 1.0,
+            ..CarInput::default()
+        };
+        let brake = CarInput {
+            brake: 0.5,
+            ..CarInput::default()
+        };
+        let settle = crate::drs::ACTUATION + 0.01;
+        run(&mut car, &track, cruise, 0.3);
+        assert_eq!(car.drs.flap, 0.0, "opened without DRS available");
+        car.drs.available = true;
+        run(&mut car, &track, cruise, settle);
+        assert!(car.drs.open && car.drs.flap == 1.0);
+        run(&mut car, &track, brake, settle);
+        assert_eq!(car.drs.flap, 0.0, "braking must close it");
+        // Off the brakes while still available: it opens again by itself.
+        run(&mut car, &track, cruise, settle);
+        assert_eq!(car.drs.flap, 1.0);
+        // The end of the zone withdraws DRS and the flap closes.
+        car.drs.available = false;
+        run(&mut car, &track, cruise, settle);
+        assert!(!car.drs.open && car.drs.flap == 0.0);
+    }
+
+    #[test]
     fn open_drs_raises_top_speed_and_costs_rear_downforce() {
         let track = oval_track();
         let flat_out = |drs| CarInput {
@@ -1092,6 +1174,63 @@ mod debug_probe {
                     car.wheels.iter().map(|w| w.spinning).collect::<Vec<_>>(), car.wheels[0].load, car.wheels[2].load,
                     car.acceleration.x, car.position.y, car.track_position.s, car.track_position.lateral);
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod abs_stability {
+    use super::*;
+    use crate::track::oval_track;
+    use spec::test_wheels;
+
+    /// Heading change over 1.2 s with a touch of lock, braking or coasting.
+    fn heading_change(kmh: f64, brake: f64) -> (f64, f64) {
+        let track = oval_track();
+        let (position, yaw) = track.grid_slot(0);
+        let mut car = Car::new(
+            Arc::new(CarSpec::gen22(test_wheels(), 5.4, 1.9)),
+            Setup::default(),
+            Assists {
+                automatic_gears: true,
+                braking: 1.0,
+                ..Assists::default()
+            },
+            &track,
+            position,
+            yaw,
+        );
+        car.velocity = car.forward() * (kmh / 3.6);
+        car.powertrain.gear = 7;
+        let dt = 1.0 / 360.0;
+        let start = car.yaw;
+        for _ in 0..(1.2 / dt) as usize {
+            car.step(
+                &CarInput {
+                    brake,
+                    steer: 0.05,
+                    ..CarInput::default()
+                },
+                &track,
+                dt,
+            );
+        }
+        ((car.yaw - start).to_degrees().abs(), car.speed())
+    }
+
+    #[test]
+    fn abs_braking_with_a_little_lock_does_not_spin_the_car() {
+        for kmh in [300.0, 150.0, 90.0] {
+            let (coasting, coast_speed) = heading_change(kmh, 0.0);
+            let (braking, brake_speed) = heading_change(kmh, 1.0);
+            assert!(
+                brake_speed < coast_speed - 5.,
+                "ABS must decelerate at {kmh} km/h"
+            );
+            assert!(
+                braking < coasting * 2.0 + 3.0,
+                "{kmh} km/h: braking turned {braking:.1} deg, coasting {coasting:.1} deg"
+            );
         }
     }
 }

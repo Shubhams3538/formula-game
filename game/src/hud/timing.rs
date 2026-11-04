@@ -1,8 +1,19 @@
 //! Timing tower additions use the incumbent instrument palette and fonts.
 
+use super::telemetry::Split;
 use super::*;
 
-/// Fixed columns keep timing readable as digits and sector states change.
+/// Digital readouts and analog chronographs share the main cluster's materials.
+fn panel(hud: &Hud, x: f32, y: f32, w: f32, h: f32) {
+    let fill = match hud.finish {
+        Finish::Digital => Color::from_rgb(6, 10, 11),
+        Finish::Analog => Color::from_black_alpha(210),
+    };
+    hud.fill_rect(x, y, w, h, fill);
+}
+
+/// Broadcast timing rows share the standings tower's flat, tight row style.
+/// Returns the strip height so following panels can stack beneath it.
 pub(super) fn strip(
     hud: &Hud,
     style: &HudStyle,
@@ -11,160 +22,202 @@ pub(super) fn strip(
     y: f32,
     w: f32,
     s: f32,
-) {
+) -> f32 {
     let colors = hud.finish.colors();
-    let label_size = (13. * s).max(11.);
     let race = &session.race;
     let timing = &race.entrants[session.player].timing;
-    let running =
-        matches!(race.phase, Phase::Racing | Phase::Finishing) && timing.finish_time.is_none();
-    hud.fill_rect(x, y, w, 248. * s, WELL);
-    let label_x = x + 12. * s;
-    let value_x = x + w - 12. * s;
-    hud.text_mid(
-        &style.bold,
-        label_size,
-        (label_x, y + 15. * s),
-        Align::Left,
-        colors.muted,
-        "LAP TIME",
-    );
-    let clock = lap_clock(race, session.player);
+    let running = matches!(race.phase, Phase::Racing | Phase::Finishing)
+        && timing.finish_time.is_none()
+        && timing.distance >= 0.;
+    let fill = match hud.finish {
+        Finish::Digital => Color::from_rgb(6, 10, 11),
+        Finish::Analog => Color::from_black_alpha(185),
+    };
+    let left = x + 12. * s;
+    let right = x + w - 12. * s;
+
+    // Lap clock on the left; the live sector counter sits mid-right and the
+    // sector it just finished slides out to the right edge.
+    let clock_h = 38. * s;
+    hud.fill_rect(x, y, w, clock_h - s, fill);
+    let mid = y + (clock_h - s) * 0.5;
     readout(
         hud,
         style,
-        28. * s,
-        (value_x, y + 43. * s),
-        Align::Right,
+        24. * s,
+        (left, mid),
+        Align::Left,
         colors.ink,
-        &clock,
+        &lap_clock(race, session.player),
     );
-    for (row, label, value, color) in [
-        (0, "LAST", timing.last_lap, colors.ink),
-        (1, "BEST", timing.best_lap, PURPLE),
-    ] {
-        let mid = y + (76. + row as f32 * 24.) * s;
+    let counter_x = right - 86. * s;
+    let since = (race.time - timing.sector_start).max(0.);
+    if running && (last_split(session).is_none() || since >= SLIDE_SECONDS) {
+        readout(
+            hud,
+            style,
+            18. * s,
+            (counter_x, mid),
+            Align::Right,
+            BLUE,
+            &format!("{since:.1}"),
+        );
+    }
+    if let Some((split, color)) = last_split(session) {
+        let slide = if running {
+            ease_out((since / SLIDE_SECONDS).clamp(0., 1.) as f32)
+        } else {
+            1.
+        };
+        readout(
+            hud,
+            style,
+            16. * s,
+            (counter_x + (right - counter_x) * slide, mid),
+            Align::Right,
+            color,
+            &format!("{:.3}", split.time),
+        );
+    }
+
+    // One flat line of minisectors across all three sectors.
+    let bar_y = y + clock_h;
+    let bar_h = 16. * s;
+    hud.fill_rect(x, bar_y, w, bar_h - s, fill);
+    sector_bar(
+        hud,
+        (left, bar_y + 4. * s),
+        (right - left, bar_h - 9. * s),
+        session,
+        running,
+        s,
+    );
+    let mut height = clock_h + bar_h;
+
+    if let Some(best) = timing.best_lap {
+        let row_h = 28. * s;
+        let row_y = y + height;
+        hud.fill_rect(x, row_y, w, row_h - s, fill);
+        let mid = row_y + (row_h - s) * 0.5;
         hud.text_mid(
             &style.bold,
-            label_size,
-            (label_x, mid),
+            (13. * s).max(11.),
+            (left, mid),
             Align::Left,
             colors.muted,
-            label,
+            "BEST",
         );
         readout(
             hud,
             style,
             16. * s,
-            (value_x, mid),
-            Align::Right,
-            color,
-            &value.map(format_time).unwrap_or_else(|| "-:--.---".into()),
+            (left + 48. * s, mid),
+            Align::Left,
+            PURPLE,
+            &format_time(best),
         );
-    }
-    hud.line(
-        (label_x, y + 118. * s),
-        (value_x, y + 118. * s),
-        s,
-        colors.edge,
-    );
-    hud.text_mid(
-        &style.bold,
-        label_size,
-        (label_x, y + 138. * s),
-        Align::Left,
-        colors.muted,
-        "VS BEST",
-    );
-    let (delta, color) = session.delta.current.map_or_else(
-        || ("SET A LAP".into(), colors.muted),
-        |delta| {
-            (
-                format!("{delta:+.2}"),
+        if let Some(delta) = session.delta.current.filter(|_| running) {
+            readout(
+                hud,
+                style,
+                16. * s,
+                (right, mid),
+                Align::Right,
                 if delta <= 0. { GREEN } else { ACCENT },
-            )
-        },
-    );
-    readout(
-        hud,
-        style,
-        20. * s,
-        (value_x, y + 138. * s),
-        Align::Right,
-        color,
-        &delta,
-    );
-    for sector in 0..3 {
-        let top = y + (160. + sector as f32 * 28.) * s;
-        let active = running && timing.distance >= 0. && timing.sector == sector;
-        let split = session.telemetry.splits[sector];
-        let fresh = split.is_some_and(|split| split.lap == timing.laps_completed);
-        let color = if active {
-            BLUE
-        } else if fresh {
-            colors.ink
-        } else {
-            colors.muted
-        };
-        if active {
-            hud.fill_rect(
-                x + 5. * s,
-                top,
-                w - 10. * s,
-                26. * s,
-                Color::from_rgb(16, 30, 45),
+                &format!("{delta:+.2}"),
             );
         }
-        let mid = top + 13. * s;
-        hud.text_mid(
-            &style.bold,
-            (14. * s).max(11.),
-            (label_x, mid),
-            Align::Left,
-            color,
-            &format!("S{}", sector + 1),
-        );
-        let value = if active {
-            format!("{:.1}", (race.time - timing.sector_start).max(0.))
+        height += row_h;
+    }
+    height
+}
+
+const SLIDE_SECONDS: f64 = 0.35;
+
+fn ease_out(t: f32) -> f32 {
+    1. - (1. - t).powi(3)
+}
+
+/// The most recently completed sector, coloured by how it compared to best.
+fn last_split(session: &Session) -> Option<(Split, Color)> {
+    let timing = &session.race.entrants[session.player].timing;
+    let sector = (timing.sector + 2) % 3;
+    let lap = if timing.sector == 0 {
+        timing.laps_completed.checked_sub(1)?
+    } else {
+        timing.laps_completed
+    };
+    let split = session.telemetry.splits[sector].filter(|split| split.lap == lap)?;
+    Some((split, split_color(Some(split), false, true)))
+}
+
+fn split_color(split: Option<Split>, active: bool, fresh: bool) -> Color {
+    if active {
+        BLUE
+    } else if let Some(split) = split.filter(|_| fresh) {
+        if split.overall {
+            PURPLE
+        } else if split.delta.is_none_or(|delta| delta <= 0.) {
+            GREEN
         } else {
-            split.map_or_else(|| "--.---".into(), |split| format!("{:.3}", split.time))
-        };
-        readout(
-            hud,
-            style,
-            (17. * s).max(12.),
-            (x + 156. * s, mid),
-            Align::Right,
-            color,
-            &value,
-        );
-        let (status, color) = if active {
-            ("LIVE".into(), BLUE)
-        } else if let Some(split) = split {
-            if !fresh && timing.finish_time.is_none() {
-                ("LAST".into(), colors.muted)
-            } else {
-                split.delta.map_or_else(
-                    || ("FIRST".into(), colors.muted),
-                    |delta| {
-                        (
-                            format!("{delta:+.2}"),
-                            if delta <= 0. { PURPLE } else { AMBER },
-                        )
-                    },
-                )
+            AMBER
+        }
+    } else if split.is_some() {
+        DIM
+    } else {
+        Color::from_gray(65)
+    }
+}
+
+/// Nine flat cells, three per sector with wider breaks between sectors. Each
+/// cell shows its own minisector time: purple fastest of anyone, green the
+/// player's best, yellow slower. The live cell fills blue.
+fn sector_bar(
+    hud: &Hud,
+    (x, y): (f32, f32),
+    (w, h): (f32, f32),
+    session: &Session,
+    running: bool,
+    s: f32,
+) {
+    use super::telemetry::{MiniResult, MINISECTORS};
+    let race = &session.race;
+    let timing = &race.entrants[session.player].timing;
+    let mini_gap = 2. * s;
+    let sector_gap = 6. * s;
+    let sector_w = (w - sector_gap * 2.) / 3.;
+    let cell_w = (sector_w - mini_gap * 2.) / 3.;
+    let length = race.track.length / MINISECTORS as f64;
+    let distance = timing.distance.max(0.);
+    let finished = timing.finish_time.is_some();
+    let lap = if finished {
+        timing.laps_completed.saturating_sub(1)
+    } else {
+        (distance / race.track.length).floor() as u32
+    };
+    let progress = (distance / length).fract() as f32;
+    let current = ((distance / length).floor() as usize) % MINISECTORS;
+    for sector in 0..3 {
+        for mini in 0..3 {
+            let index = sector * 3 + mini;
+            let cell_x =
+                x + sector as f32 * (sector_w + sector_gap) + mini as f32 * (cell_w + mini_gap);
+            let unlit = Color::from_gray(65);
+            if running && index == current {
+                hud.fill_rect(cell_x, y, cell_w, h, unlit);
+                hud.fill_rect(cell_x, y, cell_w * progress, h, BLUE);
+                continue;
             }
-        } else {
-            ("--".into(), colors.muted)
-        };
-        hud.text_mid(
-            &style.regular,
-            (14. * s).max(11.),
-            (value_x, mid),
-            Align::Right,
-            color,
-            &status,
-        );
+            let done = session.telemetry.minis[index]
+                .filter(|split| split.lap == lap && (finished || running && index < current));
+            let color = match done.map(|split| split.result) {
+                Some(MiniResult::Overall) => PURPLE,
+                Some(MiniResult::Personal) => GREEN,
+                Some(MiniResult::Slower) => AMBER,
+                None => unlit,
+            };
+            hud.fill_rect(cell_x, y, cell_w, h, color);
+        }
     }
 }
 
@@ -187,7 +240,7 @@ pub(super) fn pass_notice(
     };
     let color = if pass.gained { GREEN } else { AMBER };
     let colors = hud.finish.colors();
-    hud.fill_rect(x, y, w, 66. * s, WELL);
+    panel(hud, x, y, w, 66. * s);
     hud.text_mid(
         &style.bold,
         (14. * s).max(11.),
