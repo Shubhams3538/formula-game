@@ -78,6 +78,39 @@ impl Guidance {
     }
 }
 
+/// Green well under the target speed, amber near it and red over it,
+/// blended continuously so the guide never flickers at a threshold.
+fn line_colour(over: f64) -> bevy::prelude::Color {
+    const GREEN: [f32; 3] = [0.12, 0.9, 0.42];
+    const AMBER: [f32; 3] = [1., 0.72, 0.08];
+    const RED: [f32; 3] = [1., 0.15, 0.08];
+    let mix = |a: [f32; 3], b: [f32; 3], t: f32| {
+        let t = t.clamp(0., 1.);
+        bevy::prelude::Color::srgb(
+            a[0] + (b[0] - a[0]) * t,
+            a[1] + (b[1] - a[1]) * t,
+            a[2] + (b[2] - a[2]) * t,
+        )
+    };
+    let over = over as f32;
+    if over < 0. {
+        mix(GREEN, AMBER, (over + 6.) / 4.)
+    } else {
+        mix(AMBER, RED, (over - 1.) / 5.)
+    }
+}
+
+/// Racing-line offset interpolated between stations.
+fn line_offset(track: &Track, distance: f64) -> f64 {
+    use racecraft_sim::track::STATION_SPACING;
+    let s = distance.rem_euclid(track.length);
+    let index = track.station_at(s);
+    let next = (index + 1) % track.racing_line.offsets.len();
+    let t = (s / STATION_SPACING).fract();
+    let offsets = &track.racing_line.offsets;
+    offsets[index] + (offsets[next] - offsets[index]) * t
+}
+
 pub fn racing_line(session: bevy::prelude::Res<crate::Session>, mut gizmos: bevy::prelude::Gizmos) {
     use bevy::prelude::*;
     if !session.ready || !session.show_racing_line || session.screen == crate::menu::Screen::Main {
@@ -85,23 +118,22 @@ pub fn racing_line(session: bevy::prelude::Res<crate::Session>, mut gizmos: bevy
     }
     let car = &session.race.entrants[session.player].car;
     let track = &session.race.track;
+    // Samples sit at fixed lap distances, not relative to the car, so the
+    // ribbon stays put on the asphalt instead of re-sampling every frame.
+    let spacing = track.length / (track.length / 6.).round().max(1.);
+    let start = car.track_position.s + spacing;
+    let first = (start / spacing).ceil() * spacing;
     let mut previous = None;
-    for step in 1..=24 {
-        let distance = car.track_position.s + step as f64 * 6.;
+    for distance in std::iter::once(start).chain((0..24).map(|step| first + step as f64 * spacing))
+    {
         let frame = track.frame_at(distance);
-        let mut point = frame.point_at(track.racing_line.offsets[track.station_at(distance)]);
+        let mut point = frame.point_at(line_offset(track, distance));
         if let Some(ground) = track.collision.ground(point + glam::DVec3::Y * 3.) {
             point.y = ground.height;
         }
         point.y += 0.08;
         let target = session.guidance.target_speed(track, distance);
-        let color = if car.speed() > target + 5. {
-            Color::srgb(1., 0.15, 0.08)
-        } else if car.speed() > target - 3. {
-            Color::srgb(1., 0.72, 0.08)
-        } else {
-            Color::srgb(0.12, 0.9, 0.42)
-        };
+        let color = line_colour(car.speed() - target);
         let world = Vec3::new(point.x as f32, point.y as f32, point.z as f32);
         if let Some(previous) = previous {
             gizmos.line(previous, world, color);

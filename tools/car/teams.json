@@ -1,6 +1,56 @@
 {
-  "season": 2022,
+  "season": 2026,
   "teams": [
+    {
+      "id": "mclaren",
+      "name": "McLaren F1 Team",
+      "short": "McLaren",
+      "colors": {
+        "primary": "#FF8000",
+        "secondary": "#1B3A8C",
+        "accent": "#F2F2F2",
+        "carbon": "#1C1C1C"
+      },
+      "drivers": [
+        {
+          "id": "norris",
+          "name": "Lando Norris",
+          "abbr": "NOR",
+          "number": 1
+        },
+        {
+          "id": "piastri",
+          "name": "Oscar Piastri",
+          "abbr": "PIA",
+          "number": 81
+        }
+      ]
+    },
+    {
+      "id": "mercedes",
+      "name": "Mercedes-AMG F1 Team",
+      "short": "Mercedes",
+      "colors": {
+        "primary": "#BFC6CC",
+        "secondary": "#141414",
+        "accent": "#00D2BE",
+        "carbon": "#1C1C1C"
+      },
+      "drivers": [
+        {
+          "id": "russell",
+          "name": "George Russell",
+          "abbr": "RUS",
+          "number": 63
+        },
+        {
+          "id": "antonelli",
+          "name": "Kimi Antonelli",
+          "abbr": "ANT",
+          "number": 12
+        }
+      ]
+    },
     {
       "id": "redbull",
       "name": "Red Bull Racing",
@@ -16,13 +66,13 @@
           "id": "verstappen",
           "name": "Max Verstappen",
           "abbr": "VER",
-          "number": 1
+          "number": 3
         },
         {
-          "id": "perez",
-          "name": "Sergio Perez",
-          "abbr": "PER",
-          "number": 11
+          "id": "hadjar",
+          "name": "Isack Hadjar",
+          "abbr": "HAD",
+          "number": 6
         }
       ]
     },
@@ -44,6 +94,31 @@
           "number": 16
         },
         {
+          "id": "hamilton",
+          "name": "Lewis Hamilton",
+          "abbr": "HAM",
+          "number": 44
+        }
+      ]
+    },
+    {
+      "id": "williams",
+      "name": "Williams Racing",
+      "short": "Williams",
+      "colors": {
+        "primary": "#0B2F6B",
+        "secondary": "#1868DB",
+        "accent": "#00A3E0",
+        "carbon": "#1C1C1C"
+      },
+      "drivers": [
+        {
+          "id": "albon",
+          "name": "Alexander Albon",
+          "abbr": "ALB",
+          "number": 23
+        },
+        {
           "id": "sainz",
           "name": "Carlos Sainz",
           "abbr": "SAI",
@@ -52,102 +127,27 @@
       ]
     },
     {
-      "id": "mercedes",
-      "name": "Mercedes-AMG F1 Team",
-      "short": "Mercedes",
+      "id": "racingbulls",
+      "name": "Racing Bulls",
+      "short": "Racing Bulls",
       "colors": {
-        "primary": "#BFC6CC",
-        "secondary": "#141414",
-        "accent": "#00D2BE",
-        "carbon": "#1C1C1C"
-      },
-      "drivers": [
-        {
-          "id": "hamilton",
-          "name": "Lewis Hamilton",
-          "abbr": "HAM",
-          "number": 44
-        },
-        {
-          "id": "russell",
-          "name": "George Russell",
-          "abbr": "RUS",
-          "number": 63
-        }
-      ]
-    },
-    {
-      "id": "alpine",
-      "name": "Alpine F1 Team",
-      "short": "Alpine",
-      "colors": {
-        "primary": "#0A5BC4",
-        "secondary": "#8ED0FF",
+        "primary": "#F2F2F2",
+        "secondary": "#1634CC",
         "accent": "#E4002B",
         "carbon": "#1C1C1C"
       },
       "drivers": [
         {
-          "id": "ocon",
-          "name": "Esteban Ocon",
-          "abbr": "OCO",
-          "number": 31
+          "id": "lawson",
+          "name": "Liam Lawson",
+          "abbr": "LAW",
+          "number": 30
         },
         {
-          "id": "alonso",
-          "name": "Fernando Alonso",
-          "abbr": "ALO",
-          "number": 14
-        }
-      ]
-    },
-    {
-      "id": "mclaren",
-      "name": "McLaren F1 Team",
-      "short": "McLaren",
-      "colors": {
-        "primary": "#FF8000",
-        "secondary": "#1B3A8C",
-        "accent": "#F2F2F2",
-        "carbon": "#1C1C1C"
-      },
-      "drivers": [
-        {
-          "id": "norris",
-          "name": "Lando Norris",
-          "abbr": "NOR",
-          "number": 4
-        },
-        {
-          "id": "ricciardo",
-          "name": "Daniel Ricciardo",
-          "abbr": "RIC",
-          "number": 3
-        }
-      ]
-    },
-    {
-      "id": "alfaromeo",
-      "name": "Alfa Romeo F1 Team",
-      "short": "Alfa Romeo",
-      "colors": {
-        "primary": "#F2F2F2",
-        "secondary": "#8E0F1F",
-        "accent": "#C8102E",
-        "carbon": "#1C1C1C"
-      },
-      "drivers": [
-        {
-          "id": "bottas",
-          "name": "Valtteri Bottas",
-          "abbr": "BOT",
-          "number": 77
-        },
-        {
-          "id": "zhou",
-          "name": "Zhou Guanyu",
-          "abbr": "ZHO",
-          "number": 24
+          "id": "lindblad",
+          "name": "Arvid Lindblad",
+          "abbr": "LIN",
+          "number": 41
         }
       ]
     },
@@ -163,10 +163,10 @@
       },
       "drivers": [
         {
-          "id": "vettel",
-          "name": "Sebastian Vettel",
-          "abbr": "VET",
-          "number": 5
+          "id": "alonso",
+          "name": "Fernando Alonso",
+          "abbr": "ALO",
+          "number": 14
         },
         {
           "id": "stroll",
@@ -188,27 +188,52 @@
       },
       "drivers": [
         {
-          "id": "magnussen",
-          "name": "Kevin Magnussen",
-          "abbr": "MAG",
-          "number": 20
+          "id": "ocon",
+          "name": "Esteban Ocon",
+          "abbr": "OCO",
+          "number": 31
         },
         {
-          "id": "schumacher",
-          "name": "Mick Schumacher",
-          "abbr": "MSC",
-          "number": 47
+          "id": "bearman",
+          "name": "Oliver Bearman",
+          "abbr": "BEA",
+          "number": 87
         }
       ]
     },
     {
-      "id": "alphatauri",
-      "name": "Scuderia AlphaTauri",
-      "short": "AlphaTauri",
+      "id": "audi",
+      "name": "Audi F1 Team",
+      "short": "Audi",
       "colors": {
-        "primary": "#17264A",
-        "secondary": "#F2F2F2",
-        "accent": "#C2CCDB",
+        "primary": "#B9BEC4",
+        "secondary": "#141414",
+        "accent": "#F50537",
+        "carbon": "#1C1C1C"
+      },
+      "drivers": [
+        {
+          "id": "hulkenberg",
+          "name": "Nico Hulkenberg",
+          "abbr": "HUL",
+          "number": 27
+        },
+        {
+          "id": "bortoleto",
+          "name": "Gabriel Bortoleto",
+          "abbr": "BOR",
+          "number": 5
+        }
+      ]
+    },
+    {
+      "id": "alpine",
+      "name": "Alpine F1 Team",
+      "short": "Alpine",
+      "colors": {
+        "primary": "#0A5BC4",
+        "secondary": "#FF87BC",
+        "accent": "#F2F2F2",
         "carbon": "#1C1C1C"
       },
       "drivers": [
@@ -219,35 +244,35 @@
           "number": 10
         },
         {
-          "id": "tsunoda",
-          "name": "Yuki Tsunoda",
-          "abbr": "TSU",
-          "number": 22
+          "id": "colapinto",
+          "name": "Franco Colapinto",
+          "abbr": "COL",
+          "number": 43
         }
       ]
     },
     {
-      "id": "williams",
-      "name": "Williams Racing",
-      "short": "Williams",
+      "id": "cadillac",
+      "name": "Cadillac F1 Team",
+      "short": "Cadillac",
       "colors": {
-        "primary": "#0F2A5C",
-        "secondary": "#2CA6E8",
-        "accent": "#E4002B",
+        "primary": "#141414",
+        "secondary": "#F2F2F2",
+        "accent": "#B8A36E",
         "carbon": "#1C1C1C"
       },
       "drivers": [
         {
-          "id": "albon",
-          "name": "Alexander Albon",
-          "abbr": "ALB",
-          "number": 23
+          "id": "perez",
+          "name": "Sergio Perez",
+          "abbr": "PER",
+          "number": 11
         },
         {
-          "id": "latifi",
-          "name": "Nicholas Latifi",
-          "abbr": "LAT",
-          "number": 6
+          "id": "bottas",
+          "name": "Valtteri Bottas",
+          "abbr": "BOT",
+          "number": 77
         }
       ]
     }

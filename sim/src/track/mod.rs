@@ -416,3 +416,70 @@ mod tests {
         assert!((DVec2::new(yaw.sin(), yaw.cos()).dot(tangent) - 1.0).abs() < 1e-3);
     }
 }
+
+/// Needs converted assets: `F1_ASSETS=assets cargo test -p racecraft-sim -- --ignored kerb`.
+#[cfg(test)]
+mod eau_rouge_kerbs {
+    use super::*;
+    use crate::car::spec::{test_wheels, CarSpec, Setup};
+    use crate::car::{Assists, Car, CarInput};
+    use std::sync::Arc;
+
+    #[test]
+    #[ignore]
+    fn cars_roll_over_the_outside_kerbs_instead_of_hitting_a_wall() {
+        let Ok(root) = std::env::var("F1_ASSETS") else {
+            return;
+        };
+        let track = Track::load(std::path::Path::new(&root).join("tracks/spa")).unwrap();
+        // Each run starts on the asphalt and drifts across the left-hand kerb
+        // through Raidillon, where the kerb skirts used to export as walls.
+        for start in [1050.0, 1080.0, 1110.0] {
+            let frame = track.frame_at(start);
+            let position = frame.point_at(4.5);
+            let yaw = frame.tangent.x.atan2(frame.tangent.y);
+            let mut car = Car::new(
+                Arc::new(CarSpec::gen22(test_wheels(), 5.4, 1.9)),
+                Setup::default(),
+                Assists {
+                    automatic_gears: true,
+                    ..Assists::default()
+                },
+                &track,
+                position + DVec3::Y * 0.3,
+                yaw,
+            );
+            car.velocity = car.forward() * 45.0;
+            car.powertrain.gear = 5;
+            let dt = 1.0 / 360.0;
+            let mut widest = car.track_position.lateral;
+            let mut contacts = 0;
+            for _ in 0..(0.8 / dt) as usize {
+                car.step(
+                    &CarInput {
+                        steer: 0.15,
+                        throttle: 0.5,
+                        ..CarInput::default()
+                    },
+                    &track,
+                    dt,
+                );
+                widest = widest.max(car.track_position.lateral);
+                // The race resolves walls against these circles.
+                let centre = DVec2::new(car.position.x, car.position.z);
+                for (circle, radius) in car.collision_circles() {
+                    for wall in track.collision.walls_near(centre, car.spec.length) {
+                        let along = wall.b - wall.a;
+                        let t = ((circle - wall.a).dot(along) / along.length_squared().max(1e-12))
+                            .clamp(0.0, 1.0);
+                        if (circle - (wall.a + along * t)).length() < radius {
+                            contacts += 1;
+                        }
+                    }
+                }
+            }
+            assert!(widest > 7.3, "start {start}: only reached {widest:.2} m");
+            assert_eq!(contacts, 0, "start {start}: kerb acted as a wall");
+        }
+    }
+}

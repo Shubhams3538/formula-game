@@ -135,6 +135,8 @@ pub enum ServerMessage {
     },
     Error(String),
     Closed(String),
+    /// Round-trip time per connected player id, in milliseconds, as the server measures it.
+    Pings(Vec<(u64, u16)>),
 }
 /// Authoritative state, carried in the compact [`crate::codec`] format.
 #[derive(Clone, Debug, Serialize, Deserialize)]

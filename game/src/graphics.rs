@@ -17,7 +17,7 @@ use bevy::{
         ShadowFilteringMethod,
     },
     pbr::{
-        AtmosphereSettings, ContactShadows, DistanceFog, FogFalloff, ScreenSpaceAmbientOcclusion,
+        ContactShadows, DistanceFog, FogFalloff, ScreenSpaceAmbientOcclusion,
         ScreenSpaceAmbientOcclusionQualityLevel,
     },
     post_process::{
@@ -371,21 +371,6 @@ impl Video {
         }
     }
 
-    fn atmosphere(&self) -> AtmosphereSettings {
-        // These are smoothly interpolated lighting tables, not screen pixels.
-        // Keep integration samples and the aerial perspective volume intact.
-        AtmosphereSettings {
-            transmittance_lut_size: UVec2::new(128, 64),
-            multiscattering_lut_size: UVec2::new(16, 16),
-            sky_view_lut_size: match self.sky {
-                Level::Off | Level::Low => UVec2::new(150, 75),
-                Level::Medium => UVec2::new(200, 100),
-                Level::High | Level::Ultra => UVec2::new(300, 150),
-            },
-            ..default()
-        }
-    }
-
     fn color_grading(&self) -> ColorGrading {
         let mut grading = ColorGrading::default();
         grading.global.exposure = self.exposure;
@@ -411,7 +396,7 @@ pub fn apply(
     frontend: Res<crate::menu::Frontend>,
     mut applied: Local<Option<(Video, bool)>>,
     mut windows: Query<&mut Window>,
-    cameras: Query<Entity, With<Camera3d>>,
+    cameras: Query<Entity, (With<Camera3d>, With<bevy_egui::PrimaryEguiContext>)>,
     mut lights: Query<(Entity, &mut DirectionalLight)>,
     mut shadow_map: ResMut<DirectionalLightShadowMap>,
     mut textures: ResMut<crate::textures::TextureDetail>,
@@ -470,7 +455,6 @@ pub fn apply(
     let temporal = video.anti_alias == AntiAlias::Taa;
     for camera in &cameras {
         let mut camera = commands.entity(camera);
-        camera.insert(video.atmosphere());
         // Start from a clean slate so prepasses only run when an effect needs them.
         camera.remove::<(
             TemporalAntiAliasing,
@@ -507,8 +491,7 @@ pub fn apply(
             video.tonemapping.component(),
             video.color_grading(),
         ));
-        // Sky lighting is cheap at its default size and the scene is dull without it.
-        camera.insert(AtmosphereEnvironmentMapLight::default());
+        // The selected weather sky supplies matching environment lighting.
         match video.anti_alias {
             AntiAlias::Off | AntiAlias::Msaa4 => {}
             AntiAlias::Fxaa => {
@@ -606,10 +589,8 @@ const ENVIRONMENT_SETTLE_FRAMES: u32 = 8;
 #[derive(Resource, Clone, Default)]
 struct PipelinesSettled(std::sync::Arc<std::sync::atomic::AtomicU32>);
 
-/// The sun and atmosphere never change during a race, yet Bevy re-filters the
-/// sky into diffuse and specular lighting every frame (~1 ms of GPU time).
-/// Generate it until it has settled, then keep the result as a static
-/// environment map. A new sun direction or preset regenerates it.
+/// Filter the selected sky into diffuse/specular lighting until pipelines settle,
+/// then keep the generated textures. Weather or sky-quality changes regenerate it.
 pub struct StaticSkyLighting;
 
 impl Plugin for StaticSkyLighting {
@@ -641,8 +622,11 @@ fn track_pipelines(
 type SkyCameras<'w, 's> = Query<
     'w,
     's,
-    (Entity, Has<bevy::light::GeneratedEnvironmentMapLight>),
-    (With<Camera3d>, With<AtmosphereEnvironmentMapLight>),
+    (
+        Entity,
+        Option<Ref<'static, bevy::light::GeneratedEnvironmentMapLight>>,
+    ),
+    (With<Camera3d>, With<bevy::light::Skybox>),
 >;
 
 fn freeze_sky_lighting(
@@ -654,19 +638,15 @@ fn freeze_sky_lighting(
     mut generated_frames: Local<u32>,
 ) {
     if !sun.is_empty() {
-        // Re-inserting restarts generation for the new sky.
-        for (camera, _) in &cameras {
-            commands
-                .entity(camera)
-                .insert(AtmosphereEnvironmentMapLight::default());
-        }
         *generated_frames = 0;
-        return;
     }
     for (camera, generating) in &cameras {
-        if !generating || !session.ready {
+        if generating.is_none() || !session.ready {
             *generated_frames = 0;
             continue;
+        }
+        if generating.as_ref().is_some_and(|light| light.is_changed()) {
+            *generated_frames = 0;
         }
         *generated_frames += 1;
         let ready = settled.0.load(std::sync::atomic::Ordering::Relaxed);

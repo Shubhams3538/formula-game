@@ -1,4 +1,4 @@
-//! Real converted-track, 16-scripted-client UDP soak. No renderer or human driving claim.
+//! Real converted-track, 16-scripted-client UDP/WS soak. No renderer or human driving claim.
 use racecraft_net::*;
 use racecraft_sim::{AiDriver, Assists, CarInput, DriverProfile, PHYSICS_RATE};
 use std::{
@@ -16,13 +16,22 @@ fn main() -> Result<(), String> {
         .unwrap_or_else(|| "15".into())
         .parse::<u64>()
         .map_err(|e| e.to_string())?;
-    let server = Server::bind(
-        &root,
-        "127.0.0.1:0".parse().unwrap(),
-        RaceSettings::default(),
-        None,
-    )?;
-    let address = server.address();
+    let websocket = match std::env::args().nth(3).as_deref() {
+        None => false,
+        Some("--websocket") => true,
+        _ => return Err("usage: soak ASSETS SECONDS [--websocket]".into()),
+    };
+    let address = "127.0.0.1:0".parse().unwrap();
+    let server = if websocket {
+        Server::bind_websocket(&root, address, RaceSettings::default())?
+    } else {
+        Server::bind(&root, address, RaceSettings::default(), None)?
+    };
+    let endpoint: Endpoint = if websocket {
+        format!("ws://{}", server.address()).parse()?
+    } else {
+        server.address().into()
+    };
     let stop = Arc::new(AtomicBool::new(false));
     let flag = stop.clone();
     let worker = std::thread::spawn(move || -> Result<(), String> {
@@ -54,7 +63,7 @@ fn main() -> Result<(), String> {
             .map(|i| {
                 Client::connect(
                     &root,
-                    address,
+                    endpoint.clone(),
                     format!("Soak {i:02}"),
                     Assists::default(),
                     None,
@@ -101,7 +110,9 @@ fn main() -> Result<(), String> {
                     client.loaded()?;
                 }
                 if let Some(race) = &mut races[i] {
-                    if client.reconcile(race)? {
+                    let previous_tick = client.authoritative_tick;
+                    client.reconcile(race)?;
+                    if client.authoritative_tick != previous_tick {
                         snapshots[i] += 1;
                     }
                 }

@@ -4,7 +4,7 @@ on:
     branches: ['feat/multiplayer']
   workflow_dispatch:
   pull_request:
-    paths: ['net/**', 'sim/**', 'game/**', 'Cargo.*', 'tools/package/build_multiplayer.py', '.github/workflows/multiplayer.yml']
+    paths: ['net/**', 'sim/**', 'game/**', 'Cargo.*', 'tools/package/build_multiplayer.py', '.github/workflows/multiplayer.yml', 'render.yaml', 'tools/package/render.Dockerfile', 'tools/package/prepare_render.py']
 jobs:
   build:
     strategy:

@@ -224,8 +224,12 @@ pub fn draw(hud: &Hud, style: &HudStyle, session: &Session) {
     let bar_w = (hud.width() - PAD * 2. - GAP) * 0.5;
     let input = session.guidance.activity.input;
     for (x, value, color) in [
-        (PAD, input.brake, ACCENT),
-        (PAD + bar_w + GAP, input.throttle, GREEN),
+        (PAD, session.telemetry.brake.value(input.brake), ACCENT),
+        (
+            PAD + bar_w + GAP,
+            session.telemetry.throttle.value(input.throttle),
+            GREEN,
+        ),
     ] {
         hud.fill_round(x, bar_y, bar_w, 14., 3., Color::from_rgb(16, 19, 20));
         hud.fill_round(x, bar_y, bar_w * value.clamp(0., 1.) as f32, 14., 3., color);

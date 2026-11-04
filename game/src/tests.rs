@@ -71,6 +71,7 @@ pub(super) fn session() -> Session {
         delta: default(),
         telemetry: default(),
         ready: false,
+        pings: Vec::new(),
         screen: menu::Screen::Racing,
     }
 }
@@ -419,7 +420,6 @@ fn failed_race_selection_keeps_existing_session_and_scene() {
     frontend.catalog.circuits.push(menu::Circuit {
         id: "does-not-exist".into(),
         name: "Broken circuit".into(),
-        length: 0.,
         outline: vec![],
         unavailable: None,
     });
@@ -470,6 +470,7 @@ fn rendered_menu_and_track_selection() {
 
 #[derive(Resource, Default)]
 struct MenuProbe {
+    navigation: Option<String>,
     initial_time: Option<f64>,
     stage: usize,
     ticks: usize,
@@ -531,11 +532,23 @@ fn menu_click(
     name: &str,
 ) {
     use bevy_egui::egui::{Event, Modifiers, PointerButton};
-    let position = frontend
+    let control = if !frontend.widgets.contains_key(name)
+        && matches!(name, "Driving assistance" | "Track" | "Interface")
+    {
+        probe.navigation = Some(name.into());
+        "settings-navigation"
+    } else {
+        name
+    };
+    let button = frontend
         .widgets
-        .get(name)
-        .unwrap_or_else(|| panic!("missing UI control {name}"))
-        .center();
+        .get(control)
+        .unwrap_or_else(|| panic!("missing UI control {control}"));
+    let position = if frontend.widgets.contains_key("settings-navigation-popup") {
+        button.left_center() + bevy_egui::egui::vec2(40., 0.)
+    } else {
+        button.center()
+    };
     let mut input = inputs.single_mut().unwrap();
     input.0.events.push(Event::PointerMoved(position));
     input.0.events.push(Event::PointerButton {
@@ -581,7 +594,7 @@ fn menu_probe(
     mut keys: ResMut<ButtonInput<KeyCode>>,
     mut inputs: Query<&mut bevy_egui::EguiInput, With<bevy_egui::PrimaryEguiContext>>,
     roots: Query<(), With<assets::RaceVisualRoot>>,
-    cameras: Query<(), With<Camera3d>>,
+    cameras: Query<(), With<bevy_egui::PrimaryEguiContext>>,
     steering_wheels: Query<&assets::SteeringWheelVisual>,
     rig_parts: Query<&assets::RigPart>,
     mut exit: MessageWriter<AppExit>,
@@ -611,6 +624,39 @@ fn menu_probe(
             });
         return;
     }
+    if let Some(name) = probe.navigation.take() {
+        probe.ticks += 1;
+        if probe.ticks < 12 || !frontend.widgets.contains_key(name.as_str()) {
+            probe.navigation = Some(name);
+            return;
+        }
+        if let Some(popup) = frontend.widgets.get("settings-navigation-popup") {
+            let button = frontend.widgets[name.as_str()];
+            if button.intersect(*popup).height() < button.height().min(12.) {
+                let mut input = inputs.single_mut().unwrap();
+                input.0.events.push(Event::PointerMoved(popup.center()));
+                input.0.events.push(Event::MouseWheel {
+                    unit: bevy_egui::egui::MouseWheelUnit::Point,
+                    phase: bevy_egui::egui::TouchPhase::Move,
+                    delta: bevy_egui::egui::vec2(
+                        0.,
+                        if button.center().y > popup.center().y {
+                            -180.
+                        } else {
+                            180.
+                        },
+                    ),
+                    modifiers: Modifiers::default(),
+                });
+                probe.navigation = Some(name);
+                probe.ticks = 0;
+                return;
+            }
+        }
+        menu_click(&mut probe, &mut inputs, &frontend, &name);
+        probe.ticks = 0;
+        return;
+    }
     probe.ticks += 1;
     match probe.stage {
         0 if session.ready && probe.ticks > 30 => {
@@ -625,14 +671,14 @@ fn menu_probe(
                     .any(|c| c.id == track && c.unavailable.is_none()));
             }
             menu_snapshot(&mut commands, &mut probe, "main-menu");
-            menu_click(&mut probe, &mut inputs, &frontend, "Driving aids");
+            menu_click(&mut probe, &mut inputs, &frontend, "Driving assistance");
             probe.stage = 1;
             probe.ticks = 0;
         }
         1 if probe.ticks > 12 => {
             assert!(
                 frontend.tab == menu::Tab::Aids,
-                "Driving aids tab did not respond to pointer input"
+                "Driving page did not respond to pointer input"
             );
             menu_click(&mut probe, &mut inputs, &frontend, "beginner");
             probe.stage = 2;
@@ -643,14 +689,14 @@ fn menu_probe(
             assert_eq!(frontend.corner_braking, 1.);
             assert!(frontend.aids.automatic_gears);
             menu_snapshot(&mut commands, &mut probe, "driving-aids");
-            menu_click(&mut probe, &mut inputs, &frontend, "Race setup");
+            menu_click(&mut probe, &mut inputs, &frontend, "Track");
             probe.stage = 3;
             probe.ticks = 0;
         }
         3 if probe.ticks > 12 => {
-            assert!(frontend.tab == menu::Tab::Race);
+            assert!(frontend.tab == menu::Tab::Track);
             choose_menu_case(&mut frontend, probe.case);
-            menu_click(&mut probe, &mut inputs, &frontend, "HUD & map");
+            menu_click(&mut probe, &mut inputs, &frontend, "Interface");
             probe.stage = 14;
             probe.ticks = 0;
         }
@@ -679,12 +725,16 @@ fn menu_probe(
             if probe.case == 0 {
                 menu_snapshot(&mut commands, &mut probe, "hud-settings");
             }
-            menu_click(&mut probe, &mut inputs, &frontend, "Race setup");
+            menu_click(&mut probe, &mut inputs, &frontend, "Track");
             probe.stage = 17;
             probe.ticks = 0;
         }
         17 if probe.ticks > 12 => {
-            assert!(frontend.tab == menu::Tab::Race);
+            assert_eq!(
+                frontend.tab,
+                menu::Tab::Track,
+                "first Track click was ignored"
+            );
             probe.stage = 4;
             probe.ticks = 0;
         }
@@ -749,7 +799,7 @@ fn menu_probe(
         7 if probe.ticks > 12 => {
             assert_eq!(session.screen, menu::Screen::Paused);
             assert!(session.paused);
-            menu_click(&mut probe, &mut inputs, &frontend, "Driving aids");
+            menu_click(&mut probe, &mut inputs, &frontend, "Driving assistance");
             probe.stage = 8;
             probe.ticks = 0;
         }
@@ -770,13 +820,13 @@ fn menu_probe(
             assert_eq!(session.corner_braking, 0.);
             assert!(!session.show_racing_line);
             menu_snapshot(&mut commands, &mut probe, "pause-aids");
-            menu_click(&mut probe, &mut inputs, &frontend, "Race setup");
+            menu_click(&mut probe, &mut inputs, &frontend, "Track");
             probe.stage = 11;
             probe.ticks = 0;
         }
         11 if probe.ticks > 12 => {
             assert_eq!(session.screen, menu::Screen::Paused);
-            assert!(frontend.tab == menu::Tab::Race);
+            assert!(frontend.tab == menu::Tab::Track);
             probe.case += 1;
             probe.stage = 3;
             probe.ticks = 0;
@@ -1180,7 +1230,10 @@ fn car_review_contract(
 fn car_review(
     mut commands: Commands,
     mut session: ResMut<Session>,
-    mut cameras: Query<(Entity, &mut Transform, &mut Projection), With<Camera3d>>,
+    mut cameras: Query<
+        (Entity, &mut Transform, &mut Projection),
+        With<bevy_egui::PrimaryEguiContext>,
+    >,
     options: Res<Options>,
     ranges: Res<bevy::camera::visibility::VisibleEntityRanges>,
     ranged: Query<(
@@ -1396,7 +1449,7 @@ struct WheelDrsProbe {
 
 fn wheel_drs_camera(
     session: Res<Session>,
-    mut cameras: Query<(&mut Transform, &mut Projection), With<Camera3d>>,
+    mut cameras: Query<(&mut Transform, &mut Projection), With<bevy_egui::PrimaryEguiContext>>,
 ) {
     // A closer cockpit inspection makes cap travel and thumb contact visible.
     let pose = pose::Pose::of(&session.race.entrants[session.player].car);
@@ -1598,7 +1651,7 @@ fn lock_view_assertions(
         With<materials::CarSurface>,
     >,
     materials: Res<Assets<StandardMaterial>>,
-    cameras: Query<&Projection, With<Camera3d>>,
+    cameras: Query<&Projection, With<bevy_egui::PrimaryEguiContext>>,
 ) {
     if !session.ready {
         return;

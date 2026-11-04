@@ -11,7 +11,7 @@ fn main() -> Result<(), String> {
         .next()
         .unwrap_or_else(|| "127.0.0.1:7777".into())
         .parse()
-        .map_err(|_| "bad IP:port")?;
+        .map_err(|_| "expected IP:port or ws(s)://server")?;
     let root = PathBuf::from(args.next().unwrap_or_else(|| "assets".into()));
     let name = args.next().unwrap_or_else(|| "Scripted driver".into());
     let mut client = Client::connect(&root, address, name, Assists::default(), None)?;

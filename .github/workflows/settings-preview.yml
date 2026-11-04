@@ -1,0 +1,45 @@
+name: Settings UI preview
+
+on:
+  push:
+    branches:
+      - codex/release-packaging-test
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  windows-preview:
+    name: Windows game executable
+    runs-on: windows-latest
+    env:
+      CARGO_BUILD_JOBS: "4"
+      CARGO_PROFILE_RELEASE_DEBUG: "0"
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install stable Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Build game executable
+        run: cargo build --release --locked -p f1-the-game
+
+      - name: Write preview instructions
+        shell: pwsh
+        run: |
+          @'
+          This preview contains only the game executable.
+          Use an existing converted asset tree with:
+            f1-the-game.exe --assets C:\path\to\assets
+          Download the assets ZIP from https://github.com/jR4dh3y/formula-game/releases/download/assets-68ae3a48b726ffa5/f1-racecraft-assets.zip and extract it to create assets. The executable needs car and track assets before the settings menu can open.
+          '@ | Set-Content target/release/PREVIEW.txt
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: settings-ui-preview-windows-x86_64
+          path: |
+            target/release/f1-the-game.exe
+            target/release/PREVIEW.txt
+          compression-level: 0
+          if-no-files-found: error

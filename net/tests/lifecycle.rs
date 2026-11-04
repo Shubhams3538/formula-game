@@ -133,7 +133,7 @@ fn sixteen_real_udp_clients_race_with_loss_and_ai_takeover() {
         .map(|i| {
             Client::connect(
                 &fixture.0,
-                proxies[i].addr(),
+                proxies[i].addr().into(),
                 format!("Driver {i}"),
                 Assists::default(),
                 None,
@@ -397,7 +397,7 @@ fn owner_rules_commands_results_return_and_host_loss() {
         .map(|i| {
             Client::connect(
                 &fixture.0,
-                server.address(),
+                server.address().into(),
                 format!("Human {i}"),
                 Assists::default(),
                 None,
@@ -548,7 +548,7 @@ fn mismatched_assets_are_rejected_before_admission_and_silence_times_out() {
     .unwrap();
     let mut bad = Client::connect(
         &wrong.0,
-        server.address(),
+        server.address().into(),
         "Mismatch".into(),
         Assists::default(),
         None,
@@ -678,7 +678,7 @@ fn gen22_assigns_distinct_stock_driver_identities_and_rejects_duplicates() {
 fn join(fixture: &Fixture, server: &Server, name: &str, id: Option<u64>) -> Client {
     Client::connect(
         &fixture.0,
-        server.address(),
+        server.address().into(),
         name.into(),
         Assists::default(),
         id,
@@ -816,4 +816,385 @@ fn dual_stack_room_admits_ipv4_and_ipv6_drivers() {
     let mut races = vec![None, None];
     pump(&mut server, &mut clients, &mut races, &fixture.0, 120);
     assert_eq!(server.lobby.players.len(), 2);
+}
+
+#[test]
+fn websocket_room_races_rejects_duplicate_ids_and_resets_after_disconnect() {
+    let fixture = Fixture::new();
+    let mut server = Server::bind_websocket(
+        &fixture.0,
+        "127.0.0.1:0".parse().unwrap(),
+        RaceSettings::default(),
+    )
+    .unwrap();
+    let endpoint: Endpoint = format!("ws://{}", server.address()).parse().unwrap();
+    let mut clients = vec![Client::connect(
+        &fixture.0,
+        endpoint.clone(),
+        "WebSocket owner".into(),
+        Assists::default(),
+        None,
+    )
+    .unwrap()];
+    let mut races = vec![None];
+    pump(&mut server, &mut clients, &mut races, &fixture.0, 150);
+    assert_eq!(server.lobby.players.len(), 1);
+    assert!(clients[0].owner());
+    let owner = clients[0].id;
+    // A new socket cannot take over an existing socket's ID, even in a private room.
+    let mut duplicate = Client::connect(
+        &fixture.0,
+        endpoint.clone(),
+        "Duplicate ID".into(),
+        Assists::default(),
+        Some(owner),
+    )
+    .unwrap();
+    for _ in 0..60 {
+        let _ = duplicate.poll(Duration::from_millis(2));
+        pump(&mut server, &mut clients, &mut races, &fixture.0, 1);
+    }
+    assert_eq!(server.lobby.players.len(), 1);
+    assert!(!clients[0].closed);
+    drop(duplicate);
+    clients.push(
+        Client::connect(
+            &fixture.0,
+            endpoint.clone(),
+            "WebSocket guest".into(),
+            Assists::default(),
+            None,
+        )
+        .unwrap(),
+    );
+    races.push(None);
+    pump(&mut server, &mut clients, &mut races, &fixture.0, 150);
+    assert_eq!(server.lobby.players.len(), 2);
+    for client in &mut clients {
+        client.send(ClientMessage::Ready(true)).unwrap();
+    }
+    pump(&mut server, &mut clients, &mut races, &fixture.0, 60);
+    clients[0].send(ClientMessage::Start).unwrap();
+    pump(&mut server, &mut clients, &mut races, &fixture.0, 1500);
+    assert!(matches!(server.lobby.stage, Stage::Grid | Stage::Racing));
+    for client in &clients {
+        assert!(client.authoritative_tick.is_some_and(|t| t > 100));
+    }
+    let guest = clients[1].id;
+    clients.remove(0);
+    races.remove(0);
+    pump(&mut server, &mut clients, &mut races, &fixture.0, 80);
+    assert_eq!(server.lobby.owner, guest);
+    assert!(matches!(
+        server.race.as_ref().unwrap().entrants[0].driver,
+        Driver::Ai(_)
+    ));
+    clients.clear();
+    races.clear();
+    pump(&mut server, &mut clients, &mut races, &fixture.0, 80);
+    assert_eq!(server.lobby.stage, Stage::Lobby);
+    assert!(server.lobby.players.is_empty());
+    clients.push(
+        Client::connect(
+            &fixture.0,
+            endpoint,
+            "Next room owner".into(),
+            Assists::default(),
+            None,
+        )
+        .unwrap(),
+    );
+    races.push(None);
+    pump(&mut server, &mut clients, &mut races, &fixture.0, 150);
+    assert_eq!(server.lobby.owner, clients[0].id);
+}
+
+#[test]
+fn websocket_reports_failed_connections_and_drop_cancels_connect() {
+    let fixture = Fixture::new();
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap();
+    drop(listener);
+    let endpoint = format!("ws://{address}").parse().unwrap();
+    let mut client = Client::connect(
+        &fixture.0,
+        endpoint,
+        "Offline".into(),
+        Assists::default(),
+        None,
+    )
+    .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(3);
+    loop {
+        if let Err(error) = client.poll(Duration::from_millis(5)) {
+            assert!(error.contains("WebSocket"), "{error}");
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "connection failure must reach the game"
+        );
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert!(client.closed);
+    let stalled = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let endpoint = format!("ws://{}", stalled.local_addr().unwrap())
+        .parse()
+        .unwrap();
+    let client = Client::connect(
+        &fixture.0,
+        endpoint,
+        "Cancelled".into(),
+        Assists::default(),
+        None,
+    )
+    .unwrap();
+    let before = Instant::now();
+    drop(client);
+    assert!(
+        before.elapsed() < Duration::from_secs(1),
+        "leaving cancels a stalled handshake"
+    );
+}
+
+#[test]
+fn websocket_rejects_oversized_frames_and_mismatched_assets() {
+    let fixture = Fixture::new();
+    let mut server = Server::bind_websocket(
+        &fixture.0,
+        "127.0.0.1:0".parse().unwrap(),
+        RaceSettings::default(),
+    )
+    .unwrap();
+    let url = format!("ws://{}/ws", server.address());
+    let (mut raw, _) = tokio_tungstenite::tungstenite::connect(url.as_str()).unwrap();
+    let mut hello = PROTOCOL_ID.to_le_bytes().to_vec();
+    hello.extend(random_id().to_le_bytes());
+    raw.send(tokio_tungstenite::tungstenite::Message::Binary(
+        hello.into(),
+    ))
+    .unwrap();
+    // The message/frame limit is applied before delivering data to the simulation.
+    raw.send(tokio_tungstenite::tungstenite::Message::Binary(
+        vec![0; 4096].into(),
+    ))
+    .unwrap();
+    if let tokio_tungstenite::tungstenite::stream::MaybeTlsStream::Plain(stream) = raw.get_mut() {
+        stream
+            .set_read_timeout(Some(Duration::from_secs(2)))
+            .unwrap();
+    }
+    assert!(raw.read().is_err(), "oversized frame must close the socket");
+    pump(&mut server, &mut [], &mut [], &fixture.0, 20);
+    assert!(server.lobby.players.is_empty());
+    let car = fixture.0.join("cars/rb6/car.json");
+    let mut data = std::fs::read(&car).unwrap();
+    data.push(b' ');
+    std::fs::write(car, data).unwrap();
+    let mut client = Client::connect(
+        &fixture.0,
+        url.parse().unwrap(),
+        "Wrong assets".into(),
+        Assists::default(),
+        None,
+    )
+    .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(3);
+    loop {
+        server.update(Duration::from_millis(2)).unwrap();
+        match client.poll(Duration::from_millis(2)) {
+            Err(error) => {
+                assert!(error.contains("assets differ"), "{error}");
+                break;
+            }
+            Ok(()) => assert!(
+                Instant::now() < deadline,
+                "mismatched content must fail admission"
+            ),
+        }
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    assert!(server.lobby.players.is_empty());
+}
+
+#[test]
+fn recovery_while_loading_does_not_consume_command_sequence() {
+    let fixture = Fixture::new();
+    let mut server = Server::bind_websocket(
+        &fixture.0,
+        "127.0.0.1:0".parse().unwrap(),
+        RaceSettings::default(),
+    )
+    .unwrap();
+    let mut client = Client::connect(
+        &fixture.0,
+        format!("ws://{}", server.address()).parse().unwrap(),
+        "Recovery".into(),
+        Assists::default(),
+        None,
+    )
+    .unwrap();
+    let dt = Duration::from_millis(2);
+    let deadline = Instant::now() + Duration::from_secs(3);
+    while client.slot().is_none() {
+        server.update(dt).unwrap();
+        client.poll(dt).unwrap();
+        assert!(Instant::now() < deadline);
+        std::thread::sleep(dt);
+    }
+    client.send(ClientMessage::Ready(true)).unwrap();
+    for _ in 0..40 {
+        server.update(dt).unwrap();
+        client.poll(dt).unwrap();
+        std::thread::sleep(dt);
+    }
+    client.send(ClientMessage::Start).unwrap();
+    let loading = loop {
+        server.update(dt).unwrap();
+        client.poll(dt).unwrap();
+        if let Some(lobby) = client.load.take() {
+            break lobby;
+        }
+        assert!(Instant::now() < deadline);
+        std::thread::sleep(dt);
+    };
+    assert_eq!(client.stage(), Stage::Loading);
+    client.recover(1).unwrap();
+    let mut race = load_race(&fixture.0, &loading.settings, &loading.players).unwrap();
+    client.loaded().unwrap();
+    while client.authoritative_tick.is_none() {
+        server.update(dt).unwrap();
+        client.poll(dt).unwrap();
+        client.reconcile(&mut race).unwrap();
+        assert!(Instant::now() < deadline);
+        std::thread::sleep(dt);
+    }
+    client.reconcile(&mut race).unwrap();
+    client.recover(race.tick + 1).unwrap();
+    let mut clients = vec![client];
+    let mut races = vec![Some(race)];
+    pump(&mut server, &mut clients, &mut races, &fixture.0, 100);
+    assert_eq!(
+        server.commands_applied, 1,
+        "the first accepted recovery must still have sequence 1"
+    );
+}
+
+#[test]
+fn websocket_paused_reader_recovers_without_blocking_other_drivers() {
+    let fixture = Fixture::new();
+    let mut server = Server::bind_websocket(
+        &fixture.0,
+        "127.0.0.1:0".parse().unwrap(),
+        RaceSettings::default(),
+    )
+    .unwrap();
+    let endpoint: Endpoint = format!("ws://{}", server.address()).parse().unwrap();
+    let mut clients: Vec<_> = ["Paused reader", "Active reader"]
+        .into_iter()
+        .map(|name| {
+            Client::connect(
+                &fixture.0,
+                endpoint.clone(),
+                name.into(),
+                Assists::default(),
+                None,
+            )
+            .unwrap()
+        })
+        .collect();
+    let mut races = vec![None, None];
+    pump(&mut server, &mut clients, &mut races, &fixture.0, 100);
+    assert_eq!(server.lobby.players.len(), 2);
+    // Enough ACK traffic to fill the paused client's bounded raw-packet queue.
+    let dt = Duration::from_millis(1);
+    for _ in 0..1200 {
+        server.update(dt).unwrap();
+        clients[1].poll(dt).unwrap();
+        std::thread::sleep(Duration::from_micros(200));
+    }
+    clients[1].send(ClientMessage::Ready(true)).unwrap();
+    pump(&mut server, &mut clients, &mut races, &fixture.0, 150);
+    assert_eq!(server.lobby.players.len(), 2);
+    for client in &clients {
+        assert!(!client.closed);
+        assert!(client
+            .lobby
+            .as_ref()
+            .unwrap()
+            .players
+            .iter()
+            .any(|p| p.id == clients[1].id && p.ready));
+    }
+}
+
+#[test]
+fn every_driver_learns_every_other_drivers_ping() {
+    let fixture = Fixture::new();
+    let mut server = Server::bind(
+        &fixture.0,
+        "127.0.0.1:0".parse().unwrap(),
+        RaceSettings::default(),
+        None,
+    )
+    .unwrap();
+    let mut clients = vec![
+        join(&fixture, &server, "First", None),
+        join(&fixture, &server, "Second", None),
+    ];
+    let mut races = vec![None, None];
+    pump(&mut server, &mut clients, &mut races, &fixture.0, 80);
+    assert_eq!(server.lobby.players.len(), 2);
+    // The room shares round-trip times once a second.
+    pump(&mut server, &mut clients, &mut races, &fixture.0, 400);
+    let ids: Vec<_> = clients.iter().map(|c| c.id).collect();
+    for client in &clients {
+        for &id in &ids {
+            assert!(
+                client.pings.contains_key(&id),
+                "{} has no ping for {id}",
+                client.id
+            );
+            assert!(client.ping_ms(id).is_some());
+        }
+    }
+    let server_ids: Vec<_> = server.pings().iter().map(|(id, _)| *id).collect();
+    assert_eq!(server_ids.len(), 2);
+}
+
+#[test]
+fn a_slow_frame_rate_does_not_inflate_ping() {
+    let fixture = Fixture::new();
+    let mut server = Server::bind(
+        &fixture.0,
+        "127.0.0.1:0".parse().unwrap(),
+        RaceSettings::default(),
+        None,
+    )
+    .unwrap();
+    let mut clients = vec![join(&fixture, &server, "Slow", None)];
+    let mut races = vec![None];
+    pump(&mut server, &mut clients, &mut races, &fixture.0, 80);
+    assert_eq!(server.lobby.players.len(), 1);
+    // The game thread only polls ten times a second, as at 10 fps. The server
+    // keeps its real-time loop.
+    let started = Instant::now();
+    let mut last_poll = Instant::now();
+    let mut previous = Instant::now();
+    while started.elapsed() < Duration::from_secs(3) {
+        let now = Instant::now();
+        server.update(now - previous).unwrap();
+        previous = now;
+        if last_poll.elapsed() >= Duration::from_millis(100) {
+            clients[0].poll(last_poll.elapsed()).unwrap();
+            last_poll = Instant::now();
+        }
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    let id = clients[0].id;
+    let (_, ping) = server.pings().into_iter().find(|(p, _)| *p == id).unwrap();
+    assert!(
+        ping < 40,
+        "a 10 fps client measured {ping} ms on loopback; the frame rate leaked into the ping"
+    );
 }

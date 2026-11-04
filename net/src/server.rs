@@ -1,4 +1,5 @@
 use crate::{codec::Encoded, *};
+use crate::{transport::ServerTransport, websocket::WsServer};
 use racecraft_sim::{CarInput, Phase, Race, RaceEvent, PHYSICS_RATE};
 use renet::RenetServer;
 use renet_netcode::{NetcodeServerTransport, ServerAuthentication, ServerConfig};
@@ -30,12 +31,14 @@ struct Controls {
 }
 /// Sent snapshots kept as delta baselines: 64 × 33 ms ≈ two seconds.
 const HISTORY: usize = 64;
+/// How often every driver's round-trip time is shared with the room.
+const PING_INTERVAL: Duration = Duration::from_secs(1);
 /// Rejected joins get this long to receive the reason before disconnection.
 const REJECT_GRACE: Duration = Duration::from_millis(500);
 /// Main-thread independent server. `update` is also usable by deterministic test harnesses.
 pub struct Server {
     net: RenetServer,
-    transport: NetcodeServerTransport,
+    transport: ServerTransport,
     root: PathBuf,
     pub lobby: Lobby,
     pub race: Option<Race>,
@@ -61,6 +64,7 @@ pub struct Server {
     /// Race events waiting for the next snapshot, sent together.
     events: Vec<Event>,
     history: VecDeque<(u64, Encoded)>,
+    pings_sent: Duration,
 }
 impl Server {
     pub fn bind(
@@ -83,6 +87,31 @@ impl Server {
             socket,
         )
         .map_err(|e| e.to_string())?;
+        Self::with_transport(
+            root,
+            settings,
+            owner,
+            content,
+            ServerTransport::Udp(Box::new(transport)),
+        )
+    }
+    /// Serve WebSockets and HTTP /health on one port, with TLS at the reverse proxy.
+    pub fn bind_websocket(
+        root: &Path,
+        address: SocketAddr,
+        settings: RaceSettings,
+    ) -> Result<Self, String> {
+        let content = fingerprint(root, &settings)?;
+        let transport = ServerTransport::WebSocket(WsServer::bind(address)?);
+        Self::with_transport(root, settings, None, content, transport)
+    }
+    fn with_transport(
+        root: &Path,
+        settings: RaceSettings,
+        owner: Option<u64>,
+        content: [u8; 32],
+        transport: ServerTransport,
+    ) -> Result<Self, String> {
         Ok(Self {
             net: RenetServer::new(connection_config()),
             transport,
@@ -113,10 +142,11 @@ impl Server {
             rejected: HashMap::new(),
             events: Vec::new(),
             history: VecDeque::new(),
+            pings_sent: Duration::ZERO,
         })
     }
     pub fn address(&self) -> SocketAddr {
-        self.transport.addresses()[0]
+        self.transport.address()
     }
     fn send(&mut self, id: u64, channel: u8, msg: &ServerMessage) {
         if let Ok(bytes) = encode(msg) {
@@ -131,6 +161,19 @@ impl Server {
         for id in self.lobby.players.iter().map(|p| p.id).collect::<Vec<_>>() {
             self.send(id, CONTROL, &msg);
         }
+    }
+    /// Round-trip time to each connected player. A hosting player's own client
+    /// shares the process, so its time is near zero.
+    pub fn pings(&self) -> Vec<(u64, u16)> {
+        self.lobby
+            .players
+            .iter()
+            .filter(|p| p.connected && self.net.is_connected(p.id))
+            .map(|p| {
+                let ms = (self.net.rtt(p.id) * 1000.).round();
+                (p.id, ms.clamp(0., u16::MAX as f64) as u16)
+            })
+            .collect()
     }
     fn announce(&mut self) {
         self.broadcast(ServerMessage::Lobby(self.lobby.clone()));
@@ -442,9 +485,7 @@ impl Server {
     pub fn update(&mut self, dt: Duration) -> Result<(), String> {
         self.time += dt;
         self.net.update(dt);
-        self.transport
-            .update(dt, &mut self.net)
-            .map_err(|e| e.to_string())?;
+        self.transport.update(dt, &mut self.net)?;
         while self.net.get_event().is_some() {} // transport state below is the source of connection truth.
         self.budgets.retain(|id, _| self.net.is_connected(*id));
         self.admission_deadlines
@@ -544,6 +585,11 @@ impl Server {
             {
                 self.leave(id);
             }
+        }
+        if self.time >= self.pings_sent + PING_INTERVAL && !self.lobby.players.is_empty() {
+            self.pings_sent = self.time;
+            let pings = self.pings();
+            self.broadcast(ServerMessage::Pings(pings));
         }
         if self.lobby.stage == Stage::Loading {
             let all = self

@@ -65,14 +65,22 @@ different build or assets) is told why straight away rather than timing out.
 At results, the owner can return everyone to the lobby and start another race.
 Leaving a hosted room stops and joins its server worker.
 
+## Render hosting
+
+The same game client can join a Render-hosted dedicated server with
+`--join wss://your-service.onrender.com`, or by entering that URL in Multiplayer.
+Build clients and server from the same source revision. See [Render deployment](render.md)
+for server assets, container setup, costs, health checks and deployment verification.
+Steam and Spacewar are not required. UDP LAN hosting remains available.
+
 ## LAN and internet connectivity
 
 Allow incoming **UDP port 7777** on the hosting computer. Manual joining remains
-available without discovery or platform accounts. Both IPv4 and IPv6 numeric
-addresses are accepted; IPv6 join addresses use `[address]:7777`. Hosting from the
+available without discovery or platform accounts. UDP accepts both IPv4 and IPv6 numeric
+addresses; IPv6 join addresses use `[address]:7777`. Hosting from the
 menu listens on both IPv6 and IPv4 where the OS allows it, and falls back to IPv4 only.
 
-For friends on separate networks, use a VPN connecting the computers, or forward
+For UDP play between separate networks, use a VPN connecting the computers, or forward
 the UDP port on the host's router and share its reachable public address. There is
 no NAT traversal, relay, matchmaking or room-code service in this implementation.
 Do not expect two computers behind unrelated NATs to connect without one of these
@@ -92,7 +100,7 @@ by a fresh one on the same port, so the process keeps serving. Use `--bind [::]:
 to accept IPv6 and IPv4. An optional `--settings rules.json` reads a serialized `RaceSettings`. The server needs track collision,
 centerline and car geometry assets, and hashes the same selected asset directories
 as the clients. It does not link Bevy or require a display, sound device or GPU.
-The same UDP process can run on a reachable VPS. No hosted deployment is included.
+The same UDP process can run on a reachable VPS. A Render WebSocket deployment configuration is also included; see [Render hosting](render.md).
 
 ## Native packages
 

@@ -26,7 +26,7 @@ class Gen22PackageTests(unittest.TestCase):
             roster = {'teams': [{'id': 'ferrari', 'drivers': [{'id': 'leclerc'}, {'id': 'sainz'}]}]}
             paths = ['car.glb', 'car_lod1.glb', 'car.json', 'teams.json'] + [
                 str(Path('tyres') / lod / (compound + '.png'))
-                for lod in ('', 'lod1', 'lod2') for compound in ('soft', 'medium', 'hard')
+                for lod in ('', 'lod1') for compound in ('soft', 'medium', 'hard')
             ]
             for name in paths:
                 (root / name).parent.mkdir(parents=True, exist_ok=True)

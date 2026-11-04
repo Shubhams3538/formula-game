@@ -7,31 +7,34 @@ with the 2022 ground-effect GEN22 or legacy RB6, configurable driving aids, AI o
 
 ## Download and play
 
-Get the Linux x86-64 AppImages from the [latest release](https://github.com/jR4dh3y/formula-game/releases/latest).
-Both are self-contained: game assets, both cars, audio, fonts, and runtime libraries
-are included. You do not need Rust or a separate assets download to play.
+Download the [latest release](https://github.com/jR4dh3y/formula-game/releases/latest).
+Each release includes three self-contained x86-64 builds: a portable Windows
+`.exe`, a recommended Linux AppImage with Spa, and an experimental Linux
+AppImage that also enables Silverstone, Bahrain, and COTA. Game assets, both
+cars, audio, fonts, and required runtime files are baked into the downloads;
+players do not need Rust or a separate assets folder. `SHA256SUMS` contains the
+checksums for all three builds.
 
-- **[Normal build](https://github.com/jR4dh3y/formula-game/releases/download/v0.1.0/F1-Racecraft-0.1.0-linux-x86_64.AppImage)** — the recommended build. Spa is the only supported circuit; unfinished circuits are disabled.
-- **[Experimental build](https://github.com/jR4dh3y/formula-game/releases/download/v0.1.0/F1-Racecraft-0.1.0-exp-linux-x86_64.AppImage)** — adds Silverstone, Bahrain, and COTA. These circuits still need work. This build is compiled with `--features exp`.
+Linux builds require a desktop on kernel 6.1 or newer and a Vulkan-capable GPU
+with a working system driver. The Windows build requires 64-bit Windows 10/11,
+a Vulkan-capable GPU with its current driver, and 500 MB of temporary space.
+See [the Windows build guide](tools/package/WINDOWS.md) for launcher details.
 
-Requires an x86-64 Linux desktop, kernel 6.1 or newer, and a Vulkan-capable GPU
-with a working system driver. Windows and macOS binaries are not provided.
+Pushing a version tag such as `v0.1.1` after updating the workspace version in
+`Cargo.toml` automatically builds these packages and publishes them to a GitHub
+Release. The build workflow can also be run manually to produce downloadable
+workflow artifacts without publishing a release.
 
-A community Windows packaging workflow is available in
-[the Windows build guide](tools/package/WINDOWS.md). It produces a single
-portable `.exe` containing Spa, both cars and the game assets. The native
-launcher extracts to a temporary directory, runs the game and cleans up
-after exit; no separate asset download is required by players. This does
-not change the platform coverage of the official release linked above.
+Replace `VERSION` below with the version in the downloaded filename. Use
+`-exp-linux` for the experimental build.
 
 ```sh
-chmod +x F1-Racecraft-0.1.0-linux-x86_64.AppImage
-./F1-Racecraft-0.1.0-linux-x86_64.AppImage
+chmod +x F1-Racecraft-VERSION-linux-x86_64.AppImage
+./F1-Racecraft-VERSION-linux-x86_64.AppImage
 ```
 
-Use the `-exp` filename in those commands for the experimental build. The AppImages
-fall back to extraction if FUSE mounting is unavailable. Release assets include
-`SHA256SUMS`; download it alongside an AppImage and run `sha256sum --check --ignore-missing SHA256SUMS`.
+The AppImages fall back to extraction if FUSE mounting is unavailable. Verify a
+download with `sha256sum --check --ignore-missing SHA256SUMS`.
 
 ## What you can do
 
@@ -42,7 +45,7 @@ fall back to extraction if FUSE mounting is unavailable. Release assets include
 - Choose digital or analog instruments, full-circuit or nearby minimaps, and graphics presets.
 - Select V6 turbo hybrid, V8, or V12 procedural engine voices and adjust the sound mix.
 
-**Start here:** choose your car in Race setup, leave Beginner aids enabled, and
+**Start here:** choose your car in Game play → Car setup, leave Beginner aids enabled, and
 select Start race. Hold **W** to accelerate, use **A/D** to steer and **S** to brake.
 **Esc** opens the pause menu; **C** cycles cameras; **R** recovers the car;
 **F** (gamepad **B**) opens DRS when the badge above the dash is outlined green.
@@ -66,7 +69,8 @@ These are captures from the game, not concept renders.
 ## Multiplayer
 
 The multiplayer branch adds 16-driver host/join rooms, owner-controlled rules,
-AI takeover, local prediction and a headless UDP server. See
+AI takeover, local prediction and a headless UDP/WebSocket server.
+[Host on Render](docs/render.md) and join with `wss://your-service.onrender.com`. See
 [setup, platform packages and verification limits](docs/multiplayer.md).
 
 ```sh
@@ -86,7 +90,7 @@ Install Rust 1.97.1 or newer and your platform's Bevy build dependencies. On Lin
 cargo run -p f1-the-game -- --assets /path/to/assets --auto-gears
 ```
 
-The generated assets are separate from this repository. [Download the complete assets ZIP](https://fbs.jr4.in/s/f1-assets) using this permanent link. Extract the ZIP into the repository root to create `./assets`, or point `--assets` at an existing converted asset tree:
+The generated assets are separate from this repository. [Download the complete assets ZIP](https://github.com/jR4dh3y/formula-game/releases/download/assets-68ae3a48b726ffa5/f1-racecraft-assets.zip) using this permanent link. Extract the ZIP into the repository root to create `./assets`, or point `--assets` at an existing converted asset tree:
 
 ```text
 assets/
@@ -97,15 +101,15 @@ assets/
 
 `tools/track/convert_spa.py` converts the upstream Spa track; `tools/car/prepare_car.py` prepares car models through Blender. Their module docstrings describe the source formats and arguments. The game uses the glTF files directly through Bevy. Car scenes must contain `body`, `wheel_fl`, `wheel_fr`, `wheel_rl` and `wheel_rr` nodes, with wheel pivots at their centres. The simulation and assets use +Z forward, +Y up, +X left, in metres.
 
-Normal launches open Race setup. Choose the circuit, car, laps, AI field, grid slot, tyres and wings, then select Start race. The race waits for its scenes to load before starting the countdown. `--quick-race` skips the menu using the CLI configuration; `--frames` also skips it for capture/testing. GEN22 uses one shared stock car with neutral body paint. Custom team liveries are developed in a separate branch stacked on 2.0. Team and driver selections control race identities and HUD colours. Use `--car gen22 --team ferrari --driver leclerc` to choose a 2022 entry, or `--car rb6` for a legacy race. Team and driver default to the first team and its first driver in `teams.json`; `--car rb22` remains a deprecated alias for `gen22`. Run `cargo run -p f1-the-game -- --help` for the full CLI.
+Normal launches open Game play with the Track tab selected. Choose the circuit, laps, AI field, grid slot, tyres and wings there. Open its Car setup tab to choose the car, team and driver by name, then select Start race. Track and Car setup show the circuit outline with a live car preview beneath it. The race waits for its scenes to load before starting the countdown. `--quick-race` skips the menu using the CLI configuration; `--frames` also skips it for capture/testing. GEN22 uses one shared stock car with neutral body paint. Custom team liveries are developed in a separate branch stacked on 2.0. Team and driver selections control race identities and HUD colours. Use `--car gen22 --team ferrari --driver leclerc` to choose a 2022 entry, or `--car rb6` for a legacy race. Team and driver default to the first team and its first driver in `teams.json`; `--car rb22` remains a deprecated alias for `gen22`. Run `cargo run -p f1-the-game -- --help` for the full CLI.
 
 **Spa is the only supported circuit in normal builds.** Other track assets are hidden from the menu and rejected by `--track`. To enable unfinished circuits for development, build or run with the opt-in Cargo feature: `cargo run --release -p f1-the-game --features exp -- --assets ./assets`. Experimental builds discover converted circuits such as Silverstone, Bahrain and COTA; deferred Nürburgring assets remain unavailable until their conversion is repaired. The ignored `assets` symlink points at the original asset tree for convenient local launching.
 
-The Graphics tab offers Low, Medium, High (default) and Ultra presets, applied immediately and saved with your preferences; `--graphics low|medium|high|ultra` sets one from the command line. Leaving the window during a race opens the pause menu, and rendering is throttled while the window is unfocused.
+The Graphics settings page offers Low, Medium, High (default) and Ultra presets, applied immediately and saved with your preferences; `--graphics low|medium|high|ultra` sets one from the command line. Leaving the window during a race opens the pause menu, and rendering is throttled while the window is unfocused.
 
 Both HUD layouts and wheel dashboards average telemetry on physics ticks. Speed and RPM use a 100 ms window, gaps and tyre/aero readouts use 250 ms, and the best-lap delta uses 200 ms. Numbers refresh at 20 Hz; gears, pedals and warning lights stay immediate. Running clocks show tenths, while completed lap and sector times retain milliseconds. The timing strip keeps all three sector splits, marking old splits LAST until replaced. Position-change notices require 300 ms of continuous change with at least one metre clearance.
 
-Driving aids has Beginner, Balanced and Unassisted presets. Beginner is the default, including automatic gears. Steering guidance follows the racing line when you release steering; strong manual steering overrides it. Corner braking anticipates bends, adds brake pressure and reduces a held accelerator. ABS, traction and stability are separate controls. You still control acceleration. The coloured racing line previews corner speed, and STEER / BRAKE indicators light up during interventions. Pause-menu changes apply immediately. Unassisted disables all aids and automatic shifting.
+Game play → Driving assistance has Beginner, Balanced and Unassisted presets. Beginner is the default, including automatic gears. Steering guidance follows the racing line when you release steering; strong manual steering overrides it. Corner braking anticipates bends, adds brake pressure and reduces a held accelerator. ABS, traction and stability are separate controls. You still control acceleration. The coloured racing line previews corner speed, and STEER / BRAKE indicators light up during interventions. Pause-menu changes apply immediately. Unassisted disables all aids and automatic shifting.
 
 Aids and per-car camera positions persist in `$XDG_CONFIG_HOME/f1-racecraft/preferences.json` (or `~/.config/f1-racecraft/preferences.json`). `F1_SETTINGS` overrides the file. Explicit CLI aid settings override saved aids; `--quick-race` and capture runs use their CLI configuration without reading or writing preferences. Start new race replaces the current session; Resume race keeps it.
 
@@ -156,7 +160,7 @@ reports, screenshot files and repeated drive hashes. It requires Weston and
 a Vulkan-capable GPU. Frame times can differ with GPU load and clock speed;
 the repeatability check compares the workload, not a performance threshold.
 
-`tools/verify_settings.sh ASSETS NEW_OUTPUT_DIRECTORY` checks all seven menu
+`tools/verify_settings.sh ASSETS NEW_OUTPUT_DIRECTORY` checks all ten menu
 tabs, pause and camera-editor layouts at 1920×1080, 958×1078 and 640×600. It
 clicks the Benchmark button on the wide layout, waits for the real child
 process and report, and checks that the original race stays paused and intact.
@@ -192,7 +196,7 @@ Normal packaging always builds without `exp` and includes only Spa.
 | Frame-rate readout | F3 | — |
 | Quit | Quit game in menu, or window close | Window close |
 
-There are exactly three camera modes: seated cockpit, TV pod above the driver's head, and third-person chase. Use 1 / 2 / 3, C, or Cameras & controls. F4 pauses the race with a live camera preview: adjust height, forward position, pitch, field of view, vibration and horizon stabilization. Positions save separately for RB6 and GEN22. Camera cuts reset temporal history; chase smoothing accounts for car velocity to avoid trailing farther behind at speed. `--manual-gears` disables automatic shifting. Keyboard steering and brake pressure are smoothed; gamepad steering has a deadzone and response curve.
+There are exactly three camera modes: seated cockpit, TV pod above the driver's head, and third-person chase. Use 1 / 2 / 3, C, or the Camera page. F4 pauses the race with a live camera preview: adjust height, forward position, pitch, field of view, vibration and horizon stabilization. Positions save separately for RB6 and GEN22. Camera cuts reset temporal history; chase smoothing accounts for car velocity to avoid trailing farther behind at speed. `--manual-gears` disables automatic shifting. Keyboard steering and brake pressure are smoothed; gamepad steering has a deadzone and response curve.
 
 The RB6 and GEN22 cockpit steering wheels turn with the interpolated front-wheel steering angle, including steering assistance, at a 6:1 ratio. GEN22 uses the named `steering_wheel` node, including its live LCD and LEDs; RB6 keeps its legacy wheel and screen pod.
 
@@ -213,7 +217,7 @@ car ahead at a zone's detection point may open the flap in that zone with F
 closes it. An open flap removes about 10% of the car's drag and some rear
 downforce. The 2010 RB6 predates DRS and has none.
 
-**DRS anywhere** (Driving aids tab, or `--drs-anywhere`) drops the zone and
+**DRS anywhere** (Game play → Driving assistance, or `--drs-anywhere`) drops the zone and
 one-second rules for your car: F opens the flap anywhere on track from the
 start, and braking still closes it. AI cars keep to the race rules. The
 setting is saved with your other aids.
@@ -223,7 +227,7 @@ GEN22 retains original per-part UVs and baked ambient occlusion, with neutral bo
 
 The HUD includes the timing tower, lap times, countdown lights, race messages, shift lights, speed, pedals, tyre temperatures/wear, lock-up/sliding indicators, aero effects, minimap and results.
 
-Open **HUD & map** from Race setup or the pause menu to choose between **Digital cockpit**, with illuminated segments and a neutral gear aperture, and **Analog telemetry**, with separate metal-rimmed RPM, speed, pedal and G-force instruments. Tyre temperatures and live tow/wake effects use needle gauges in both layouts. The unboxed minimap supports Full circuit and Nearby track modes. Driving-aid buttons, camera shortcut strips and map headings are omitted while racing; their settings and keyboard shortcuts remain available. The G-force plot uses one G per ring. Both layouts use live simulation data and leave the physical cockpit wheel visible.
+Open **Interface** from the settings sidebar or the pause menu to choose between **Digital cockpit**, with illuminated segments and a neutral gear aperture, and **Analog telemetry**, with separate metal-rimmed RPM, speed, pedal and G-force instruments. Tyre temperatures and live tow/wake effects use needle gauges in both layouts. The unboxed minimap supports Full circuit and Nearby track modes. Driving-aid buttons, camera shortcut strips and map headings are omitted while racing; their settings and keyboard shortcuts remain available. The G-force plot uses one G per ring. Lap timing follows the selected instrument finish. Digital tyre wear sits beside each axle label; analog tyre temperatures appear only on the two-needle scale, with Front/Rear keys and wear below. Both layouts use live simulation data and leave the physical cockpit wheel visible.
 
 The minimap setting is independent: **Full circuit** shows the whole field; **Nearby track** magnifies the road around the car with the road ahead pointing up, while compressing distant sections to keep the complete circuit visible. Neither mode uses a rectangular background or crops the track. Both choices apply immediately, survive new races, and are saved with your other preferences. Automated capture runs use the defaults and never write your preferences.
 
@@ -298,3 +302,16 @@ sources have [reference credits](game/audio/reference/CREDITS.md) and
 The bundled font uses the [SIL Open Font License](game/fonts/OFL.txt).
 AppImages include runtime package metadata and applicable license texts; see the
 [packaging notes](tools/package/README.md).
+
+### Dry weather skies
+
+Game play → Track has **Clear sky** and **Storm**. Storm darkens the sky and
+scene, with occasional lightning and delayed thunder. Both modes keep the
+track dry and leave tyre grip unchanged. Thunder uses the Sound effects and
+Master controls, follows mute, and stops while paused.
+
+Use `--weather clear` or `--weather storm` for quick races, captures and
+benchmarks. Interactive launches remember the selected weather; an explicit
+CLI choice overrides it. The CC0 Poly Haven cubemaps are embedded in the
+executable, including packaged builds. Sources, credit and conversion steps
+are in [game/sky/CREDITS.md](game/sky/CREDITS.md).

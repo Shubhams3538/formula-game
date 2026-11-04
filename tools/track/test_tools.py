@@ -7,6 +7,8 @@ import struct
 import tempfile
 import unittest
 import zipfile
+from types import SimpleNamespace
+from convert_spa import wall_segments
 from pathlib import Path
 
 import numpy as np
@@ -20,6 +22,13 @@ from read_glb import Glb
 
 
 class AssetToolsTest(unittest.TestCase):
+    def test_kerb_skirts_are_ignored_but_explicit_barriers_survive_kerb_materials(self):
+        vertices = np.array([[0., 0., 0.], [2., 0., 0.], [0., 1., 0.]])
+        triangles = np.array([[0, 1, 2]])
+        obj = lambda name: SimpleNamespace(name=name, texture="curb.png", vertices=vertices, triangles=triangles)
+        self.assertEqual(len(wall_segments([obj("tkRS1")])), 0)
+        self.assertGreater(len(wall_segments([obj("B0Rt1")])), 0)
+
     def test_rejects_traversal_links_and_duplicate_members(self):
         for kind in ["traversal", "link", "duplicate"]:
             with self.subTest(kind=kind), tempfile.TemporaryDirectory() as root:

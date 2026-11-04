@@ -23,6 +23,7 @@ impl Session {
     /// Called once after each physics step, before either display renders.
     pub fn sample_hud(&mut self) {
         self.telemetry.update(&self.race, self.player);
+        self.telemetry.pedals(self.guidance.activity.input);
         self.delta.update(&self.race, self.player);
     }
 
@@ -104,15 +105,6 @@ impl TyreBand {
             Self::Optimal => GREEN,
             Self::LiftAndCoast => TYRE_YELLOW,
             Self::Cooked => ACCENT,
-        }
-    }
-
-    fn label(self) -> &'static str {
-        match self {
-            Self::Cold => "COLD",
-            Self::Optimal => "OPTIMAL",
-            Self::LiftAndCoast => "LIFT & COAST",
-            Self::Cooked => "COOKED",
         }
     }
 }
@@ -258,7 +250,8 @@ pub fn update(
             frontend.display,
             time.delta_secs(),
         );
-    } else if !session.ready {
+    } else if !session.ready && session.screen == crate::menu::Screen::Racing {
+        // Menus and lobbies show their own loading state.
         hud.text(
             &style.bold,
             32.0,
@@ -292,6 +285,12 @@ pub fn update(
 }
 
 /// Track outline scaled into a unit box, for the minimap.
+/// Metres at which the nearby map's magnification halves.
+const NEARBY_ZOOM: f64 = 100.;
+/// Where the car sits in the nearby map, as a fraction of its height: low,
+/// so more of the road ahead is in view.
+const NEARBY_CAR_Y: f64 = 0.62;
+
 pub struct Minimap {
     points: Vec<(f32, f32)>,
     origin: (f64, f64),
@@ -342,11 +341,21 @@ impl Minimap {
         let left = dx * yaw.cos() - dz * yaw.sin();
         let ahead = dx * yaw.sin() + dz * yaw.cos();
         let radius = left.hypot(ahead);
-        let magnification = 0.44 / (radius + 400.);
+        // ~300 m around the car fills most of the view; the rest of the lap
+        // is compressed toward the rim instead of being cut off.
+        // The car sits low, so the road ahead gets more of the view than the
+        // road behind; every direction still stays inside the panel.
+        let reach = 0.48 + 0.1 * ahead / radius.max(1e-9);
+        let magnification = reach / (radius + NEARBY_ZOOM);
         (
             (0.5 - left * magnification) as f32,
-            (0.54 - ahead * magnification) as f32,
+            (NEARBY_CAR_Y - ahead * magnification) as f32,
         )
+    }
+
+    /// Distance from the car in metres, for fading the compressed far road.
+    fn distance(&self, point: (f32, f32), player: (f32, f32)) -> f64 {
+        ((point.0 - player.0) as f64).hypot((point.1 - player.1) as f64) * self.span
     }
 }
 
@@ -375,11 +384,30 @@ fn draw_map(hud: &Hud, _style: &HudStyle, session: &Session, mode: MapMode, scal
         )
     };
     let points = &session.minimap.points;
+    let ink = hud.finish.colors().ink;
     for index in 0..points.len() {
         let a = map(points[index]);
         let b = map(points[(index + 1) % points.len()]);
-        hud.line(a, b, 6. * scale, Color::from_black_alpha(150));
-        hud.line(a, b, 3. * scale, hud.finish.colors().ink);
+        // Nearby: the compressed far road recedes so the road ahead reads first.
+        let near = match mode {
+            MapMode::FullCircuit => 1.,
+            MapMode::Nearby => {
+                let distance = session.minimap.distance(points[index], player);
+                (1. - ((distance - 250.) / 700.).clamp(0., 1.) * 0.75) as f32
+            }
+        };
+        hud.line(
+            a,
+            b,
+            (3. + 3. * near) * scale,
+            Color::from_black_alpha((150. * near) as u8),
+        );
+        hud.line(
+            a,
+            b,
+            (1.5 + 1.5 * near) * scale,
+            ink.gamma_multiply(0.4 + 0.6 * near),
+        );
     }
 
     let start = map(points[0]);
@@ -644,6 +672,72 @@ fn follow_events(session: &mut Session) {
     }
 }
 
+/// Width of the online ping column in the timing tower, in logical units.
+const PING_COLUMN: f32 = 62.0;
+
+/// Connection quality for a round-trip time, using the shared semantic colours.
+pub fn ping_color(ms: u16) -> Color {
+    match ms {
+        0..=59 => GREEN,
+        60..=119 => AMBER,
+        _ => ACCENT,
+    }
+}
+
+/// Signal bars plus the round-trip time, right-aligned in the tower's ping column.
+fn ping_cell(
+    hud: &mut Hud,
+    style: &HudStyle,
+    (x, y): (f32, f32),
+    (w, h): (f32, f32),
+    ms: u16,
+    ink: Color,
+    scale: f32,
+) {
+    // A hairline separates the ping column from the race gaps.
+    hud.fill_rect(
+        x,
+        y + 5. * scale,
+        scale.max(1.),
+        h - 10. * scale,
+        Color::from_white_alpha(28),
+    );
+    let color = ping_color(ms);
+    let lit = match ms {
+        0..=59 => 3,
+        60..=119 => 2,
+        _ => 1,
+    };
+    let bar_w = 4. * scale;
+    let base = y + h * 0.5 + 6. * scale;
+    for bar in 0..3 {
+        let bar_h = (5. + 3.5 * bar as f32) * scale;
+        hud.fill_rect(
+            x + 8. * scale + bar as f32 * (bar_w + 2. * scale),
+            base - bar_h,
+            bar_w,
+            bar_h,
+            if bar < lit {
+                color
+            } else if ink.r() < 100 {
+                // The player's inverted analog row is pale.
+                Color::from_black_alpha(60)
+            } else {
+                Color::from_white_alpha(40)
+            },
+        );
+    }
+    readout(
+        hud,
+        style,
+        15. * scale,
+        (x + w - 12. * scale, y + h * 0.5),
+        Align::Right,
+        ink,
+        &ms.min(999).to_string(),
+    );
+}
+
 pub fn draw(hud: &mut Hud, style: &HudStyle, session: &mut Session, display: Settings, dt: f32) {
     if hud.width() <= 0.0 || hud.height() <= 0.0 {
         return;
@@ -670,11 +764,15 @@ pub fn draw(hud: &mut Hud, style: &HudStyle, session: &mut Session, display: Set
     let lap = (player.timing.laps_completed + 1).min(race.laps);
     // Broadcast timing strip; instrument chrome belongs to the physical dials.
     let tower_x = 24.0 * scale;
-    let tower_w = 278.0 * scale;
+    // Online races add a fixed ping column to the right of the gaps.
+    let online = !session.pings.is_empty();
+    let ping_w = if online { PING_COLUMN * scale } else { 0.0 };
+    let tower_w = 278.0 * scale + ping_w;
     let mut y = 24.0 * scale;
     let row = 28.0 * scale;
     // The LCD tower is opaque so unlit segments read as glass, not scenery.
-    let smoke = |alpha: u8| match hud.finish {
+    let finish = hud.finish;
+    let smoke = move |alpha: u8| match finish {
         Finish::Digital => Color::from_rgb(6, 10, 11),
         Finish::Analog => Color::from_black_alpha(alpha),
     };
@@ -826,21 +924,34 @@ pub fn draw(hud: &mut Hud, style: &HudStyle, session: &mut Session, display: Set
             hud,
             style,
             15.0 * scale,
-            (tower_x + tower_w - 14.0 * scale, mid),
+            (tower_x + tower_w - ping_w - 14.0 * scale, mid),
             Align::Right,
             dim,
             &gap,
         );
+        if online {
+            if let Some(ms) = session.pings.get(index).copied().flatten() {
+                ping_cell(
+                    hud,
+                    style,
+                    (tower_x + tower_w - ping_w, y),
+                    (ping_w, row - scale),
+                    ms,
+                    if mine { ink } else { dim },
+                    scale,
+                );
+            }
+        }
         y += row;
     }
     y += 8. * scale;
-    timing::strip(hud, style, session, tower_x, y, tower_w, scale);
+    let strip_h = timing::strip(hud, style, session, tower_x, y, tower_w, scale);
     timing::pass_notice(
         hud,
         style,
         session,
         tower_x,
-        y + 260. * scale,
+        y + strip_h + 8. * scale,
         tower_w,
         scale,
     );
@@ -1035,7 +1146,7 @@ mod tests {
             -std::f64::consts::FRAC_PI_2,
         ] {
             let center = map.nearby(player, player, yaw);
-            assert!((center.0 - 0.5).abs() < 1e-5 && (center.1 - 0.54).abs() < 1e-5);
+            assert!((center.0 - 0.5).abs() < 1e-5 && (center.1 as f64 - NEARBY_CAR_Y).abs() < 1e-5);
             let ahead = map.project(x + yaw.sin() * 300., z + yaw.cos() * 300.);
             let ahead = map.nearby(ahead, player, yaw);
             assert!((ahead.0 - center.0).abs() < 1e-4 && ahead.1 < center.1);
@@ -1072,15 +1183,6 @@ mod tests {
 
     #[test]
     fn tyre_colors_follow_each_compounds_thermal_window() {
-        let labels: Vec<_> = [
-            TyreBand::Cold,
-            TyreBand::Optimal,
-            TyreBand::LiftAndCoast,
-            TyreBand::Cooked,
-        ]
-        .map(TyreBand::label)
-        .into();
-        assert_eq!(labels, ["COLD", "OPTIMAL", "LIFT & COAST", "COOKED"]);
         for compound in Compound::ALL {
             let properties = compound.properties();
             let optimal = properties.optimal_temperature;

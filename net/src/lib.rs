@@ -1,6 +1,11 @@
-//! Headless authority, bounded UDP transport and prediction shared by all platforms.
+//! Headless authority, bounded UDP/WebSocket transports and shared prediction.
 pub mod client;
 pub mod codec;
+mod endpoint;
+mod link;
+mod transport;
+mod websocket;
+pub use endpoint::Endpoint;
 pub mod server;
 mod wire;
 pub use client::Client;
@@ -17,7 +22,7 @@ pub const MAX_PLAYERS: usize = 16;
 pub const DEFAULT_PORT: u16 = 7777;
 pub const INPUT_RATE: u64 = 60;
 pub const SNAPSHOT_RATE: u64 = 30;
-pub const PROTOCOL_ID: u64 = 0x4631524143450001;
+pub const PROTOCOL_ID: u64 = 0x4631524143450002;
 /// Physics ticks between snapshots. Snapshots fall on multiples of this tick,
 /// and both server and clients round race state to the wire precision there.
 pub const SNAPSHOT_INTERVAL: u64 = racecraft_sim::PHYSICS_RATE as u64 / SNAPSHOT_RATE;

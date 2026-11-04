@@ -4,6 +4,9 @@ use crate::camera::Mode;
 use racecraft_sim::{Assists, Compound, Setup};
 use std::path::PathBuf;
 
+/// A full 2026 grid: 11 teams of two, less the player.
+pub const MAX_OPPONENTS: usize = 21;
+
 #[derive(Clone, bevy::prelude::Resource)]
 pub struct Options {
     pub assets: PathBuf,
@@ -15,6 +18,8 @@ pub struct Options {
     pub test_lobby: Option<usize>,
     pub track: String,
     pub car: String,
+    pub weather: crate::sky::Weather,
+    pub weather_explicit: bool,
     pub team: String,
     pub driver: String,
     pub laps: u32,
@@ -47,13 +52,14 @@ pub struct Options {
 impl Options {
     pub const USAGE: &'static str = "usage: f1-the-game [options]
   --host PORT         host a 16-player UDP room (default port: 7777)
-  --join IP:PORT      join a multiplayer room
+  --join ADDRESS      join IP:PORT or wss://server.onrender.com
   --name NAME         unique lobby driver name
   --ai-cars N         AI cars in a hosted room, 0-15 (default: 0)
   --test-driver       drive this online client with a scripted controller
   --test-lobby N      automatically ready/start once N test clients join
   --assets DIR        asset directory (default: ./assets)
   --track NAME        circuit (default: spa; other circuits require an exp build)
+  --weather clear|storm   sky and thunder; track always stays dry
   --car gen22|rb6     car (default: gen22; rb22 is a deprecated alias)
   --team ID           2022 team (default: first team in teams.json)
   --driver ID         driver in that team (default: its first driver)
@@ -90,6 +96,8 @@ impl Options {
             ai_cars: 0,
             track: "spa".to_string(),
             car: "gen22".to_string(),
+            weather: crate::sky::Weather::default(),
+            weather_explicit: false,
             team: String::new(),
             driver: String::new(),
             laps: 3,
@@ -151,6 +159,10 @@ impl Options {
                 }
                 "--assets" => options.assets = PathBuf::from(value()?),
                 "--track" => options.track = value()?,
+                "--weather" => {
+                    options.weather = value()?.parse()?;
+                    options.weather_explicit = true;
+                }
                 "--car" => {
                     options.car = value()?;
                     if options.car == "rb22" {
@@ -172,7 +184,7 @@ impl Options {
                     options.opponents = value()?
                         .parse::<usize>()
                         .map_err(|_| "opponents must be an integer")?
-                        .min(15)
+                        .min(MAX_OPPONENTS)
                 }
                 "--grid" => {
                     options.grid_slot = value()?
@@ -289,12 +301,15 @@ impl Options {
             return Err("test drivers require --host or --join".into());
         }
         if options.host == Some(0) || options.host.is_some() && options.join.is_some() {
-            return Err("choose either --host PORT or --join IP:PORT".into());
+            return Err("choose either --host PORT or --join ADDRESS".into());
         }
         if (options.host.is_some() || options.join.is_some())
             && (options.frames.is_some() || options.benchmark.is_some())
         {
             return Err("online rooms cannot use capture or benchmark mode".into());
+        }
+        if let Some(address) = &options.join {
+            address.parse::<racecraft_net::Endpoint>()?;
         }
         if options.name.trim().is_empty()
             || options.name.len() > 32
@@ -334,6 +349,7 @@ impl Options {
             stability: self.assist_level,
             automatic_gears: self.automatic_gears,
             drs_anywhere: false,
+            auto_drs: self.assist_level > 0.,
         });
         aids.drs_anywhere |= self.drs_anywhere;
         aids
@@ -346,6 +362,19 @@ mod tests {
 
     fn parse(args: &[&str]) -> Result<Options, String> {
         Options::parse(args.iter().map(|arg| (*arg).to_owned()))
+    }
+
+    #[test]
+    fn accepts_render_join_urls_and_rejects_http() {
+        assert_eq!(
+            parse(&["--join", "wss://race.onrender.com"])
+                .unwrap()
+                .join
+                .as_deref(),
+            Some("wss://race.onrender.com")
+        );
+        assert!(parse(&["--join", "https://race.onrender.com"]).is_err());
+        assert!(parse(&["--host", "7777", "--join", "wss://race.onrender.com"]).is_err());
     }
 
     #[test]
@@ -477,6 +506,7 @@ mod tests {
             stability: 0.,
             automatic_gears: false,
             drs_anywhere: false,
+            auto_drs: false,
         };
         options.driver_aids = Some(selected);
         assert_eq!(options.player_assists(), selected);

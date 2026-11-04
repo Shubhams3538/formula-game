@@ -296,7 +296,7 @@ type CameraQuery<'w, 's> = Query<
         &'static mut Projection,
         Option<&'static mut TemporalAntiAliasing>,
     ),
-    With<Camera3d>,
+    (With<Camera3d>, With<bevy_egui::PrimaryEguiContext>),
 >;
 
 pub fn update(

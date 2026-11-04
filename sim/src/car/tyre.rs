@@ -86,7 +86,7 @@ pub fn lateral_shape(x: f64) -> f64 {
 
 /// Load sensitivity: heavily loaded tyres produce a little less friction per newton.
 pub fn load_sensitivity(load: f64, nominal_load: f64) -> f64 {
-    (1.0 - 0.07 * (load / nominal_load - 1.0)).clamp(0.7, 1.12)
+    (1.0 - 0.045 * (load / nominal_load - 1.0)).clamp(0.7, 1.12)
 }
 
 #[cfg(test)]

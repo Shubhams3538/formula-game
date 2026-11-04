@@ -8,11 +8,15 @@ fn main() -> Result<(), String> {
     let mut root = PathBuf::from("assets");
     let mut address: SocketAddr = "0.0.0.0:7777".parse().unwrap();
     let mut settings = RaceSettings::default();
+    let mut websocket = false;
+    let mut explicit_bind = false;
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--assets" => root = args.next().ok_or("--assets needs a directory")?.into(),
+            "--websocket" => websocket = true,
             "--bind" => {
+                explicit_bind = true;
                 address = args
                     .next()
                     .ok_or("--bind needs IP:port")?
@@ -27,19 +31,38 @@ fn main() -> Result<(), String> {
                 .map_err(|e| e.to_string())?
             }
             "--help" | "-h" => {
-                println!("racecraft-server --assets DIR --bind 0.0.0.0:7777 [--settings rules.json]\nUse --bind [::]:7777 to accept IPv6 and IPv4 where the OS allows it.\nThe first admitted player owns the lobby; ownership passes on when they leave. Allow UDP on this port.");
+                println!("racecraft-server --assets DIR [--websocket] [--bind IP:PORT] [--settings rules.json]\nUse --bind [::]:7777 to accept IPv6 and IPv4 where the OS allows it.\n--websocket serves /ws and /health over HTTP; defaults to 0.0.0.0:$PORT (10000 without PORT). Use a TLS proxy for public WSS.\nThe first admitted player owns the lobby; ownership passes on when they leave. Allow UDP on this port.");
                 return Ok(());
             }
             _ => return Err(format!("unknown argument: {arg}")),
         }
     }
+    if websocket && !explicit_bind {
+        let port = std::env::var("PORT")
+            .unwrap_or_else(|_| "10000".into())
+            .parse::<u16>()
+            .map_err(|_| "PORT must be an integer from 1 to 65535")?;
+        if port == 0 {
+            return Err("PORT must be nonzero".into());
+        }
+        address = SocketAddr::from(([0, 0, 0, 0], port));
+    }
     // A dedicated server hands a room to the next driver when its owner leaves
     // and resets when it empties. A room that closes (host overload, a load
     // timeout) is replaced by a fresh one on the same port.
     loop {
-        let mut server = Server::bind(&root, address, settings.clone(), None)?;
+        let mut server = if websocket {
+            Server::bind_websocket(&root, address, settings.clone())?
+        } else {
+            Server::bind(&root, address, settings.clone(), None)?
+        };
+        let mode = if websocket {
+            "WebSocket /ws, HTTP /health"
+        } else {
+            "UDP"
+        };
         println!(
-            "Race server listening on {}. First player owns the room.",
+            "Race server listening on {} ({mode}). First player owns the room.",
             server.address()
         );
         let mut previous = Instant::now();
